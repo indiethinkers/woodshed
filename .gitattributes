@@ -1,0 +1,6 @@
+# Internal planning artifacts are useful in the private development history but
+# are not part of the public source release assembled with `git archive`.
+.hermes export-ignore
+docs/plans export-ignore
+.agents export-ignore
+.claude export-ignore

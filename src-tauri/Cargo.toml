@@ -1,0 +1,89 @@
+[package]
+name = "woodshed"
+version = "0.1.0"
+description = "Desktop-first, local-first knowledge management app"
+authors = ["Woodshed contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/indiethinkers/woodshed"
+edition = "2021"
+rust-version = "1.77"
+default-run = "woodshed"
+
+[lib]
+name = "woodshed_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+thiserror = "1"
+libc = "0.2"
+
+# Vault foundation (Phase 0)
+gray_matter = "0.2"
+ulid = { version = "1", features = ["serde"] }
+notify = "6"
+notify-debouncer-mini = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+# Phase 4: SQLite-backed vault index. `bundled` compiles SQLite from source so
+# we always get FTS5 regardless of the system sqlite version.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Async runtime for Gmail/HTTP commands and app background work.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+
+# OS keychain custody (Gmail App Passwords, Deepgram key) + HTTP client
+# (Gmail has no HTTP dep, but gcal/resources/agent/image-cache/transcribe do).
+keyring = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Resource capture: lightweight DOM parsing for metadata/readable text from
+# fetched article HTML. Already present transitively through Tauri.
+kuchikiki = "0.8.8-speedreader"
+
+# Content hashing for resources, stable iCal overlay ids, and mail image cache keys.
+sha2 = "0.10"
+base64 = "0.22"
+
+# Email body render pipeline (wsmail:// /body/ cache) and image cache.
+lol_html = "1"
+imagesize = "0.13"
+
+# Gmail (IMAP + SMTP) — direct from desktop, no sync server. App Passwords
+# live in the operating-system credential store. See src/gmail/.
+imap = "2.4"
+native-tls = "0.2"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
+mail-parser = "0.9"
+
+# Google Calendar (Phase 2a — iCal subscription, read-only). See src/gcal/.
+# `ical` parses the .ics text Google serves at the "Secret address in iCal
+# format" URL. `chrono-tz` resolves TZID strings (e.g. America/New_York)
+# from VTIMEZONE blocks into chrono offsets so DTSTART times come out right.
+ical = "0.11"
+chrono-tz = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+# === Week 4: auto-update ===
+# tauri-plugin-updater = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

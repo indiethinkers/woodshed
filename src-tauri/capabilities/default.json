@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the main window, scoped to what the frontend actually uses. Configuration and file I/O stay behind Rust commands so the renderer cannot read app secrets directly.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "dialog:default"
+  ]
+}

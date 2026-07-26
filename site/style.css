@@ -1,0 +1,277 @@
+/*
+ * Woodshed marketing site
+ *
+ * Aesthetic mirrors the app design language without being a clone:
+ * warm off-white background, warm near-black ink, no chromatic accent,
+ * role-driven radius, expressive typography. Subtraction over addition.
+ *
+ * Typography note:
+ *   The intended primary face is Söhne (Klim Type Foundry), licensed for
+ *   ~$300. While the license is being purchased and self-hosted, the stack
+ *   below falls through to system options that are at least not Geist.
+ *   Once Söhne is hosted, swap the @font-face block in and ship.
+ */
+
+:root {
+  --bg:        hsl(40 8% 98%);   /* warm off-white */
+  --ink:       hsl(30 6% 12%);   /* warm near-black */
+  --muted:     hsl(30 4% 42%);
+  --border:    hsl(30 6% 90%);
+  --accent:    hsl(30 8% 15%);   /* same family as ink — no chromatic accent */
+  --focus:     hsl(30 8% 20% / 0.5);
+  --max:       720px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:     hsl(30 4% 8%);
+    --ink:    hsl(40 6% 94%);
+    --muted:  hsl(30 4% 62%);
+    --border: hsl(30 4% 18%);
+    --accent: hsl(40 6% 94%);
+    --focus:  hsl(40 6% 80% / 0.4);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  /*
+   * SWAP IN when Söhne is licensed and self-hosted:
+   *   font-family: "Söhne", "Söhne Buch", -apple-system, BlinkMacSystemFont, sans-serif;
+   *
+   * Until then, this stack avoids Geist (an AI-slop signal) and prefers
+   * macOS system serif/sans which still look intentional.
+   */
+  font-family: "Inter Display", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 120ms ease-out;
+}
+
+a:hover {
+  text-decoration-color: var(--ink);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+code {
+  /* JetBrains Mono is the planned monospace for the app. */
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9em;
+  background: hsl(30 6% 92%);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  code { background: hsl(30 4% 14%); }
+}
+
+/* ------- Masthead ------- */
+
+.masthead {
+  padding: 28px 40px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.brand-mark {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+}
+
+.brand-name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ------- Hero ------- */
+
+.hero {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 140px 40px 120px;
+}
+
+.display {
+  font-size: clamp(34px, 5.4vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  margin: 0 0 32px;
+}
+
+.lede {
+  font-size: clamp(17px, 1.8vw, 20px);
+  line-height: 1.45;
+  color: var(--muted);
+  max-width: 32ch;
+  margin: 0 0 40px;
+}
+
+.cta { margin: 0 0 16px; }
+
+.primary-action {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid var(--ink);
+  padding-bottom: 2px;
+  transition: opacity 120ms ease-out;
+}
+
+.primary-action:hover {
+  opacity: 0.7;
+}
+
+.meta {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 32px 0 0;
+}
+
+/* ------- Prose section ------- */
+
+.prose {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 60px 40px 120px;
+  border-top: 1px solid var(--border);
+}
+
+.prose h2 {
+  font-size: clamp(20px, 2.2vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 60px 0 16px;
+}
+
+.prose h2:first-child { margin-top: 60px; }
+
+.prose p {
+  margin: 0 0 20px;
+  max-width: 60ch;
+}
+
+/* ------- Footer ------- */
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 32px 40px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.footer-inner {
+  max-width: var(--max);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 32px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footer-inner nav {
+  display: flex;
+  gap: 24px;
+}
+
+/* ------- Privacy / Terms doc pages ------- */
+
+.doc {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 60px 40px 120px;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.doc h1 {
+  font-size: clamp(28px, 3.6vw, 36px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0 0 12px;
+}
+
+.doc .doc-meta {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 48px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.doc h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 48px 0 16px;
+}
+
+.doc h3 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 32px 0 12px;
+}
+
+.doc p, .doc li {
+  margin: 0 0 16px;
+  max-width: 64ch;
+}
+
+.doc ul {
+  padding-left: 22px;
+}
+
+.doc blockquote {
+  margin: 24px 0;
+  padding: 16px 20px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 15px;
+}
+
+/* ------- Mobile ------- */
+
+@media (max-width: 600px) {
+  .masthead { padding: 20px 24px; }
+  .hero { padding: 80px 24px 60px; }
+  .prose { padding: 40px 24px 80px; }
+  footer { padding: 24px; }
+  .doc { padding: 40px 24px 80px; }
+}

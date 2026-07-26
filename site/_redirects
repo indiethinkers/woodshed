@@ -1,0 +1,6 @@
+# Cloudflare Pages + Netlify redirects
+# Map clean URLs to .html files so /privacy and /terms work without the
+# extension. Format is shared between CF Pages and Netlify.
+
+/privacy   /privacy.html   200
+/terms     /terms.html     200

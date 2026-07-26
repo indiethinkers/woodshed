@@ -1,0 +1,143 @@
+// Mail DTOs — mirror the Rust types in src-tauri/src/commands/mail.rs.
+// Keep aligned by hand; Tauri 2 doesn't ship a type generator.
+
+// ─── inboxes ────────────────────────────────────────────────────────────────
+
+export interface Inbox {
+  inboxId: string;
+  email: string;
+  displayName: string | null;
+  /** RFC 3339. */
+  createdAt: string;
+}
+
+// ─── messages ───────────────────────────────────────────────────────────────
+
+export interface SyncStats {
+  durationMs: number;
+}
+
+export interface EmailSummary {
+  id: string;
+  threadId: string;
+  from: string;
+  fromEmail: string;
+  subject: string;
+  /** Full plaintext body (filled by sync's per-message expand or by mail_get_full). */
+  body: string;
+  /**
+   * HTML version of the body, persisted in a sibling `.html` file in the
+   * same folder as the markdown. Null when the message has no HTML
+   * alternative (plaintext-only emails, things we sent).
+   */
+  html: string | null;
+  /** First ~200 chars of body, derived locally. */
+  preview: string;
+  /** RFC 3339. */
+  date: string;
+  read: boolean;
+  labels: string[];
+  /** Sender slug + locally-derived mentions. Drives wikilink resolution. */
+  mentions: string[];
+  links: string[];
+  /** Inbox the message belongs to (`gmail:<email>`). */
+  inbox: string;
+  /**
+   * Vault-relative path on disk (e.g. `inbox/foo-x7k3a9bz.md`). Empty
+   * when the summary was constructed in-memory before a sync's first
+   * write. Drives the file-path pill in the email detail header.
+   */
+  path: string;
+  /**
+   * Attachment metadata. Bytes live under
+   * `attachments/mail/<message-id>/<filename>`, written eagerly during
+   * Gmail sync.
+   */
+  attachments: Attachment[];
+}
+
+export interface MailPage {
+  items: EmailSummary[];
+  nextOffset: number | null;
+}
+
+/**
+ * Metadata for a single attachment on an email. `id` is the MIME part
+ * index ("0", "1", …). Callers pass it back through `mail_open_attachment`
+ * without interpretation.
+ */
+export interface Attachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
+/** Full message (summary + to/cc), read from the local disk record. */
+export interface EmailFull extends EmailSummary {
+  to: string[];
+  cc: string[];
+}
+
+export interface MailSyncResult {
+  emails: EmailSummary[];
+  stats: SyncStats;
+  /** Local inbox messages archived during reconciliation because they
+   * left the Gmail inbox (handled directly in Gmail). */
+  removed?: number;
+}
+
+export interface ComposeInput {
+  fromInbox?: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body: string;
+}
+
+export interface ReplyInput {
+  inReplyToMessageId: string;
+  threadId: string;
+  fromInbox?: string;
+  to?: string[];
+  cc?: string[];
+  body: string;
+}
+
+export interface SendResult {
+  messageId: string;
+  threadId: string;
+  /** RFC 3339. */
+  sentAt: string;
+}
+
+export type DraftKind = "new" | "reply";
+
+export interface DraftDto {
+  id: string;
+  /** RFC 3339. */
+  created: string;
+  kind: DraftKind;
+  fromInbox: string | null;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  sourceMessageId: string | null;
+  threadId: string | null;
+}
+
+export interface DraftSaveInput {
+  id?: string;
+  kind: DraftKind;
+  fromInbox?: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body: string;
+  sourceMessageId?: string;
+  threadId?: string;
+}

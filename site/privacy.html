@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy — Woodshed</title>
+  <meta name="description" content="Woodshed's privacy policy. Local-first by architecture: no Woodshed server, analytics, or telemetry." />
+  <link rel="icon" type="image/png" href="brand-mark.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="/" aria-label="Woodshed home">
+    <img class="brand-mark" src="brand-mark.png" alt="" aria-hidden="true" />
+    <span class="brand-name">Woodshed</span>
+  </a>
+</header>
+
+<article class="doc">
+  <h1>Privacy Policy</h1>
+  <p class="doc-meta">
+    Effective: <strong>2026-05-08</strong> &nbsp;·&nbsp;
+    Last updated: <strong>2026-07-26</strong> &nbsp;·&nbsp;
+    Contact: <a href="mailto:daniel@indiethinkers.com">daniel@indiethinkers.com</a>
+  </p>
+
+  <blockquote><strong>Plain-English summary.</strong> Woodshed is a local-first desktop application. We do not operate a server that receives or stores your data. Your vault and local caches stay on your computer. Data leaves the device only when you configure and explicitly invoke an integration.</blockquote>
+
+  <h2>1. Who we are</h2>
+  <p>“Woodshed,” “we,” “us,” and “our” refer to <strong>Daniel Hunter</strong>, an individual operating in California, USA.</p>
+
+  <h2>2. Data stored on your device</h2>
+  <ul>
+    <li><strong>Vault folder path and profile.</strong> Stored locally so the app can reopen your vault and present your chosen identity.</li>
+    <li><strong>Markdown files and attachments.</strong> Notes, tasks, events, people, resources, tables, mail, and attachments are stored in the vault you choose.</li>
+    <li><strong>Derived data.</strong> The app-data directory contains a rebuildable SQLite search index, rebuildable iCal cache, preferences, and rotating diagnostics logs.</li>
+    <li><strong>Credentials.</strong> Gmail App Passwords, secret iCal URLs, Hermes API keys, and Deepgram keys are stored in the operating system's credential store. Legacy plaintext values are migrated and scrubbed on first use. Development builds may read values you place in <code>.env.local</code>.</li>
+  </ul>
+  <p>Vault files and synced mail are not encrypted by Woodshed. Use operating-system disk encryption and backups appropriate for your data.</p>
+
+  <h2>3. Direct integrations</h2>
+  <ul>
+    <li><strong>Gmail (IMAP and SMTP).</strong> Woodshed reads the inbox, synchronizes read/archive state, and sends messages or replies that you initiate. Gmail data is written to the local vault. Woodshed does not use Gmail OAuth scopes.</li>
+    <li><strong>Google Calendar or another iCal host.</strong> An explicit Sync downloads the configured read-only iCal feed. Woodshed does not currently request Calendar OAuth access or write to Google Calendar.</li>
+    <li><strong>Resource capture.</strong> Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.</li>
+    <li><strong>Remote email images.</strong> Sender images are removed by default and requested only after you choose <strong>Load remote images</strong>. Loading an image can reveal your IP address and time of access to its host.</li>
+    <li><strong>Hermes-compatible agent endpoint.</strong> An explicit agent or Sweep action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Opening Sweep sends nothing. Proposed record creation and mail archive actions require confirmation.</li>
+    <li><strong>Deepgram.</strong> Dictation sends a microphone clip for transcription. Voice playback sends reply text for speech synthesis. Nothing is sent until you invoke a voice feature.</li>
+  </ul>
+  <p>These providers receive requests directly from your device and process them under their own terms. Woodshed does not proxy or retain a server-side copy.</p>
+
+  <h2>4. Information we do not collect</h2>
+  <ul>
+    <li>Woodshed has no user account system or operated data backend.</li>
+    <li>We do not collect device identifiers, IP addresses, analytics events, crash reports, advertising data, cookies, fingerprints, or telemetry.</li>
+    <li>We do not receive or use your data to train models, sell it, or build advertising profiles.</li>
+  </ul>
+
+  <h2>5. Logs</h2>
+  <p>Diagnostics remain on the device in a file capped at 1 MiB with one rotated generation. Logs can contain local paths, account identifiers, or provider error text. Secret URL query strings and credentials are redacted from network logs. Review logs before sharing them.</p>
+
+  <h2>6. Retention and deletion</h2>
+  <p>Data persists on your device until you remove it. In-app deletion moves records to <code>.woodshed/trash/</code> inside the vault for recovery. Uninstalling Woodshed does not delete the vault.</p>
+  <p>Removing an account deletes its credential when the OS credential store allows it. You can revoke a Gmail App Password at <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>. Reset a leaked Google Calendar secret URL in Google Calendar settings. Delete the app-data directory to remove preferences, indexes, caches, and logs; remove Woodshed credential entries separately through the OS.</p>
+  <p>Because we operate no data backend, we do not hold a remote copy to access, export, or delete.</p>
+
+  <h2>7. Children</h2>
+  <p>Woodshed is not directed at children under 13 or the relevant age in your jurisdiction. We do not knowingly collect data from children.</p>
+
+  <h2>8. Changes and contact</h2>
+  <p>We will update this page and its date when application behavior materially changes. Privacy questions and general contact: <a href="mailto:daniel@indiethinkers.com">daniel@indiethinkers.com</a>. Do not email live credentials or private vault content.</p>
+</article>
+
+<footer>
+  <div class="footer-inner">
+    <span class="copy">© 2026 Daniel Hunter.</span>
+    <nav>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:daniel@indiethinkers.com">daniel@indiethinkers.com</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
