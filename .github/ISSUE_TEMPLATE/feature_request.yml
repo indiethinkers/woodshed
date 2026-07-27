@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose an improvement to Woodshed.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement. Woodshed is local-first: Markdown records are the durable source of truth, derived state must be rebuildable, and network actions must be explicit.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is difficult today, and who experiences it?
+      placeholder: When I..., I need..., because...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful outcome, including the surface where it belongs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: File and privacy impact
+      description: Note any proposed Markdown/frontmatter changes, migrations, derived state, permissions, or external services.
+      placeholder: No file-format or network impact, or describe it here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or smaller approaches have you tried?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+        - label: I have not included private vault, mail, calendar, or credential data.
+          required: true

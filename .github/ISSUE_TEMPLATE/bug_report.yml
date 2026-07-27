@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a reproducible problem with Woodshed.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Woodshed. Before posting, remove private vault content, email, calendar data, credentials, and secret integration URLs. Use synthetic examples when possible.
+
+        Security vulnerabilities should be reported through the private link shown on the issue chooser, not in this form.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where did the problem occur?
+      options:
+        - Cadence
+        - Mail
+        - Agent
+        - Notebook
+        - Resources
+        - People
+        - Databases
+        - Areas
+        - Settings or onboarding
+        - Search, navigation, or app shell
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the problem and its user-visible impact.
+      placeholder: Woodshed showed..., but I expected...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest sequence that reliably reproduces the problem.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should Woodshed have done instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the app version, Git commit, or branch you tested.
+      placeholder: v0.1.0, main, or c56d32f
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and hardware
+      description: Include the macOS version and whether the Mac is Apple Silicon or Intel.
+      placeholder: macOS 15.5, Apple M2
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: Paste only sanitized errors or logs. Remove paths, record content, email addresses, credentials, and secret URLs.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed private data and credentials from this report.
+          required: true
