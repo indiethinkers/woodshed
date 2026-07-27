@@ -136,7 +136,7 @@ pub async fn sync_all(
     );
     let mut results: Vec<AccountSyncResult> = Vec::new();
 
-    for (account_id, _meta) in accounts.iter() {
+    for account_id in accounts.keys() {
         if let Some(filter) = account_id_filter {
             if account_id != filter {
                 continue;

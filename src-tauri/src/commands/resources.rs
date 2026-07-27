@@ -305,7 +305,7 @@ fn tweet_text_and_date(payload: &JsonValue) -> Option<(String, Option<String>)> 
     let published = document
         .select("blockquote > a")
         .ok()
-        .and_then(|anchors| anchors.last())
+        .and_then(|mut anchors| anchors.next_back())
         .map(|anchor| anchor.text_contents())
         .and_then(|raw| chrono::NaiveDate::parse_from_str(raw.trim(), "%B %e, %Y").ok())
         .map(|date| date.format("%Y-%m-%d").to_string());
