@@ -104,6 +104,17 @@ bun run tauri:dev
 Use `bun run dev` only for frontend-only work that does not need Tauri commands
 or local file-backed behavior.
 
+### Credential-backed command-line tools
+
+On macOS, the sandbox may not be able to read Keychain items used by tools such
+as `gh`, even when the user is already authenticated. Do not treat a
+sandbox-only credential failure as proof that the login is invalid. Immediately
+repeat the exact read-only authentication check with narrowly scoped escalation,
+and ask the user to authenticate only if that escalated check also fails.
+
+Never work around sandboxed credential access by exporting tokens, copying
+secrets into plaintext configuration, or printing secret values to logs.
+
 ### Reuse the running desktop app
 
 Before live inspection, check for an existing `target/debug/woodshed` process
