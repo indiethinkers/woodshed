@@ -16,6 +16,18 @@ context to another.
 > Woodshed is under active development. Back up an important vault before
 > opening it with a development build.
 
+## Table of Contents
+
+- 🌲 [Why Woodshed](#why-woodshed)
+- 🧰 [Features](#features)
+- 💾 [How Woodshed stores data](#how-woodshed-stores-data)
+- 🧭 [Using Woodshed](#using-woodshed)
+- 🏗️ [Architecture](#architecture)
+- 🛠️ [Development](#development)
+- 🔒 [Privacy and security](#privacy-and-security)
+- 🤝 [Contributing](#contributing)
+- 📄 [License](#license)
+
 ## Why Woodshed
 
 Most productivity tools split work into separate databases. The meeting is in
@@ -354,7 +366,7 @@ Configured integrations communicate directly from the desktop app.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent or Sweep action.
 - Deepgram receives audio or synthesis text only while voice tools are active.
-- Remote email images remain blocked until the user chooses to load them.
+- Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 
 Generated Agent plans show confirmation before creating records, archiving mail,

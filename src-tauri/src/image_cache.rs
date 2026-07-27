@@ -360,8 +360,8 @@ pub async fn get_or_fetch(app: &AppHandle, url: &str) -> Result<(Vec<u8>, String
     Ok((bytes, content_type))
 }
 
-/// Warm the bounded image cache after the user explicitly chooses to load a
-/// message's remote images. This is internal backend work, not an IPC command.
+/// Warm the bounded image cache before rendering a message's remote images.
+/// This is internal backend work, not an IPC command.
 pub async fn prefetch_all(app: &AppHandle, urls: Vec<String>) {
     use tokio::task::JoinSet;
     let mut unique = HashSet::new();

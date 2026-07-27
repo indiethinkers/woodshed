@@ -1507,6 +1507,13 @@ pub(crate) fn render_draft_md(d: &DraftDto) -> String {
 }
 
 fn parse_email_md(content: &str) -> Option<EmailSummary> {
+    parse_email_md_yaml(content).or_else(|| {
+        let repaired = repair_legacy_misquoted_sender(content)?;
+        parse_email_md_yaml(&repaired)
+    })
+}
+
+fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
     use gray_matter::{engine::YAML, Matter};
     let matter = Matter::<YAML>::new();
     let parsed = matter.parse(content);
@@ -1559,6 +1566,33 @@ fn parse_email_md(content: &str) -> Option<EmailSummary> {
     })
 }
 
+/// Older writers only quoted strings containing a small punctuation set.
+/// A sender with a quoted display name followed by relay metadata therefore
+/// produced invalid YAML: the leading quote closes before the trailing text.
+/// Repair that one historical shape on read so already-written mail remains
+/// usable; new writes quote every string through `yaml_string` below.
+fn repair_legacy_misquoted_sender(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()? != "---" {
+        return None;
+    }
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+        let Some(value) = line.strip_prefix("from: ").map(str::trim) else {
+            continue;
+        };
+        let quote = value.chars().next()?;
+        if !matches!(quote, '\'' | '"') || value.ends_with(quote) {
+            return None;
+        }
+        let repaired = format!("from: {}", json_string(value));
+        return Some(content.replacen(line, &repaired, 1));
+    }
+    None
+}
+
 fn pod_string_array(opt: Option<&gray_matter::Pod>) -> Vec<String> {
     let Some(pod) = opt else { return Vec::new() };
     let Ok(items) = pod.as_vec() else {
@@ -1606,16 +1640,7 @@ fn pod_attachments(opt: Option<&gray_matter::Pod>) -> Vec<Attachment> {
 // ─── Tiny YAML helpers ──────────────────────────────────────────────────────
 
 fn yaml_string(s: &str) -> String {
-    if s.is_empty() {
-        return "\"\"".to_string();
-    }
-    if s.chars()
-        .any(|c| matches!(c, ':' | '#' | '"' | '\n' | '[' | ']' | '{' | '}' | ','))
-    {
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        s.to_string()
-    }
+    json_string(s)
 }
 
 /// Always-quoted JSON-style string, used for machine identifiers in YAML
@@ -1761,6 +1786,33 @@ mod tests {
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[test]
+    fn render_email_md_roundtrips_sender_with_quotes_and_trailing_text() {
+        let mut original = sample_email();
+        original.from = "'Example Sender' via example_relay".into();
+
+        let md = render_email_md(&original);
+        let parsed = parse_email_md(&md).expect("parse sender with YAML punctuation");
+
+        assert_eq!(parsed.from, original.from);
+    }
+
+    #[test]
+    fn parse_email_md_recovers_legacy_misquoted_sender() {
+        let original = sample_email();
+        let md = render_email_md(&original);
+        let from_line = md
+            .lines()
+            .find(|line| line.starts_with("from: "))
+            .unwrap()
+            .to_string();
+        let md = md.replacen(&from_line, "from: 'Example Sender' via example_relay", 1);
+
+        let parsed = parse_email_md(&md).expect("recover legacy sender quoting");
+
+        assert_eq!(parsed.from, "'Example Sender' via example_relay");
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub enum CredsError {
 ///   1. `GMAIL_EMAIL` + `GMAIL_APP_PASSWORD` env vars (if email matches).
 ///   2. `.env.local` walked up from cwd (if email matches).
 ///
-/// Store-backed resolution + cache priming lives in
+/// Keychain-backed resolution + cache priming lives in
 /// `commands::gmail::resolve_credentials`.
 pub fn env_or_local_for(email: &str) -> Option<Credentials> {
     let email = email.trim();
@@ -65,12 +65,11 @@ pub fn env_or_local_for(email: &str) -> Option<Credentials> {
     None
 }
 
-/// Read a legacy App Password out of the OS keychain, if one exists.
-/// Used once per account to migrate pre-existing secrets into the config
-/// store; after migration the keychain is never read again. Reading a
-/// keychain item from an unsigned/ad-hoc-signed binary triggers the
-/// macOS access prompt — which is exactly what moving the secret into the
-/// config store eliminates going forward.
+/// Read an App Password from the OS keychain. The process-level `CredsCache`
+/// ensures this runs at most once per account per launch. macOS tracks access
+/// using the binary's designated signing requirement: signed release updates
+/// retain a stable identity, while an ad-hoc-signed development binary can
+/// prompt again after a Rust rebuild changes its code hash.
 pub fn keychain_password(email: &str) -> Option<String> {
     let entry = Entry::new(KEYCHAIN_SERVICE, email).ok()?;
     match entry.get_password() {

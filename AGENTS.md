@@ -39,6 +39,21 @@ treat the configured path as authoritative.
 - Keep examples location-neutral. Prefer `<vault_root>/tasks/example.md` over
   a machine-specific absolute path.
 
+### Private-data hygiene
+
+- Treat every value observed in a vault, email, screenshot, runtime UI, log, or
+  integration response as private user data, even when it looks harmless or
+  publicly recognizable.
+- Never copy real names, email addresses, domains, account identifiers, message
+  ids, sender labels, subjects, message text, filenames, or other vault-derived
+  values into source code, tests, fixtures, snapshots, comments, documentation,
+  examples, commit messages, or logs.
+- Convert a private reproduction into clearly synthetic data before writing any
+  artifact under `<repo_root>`; preserve only the minimal structural shape
+  required to exercise the bug.
+- Before handoff, scan the complete diff and all new files for private values
+  encountered during the task. Replace any match with synthetic placeholders.
+
 ## Product invariants
 
 Woodshed is a single-player knowledge OS. Markdown files are the durable source
@@ -51,8 +66,9 @@ of truth; the application is a native lens over those files.
 - **Wikilinks form the graph.** `[[links]]` resolve records and create backlinks.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
-- **Explicit network actions.** Data leaves the device only through an
-  integration the user configures and invokes.
+- **Bounded network actions.** Configured integrations send data only when the
+  user invokes them. Opening an HTML email may also load remote images through
+  Woodshed's bounded cache; sender HTML never fetches URLs directly.
 - **Narrow privilege.** The webview has no general shell or filesystem access.
   Rust exposes scoped commands for specific operations.
 - **Derived state is disposable.** Search indexes and calendar caches can be
@@ -366,8 +382,8 @@ those filters for that calendar.
 Route public URL fetches through `src-tauri/src/network.rs`. Enforce HTTPS where
 required and preserve time, redirect, address, and response-size limits.
 
-Sanitize fetched HTML at the boundary. Remote email images stay blocked until
-the user explicitly loads them through the bounded cache.
+Sanitize fetched HTML at the boundary. Remote email images load through the
+bounded cache by default; never let sender HTML fetch remote URLs directly.
 
 ### Agent and Sweep
 

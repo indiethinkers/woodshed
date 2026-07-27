@@ -42,6 +42,7 @@ const STYLES: &str = r#"
     overflow-wrap: anywhere;
   }
   img { max-width: 100%; height: auto; }
+  [data-woodshed-remote-image="blocked"] { display: none !important; }
   a { color: #1d4ed8; }
   table { max-width: 100% !important; }
   /* Note: we deliberately do NOT use `content-visibility: auto` here.
@@ -428,5 +429,19 @@ mod tests {
         assert!(!out.contains("https://tracker.example/pixel.png"));
         assert!(out.contains("data-woodshed-remote-image=\"blocked\""));
         assert!(out.contains("alt=\"logo\""));
+    }
+
+    #[test]
+    fn blocked_remote_images_do_not_render_broken_placeholders() {
+        let raw = r#"<img src="https://tracker.example/hero.png" alt="hero" width="1200" height="600" />"#;
+        let out = render_email(raw, empty_dims(), false).unwrap();
+        assert!(
+            out.contains("[data-woodshed-remote-image=\"blocked\"]"),
+            "blocked image CSS must collapse sender-sized placeholders: {out}"
+        );
+        assert!(
+            out.contains("display: none !important"),
+            "blocked images must not occupy layout space: {out}"
+        );
     }
 }

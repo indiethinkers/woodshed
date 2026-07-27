@@ -38,7 +38,8 @@ email fixtures containing real messages, credentials, generated `dist/`, or
   time, redirect, and response-size limits.
 - Store secrets in the operating-system credential store; configuration files
   may contain only non-secret metadata and migration-only deserialization fields.
-- Sanitize HTML at the boundary and keep remote email images opt-in.
+- Sanitize HTML at the boundary and route remote email images through the
+  bounded cache; never let sender HTML fetch remote URLs directly.
 - Preserve recoverability for destructive operations.
 
 ## Pull request checklist
