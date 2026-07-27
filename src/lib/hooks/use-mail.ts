@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   inboxesList,
   mailArchiveOne,
@@ -24,10 +30,88 @@ import type {
   EmailFull,
   EmailSummary,
   Inbox,
+  MailPage,
   MailSyncResult,
   ReplyInput,
   SendResult,
 } from "@/lib/mail-lib/types";
+
+type MailCache = InfiniteData<MailPage, number>;
+
+const HIDDEN_ARCHIVE_IDS_KEY = ["mail-hidden-archive-ids"] as const;
+const EMPTY_ARCHIVE_IDS: string[] = [];
+
+interface CachedEmailLocation {
+  email: EmailSummary;
+  pageIndex: number;
+  itemIndex: number;
+}
+
+function findCachedEmail(
+  cache: MailCache | undefined,
+  id: string,
+): CachedEmailLocation | undefined {
+  if (!cache) return undefined;
+  for (let pageIndex = 0; pageIndex < cache.pages.length; pageIndex++) {
+    const itemIndex = cache.pages[pageIndex].items.findIndex(
+      (email) => email.id === id,
+    );
+    if (itemIndex >= 0) {
+      return {
+        email: cache.pages[pageIndex].items[itemIndex],
+        pageIndex,
+        itemIndex,
+      };
+    }
+  }
+  return undefined;
+}
+
+function updateCachedEmails(
+  cache: MailCache | undefined,
+  update: (email: EmailSummary) => EmailSummary | null,
+): MailCache | undefined {
+  if (!cache) return cache;
+  return {
+    ...cache,
+    pages: cache.pages.map((page) => ({
+      ...page,
+      items: page.items.flatMap((email) => {
+        const next = update(email);
+        return next ? [next] : [];
+      }),
+    })),
+  };
+}
+
+function restoreCachedEmail(
+  cache: MailCache | undefined,
+  location: CachedEmailLocation,
+): MailCache | undefined {
+  if (!cache || findCachedEmail(cache, location.email.id)) return cache;
+  const page = cache.pages[location.pageIndex];
+  if (!page) return cache;
+  const items = [...page.items];
+  items.splice(Math.min(location.itemIndex, items.length), 0, location.email);
+  return {
+    ...cache,
+    pages: cache.pages.map((current, pageIndex) =>
+      pageIndex === location.pageIndex ? { ...current, items } : current,
+    ),
+  };
+}
+
+function hideArchivedEmail(qc: QueryClient, id: string) {
+  qc.setQueryData<string[]>(HIDDEN_ARCHIVE_IDS_KEY, (old = []) =>
+    old.includes(id) ? old : [...old, id],
+  );
+}
+
+function showArchivedEmail(qc: QueryClient, id: string) {
+  qc.setQueryData<string[]>(HIDDEN_ARCHIVE_IDS_KEY, (old = []) =>
+    old.filter((hiddenId) => hiddenId !== id),
+  );
+}
 
 /**
  * Vault-backed inbox list. Reads bounded frontmatter-only pages;
@@ -41,9 +125,23 @@ export function useMail() {
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
   });
+  const { data: hiddenArchiveIds = EMPTY_ARCHIVE_IDS } = useQuery<string[]>({
+    queryKey: HIDDEN_ARCHIVE_IDS_KEY,
+    queryFn: () => Promise.resolve([]),
+    initialData: EMPTY_ARCHIVE_IDS,
+    enabled: false,
+    gcTime: Infinity,
+  });
+  const visibleData = useMemo(() => {
+    if (!data) return undefined;
+    const hiddenIds = new Set(hiddenArchiveIds);
+    return data.pages
+      .flatMap((page) => page.items)
+      .filter((email) => !hiddenIds.has(email.id));
+  }, [data, hiddenArchiveIds]);
   return {
     ...query,
-    data: data?.pages.flatMap((page) => page.items),
+    data: visibleData,
   };
 }
 
@@ -163,23 +261,25 @@ export function useThread(threadId: string | null | undefined) {
  * (markRead is a new function ref each time, and the ["thread"] cache
  * isn't part of the optimistic write — so the effect keeps seeing the
  * unread message in `messages` and calls back in). Without the early
- * return, every call would produce a new `["emails"]` array via `.map`,
- * which re-renders useMail, which re-renders EmailDetail — an infinite
- * loop that React caps with "Maximum update depth exceeded."
+ * return, every call would produce new `["emails"]` pages, which re-renders
+ * useMail, which re-renders EmailDetail — an infinite loop that React caps
+ * with "Maximum update depth exceeded."
  */
 export function useMarkRead() {
   const qc = useQueryClient();
   return async (id: string) => {
-    const previousList = qc.getQueryData<EmailSummary[]>(["emails"]);
+    const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
-    const listNeedsUpdate =
-      previousList?.some((e) => e.id === id && !e.read) ?? false;
+    const cachedEmail = findCachedEmail(previousList, id)?.email;
+    const listNeedsUpdate = cachedEmail ? !cachedEmail.read : false;
     const oneNeedsUpdate = previousOne ? !previousOne.read : false;
     if (!listNeedsUpdate && !oneNeedsUpdate) return;
 
     if (listNeedsUpdate) {
-      qc.setQueryData<EmailSummary[] | undefined>(["emails"], (old) =>
-        old?.map((e) => (e.id === id ? { ...e, read: true } : e)),
+      qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+        updateCachedEmails(old, (email) =>
+          email.id === id ? { ...email, read: true } : email,
+        ),
       );
     }
     if (oneNeedsUpdate) {
@@ -200,47 +300,47 @@ export function useMarkRead() {
 /**
  * Archive one message. The inbox list updates synchronously so `e` feels
  * instant; the IMAP/HTTP archive runs before local persistence completes.
- * We deliberately
- * skip invalidating ["emails"] on success — the optimistic filter is the
+ * We deliberately skip invalidating ["emails"] on success — the optimistic filter is the
  * correct end state, and bulk archive (`e` on a multi-selection) would
  * otherwise re-fetch the list mid-flight and flash siblings back into
- * view while their own archives are still pending. Reapply the filter once
- * persistence finishes because navigating to an empty inbox can trigger a
- * local-disk refetch before the command has moved the file. On error, restore
- * only this message so concurrent successful archives stay removed.
+ * view while their own archives are still pending. A separate hidden-id cache
+ * keeps each pending archive out of the rendered list even if navigation or a
+ * watcher refetch briefly returns the old inbox file. Once persistence finishes,
+ * cancel any late read, reapply the cache filter, and then clear the hidden id.
+ * On error, restore only this message so concurrent successful archives stay
+ * removed.
  */
 export function useArchiveOne() {
   const qc = useQueryClient();
   return async (id: string) => {
-    const previousList = qc.getQueryData<EmailSummary[]>(["emails"]);
-    const previousEmail = previousList?.find((email) => email.id === id);
-    const previousIndex = previousList?.findIndex((email) => email.id === id);
-    qc.setQueryData<EmailSummary[] | undefined>(["emails"], (old) =>
-      old?.filter((e) => e.id !== id),
+    const cancelExistingReads = qc.cancelQueries({
+      queryKey: ["emails"],
+      exact: true,
+    });
+    const previousList = qc.getQueryData<MailCache>(["emails"]);
+    const previousEmail = findCachedEmail(previousList, id);
+    hideArchivedEmail(qc, id);
+    qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+      updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
+    const archiveRequest = mailArchiveOne(id);
     try {
-      await mailArchiveOne(id);
-      // An empty-array cache is intentionally stale in Providers. Returning
-      // to /mail while the remote archive is in flight can therefore re-read
-      // the still-present inbox file. The completed command is authoritative.
-      qc.setQueryData<EmailSummary[] | undefined>(["emails"], (old) =>
-        old?.filter((e) => e.id !== id),
+      await cancelExistingReads;
+      await archiveRequest;
+      await qc.cancelQueries({ queryKey: ["emails"], exact: true });
+      qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+        updateCachedEmails(old, (email) => (email.id === id ? null : email)),
       );
+      showArchivedEmail(qc, id);
       qc.invalidateQueries({ queryKey: ["email", id] });
       qc.invalidateQueries({ queryKey: ["thread"] });
     } catch (e) {
       if (previousEmail) {
-        qc.setQueryData<EmailSummary[] | undefined>(["emails"], (old) => {
-          if (!old || old.some((email) => email.id === id)) return old;
-          const restored = [...old];
-          restored.splice(
-            Math.min(previousIndex ?? restored.length, restored.length),
-            0,
-            previousEmail,
-          );
-          return restored;
-        });
+        qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+          restoreCachedEmail(old, previousEmail),
+        );
       }
+      showArchivedEmail(qc, id);
       throw e;
     }
   };
@@ -250,9 +350,9 @@ export function useArchiveOne() {
 export function useDeleteOne() {
   const qc = useQueryClient();
   return async (id: string) => {
-    const previousList = qc.getQueryData<EmailSummary[]>(["emails"]);
-    qc.setQueryData<EmailSummary[] | undefined>(["emails"], (old) =>
-      old?.filter((e) => e.id !== id),
+    const previousList = qc.getQueryData<MailCache>(["emails"]);
+    qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+      updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
     try {
       await mailDeleteOne(id);

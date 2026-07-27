@@ -1,8 +1,12 @@
-import { act, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailSummary } from "@/lib/mail-lib/types";
+import type { EmailSummary, MailPage } from "@/lib/mail-lib/types";
 
 const invokeMock = vi.fn();
 vi.mock("@/lib/tauri", () => ({
@@ -10,7 +14,7 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useArchiveOne } from "./use-mail";
+import { useArchiveOne, useMail } from "./use-mail";
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -40,19 +44,81 @@ function makeEmail(over: Partial<EmailSummary> = {}): EmailSummary {
   };
 }
 
+function makeMailData(...emails: EmailSummary[]): InfiniteData<MailPage, number> {
+  return {
+    pages: [{ items: emails, nextOffset: null }],
+    pageParams: [0],
+  };
+}
+
+function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
+  return qc
+    .getQueryData<InfiniteData<MailPage, number>>(["emails"])
+    ?.pages.flatMap((page) => page.items);
+}
+
 describe("useArchiveOne", () => {
   let qc: QueryClient;
 
   beforeEach(() => {
     invokeMock.mockReset();
     qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
     });
   });
 
   it("keeps the row removed when a refetch restores it before archive completes", async () => {
     const email = makeEmail();
-    qc.setQueryData(["emails"], [email]);
+    qc.setQueryData(["emails"], makeMailData(email));
+
+    let finishArchive!: () => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishArchive = resolve;
+        }),
+    );
+
+    const { result } = renderHook(
+      () => ({ archiveOne: useArchiveOne(), inbox: useMail() }),
+      {
+        wrapper: makeWrapper(qc),
+      },
+    );
+
+    let archivePromise!: Promise<void>;
+    await act(async () => {
+      archivePromise = result.current.archiveOne(email.id);
+      await Promise.resolve();
+    });
+    expect(cachedEmails(qc)).toEqual([]);
+    await waitFor(() => expect(result.current.inbox.data).toEqual([]));
+
+    // Navigating back to /mail mounts the list while the archive is still
+    // pending. A local-disk refetch can still contain the source file.
+    await act(async () => {
+      qc.setQueryData(["emails"], makeMailData(email));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(cachedEmails(qc)).toEqual([email]);
+    expect(result.current.inbox.data).toEqual([]);
+
+    await act(async () => {
+      finishArchive();
+      await archivePromise;
+    });
+
+    expect(cachedEmails(qc)).toEqual([]);
+    expect(result.current.inbox.data).toEqual([]);
+  });
+
+  it("ignores a stale inbox refetch that finishes after archive completes", async () => {
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
 
     let finishArchive!: () => void;
     invokeMock.mockImplementationOnce(
@@ -70,26 +136,40 @@ describe("useArchiveOne", () => {
     act(() => {
       archivePromise = result.current(email.id);
     });
-    expect(qc.getQueryData<EmailSummary[]>(["emails"])).toEqual([]);
+    expect(cachedEmails(qc)).toEqual([]);
 
-    // Navigating back to /mail mounts an empty list as stale. Its local-disk
-    // refetch can finish before the archive command moves the file.
-    act(() => {
-      qc.setQueryData(["emails"], [email]);
+    let finishStaleRefetch!: () => void;
+    const staleRefetch = qc.fetchInfiniteQuery({
+      queryKey: ["emails"],
+      queryFn: () =>
+        new Promise<MailPage>((resolve) => {
+          finishStaleRefetch = () =>
+            resolve({ items: [email], nextOffset: null });
+        }),
+      initialPageParam: 0,
+      getNextPageParam: (lastPage: MailPage) =>
+        lastPage.nextOffset ?? undefined,
+      staleTime: 0,
     });
 
     await act(async () => {
       finishArchive();
       await archivePromise;
     });
+    expect(cachedEmails(qc)).toEqual([]);
 
-    expect(qc.getQueryData<EmailSummary[]>(["emails"])).toEqual([]);
+    await act(async () => {
+      finishStaleRefetch();
+      await staleRefetch;
+    });
+
+    expect(cachedEmails(qc)).toEqual([]);
   });
 
   it("does not resurrect a sibling whose concurrent archive succeeded", async () => {
     const first = makeEmail({ id: "message-1" });
     const second = makeEmail({ id: "message-2" });
-    qc.setQueryData(["emails"], [first, second]);
+    qc.setQueryData(["emails"], makeMailData(first, second));
 
     let failFirst!: (error: Error) => void;
     invokeMock
@@ -118,6 +198,6 @@ describe("useArchiveOne", () => {
       await expect(firstPromise).rejects.toThrow("remote archive failed");
     });
 
-    expect(qc.getQueryData<EmailSummary[]>(["emails"])).toEqual([first]);
+    expect(cachedEmails(qc)).toEqual([first]);
   });
 });

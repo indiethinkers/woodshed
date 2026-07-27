@@ -205,26 +205,11 @@ pub fn fetch_inbox_ids(
 /// Archive a message: mark it read AND remove it from INBOX. Archiving
 /// always also marks read.
 ///
-/// Implementation notes (Gmail-specific quirks):
-///   - **\Seen via STORE +FLAGS.SILENT** — RFC-defined, `.SILENT` is part
-///     of the FLAGS spec, suppresses the untagged FETCH echo so the
-///     imap-proto parser stays out of trouble.
-///   - **Inbox removal via UID MOVE to `[Gmail]/All Mail`**, NOT
-///     `STORE -X-GM-LABELS (\Inbox)`. Two reasons: (1) `.SILENT` is
-///     defined for FLAGS only — Gmail silently no-ops it on the
-///     `X-GM-LABELS` extension, so the label removal never happens; (2)
-///     the non-SILENT form returns a FETCH response containing
-///     `X-GM-LABELS`, which imap-proto 0.10 fails to parse ("Unable to
-///     parse status response"). UID MOVE returns Result<()> with no
-///     FETCH echo, sidestepping both. Gmail interprets "MOVE to All
-///     Mail" as "remove the `\Inbox` label" — the messages remain in
-///     All Mail, just stop surfacing in the user's inbox view.
-///
-/// Locale caveat: the All Mail folder is `[Gmail]/All Mail` for English
-/// Gmail accounts. Non-English locales use translated names (German is
-/// `[Google Mail]/Alle Nachrichten`, etc.). v1 hardcodes the English
-/// path; multi-locale needs a `LIST "" "*"` discovery step looking for
-/// the mailbox with the `\All` SPECIAL-USE attribute.
+/// Gmail's IMAP settings define "archive" as expunging a message marked
+/// `\Deleted` from INBOX. Mark `\Seen` and `\Deleted` together with a silent
+/// UID STORE, then UID EXPUNGE only the target messages. The targeted expunge
+/// matters: a plain EXPUNGE could also remove messages another client marked
+/// deleted while this session was open.
 pub fn archive_message(
     pool: &GmailImapPool,
     creds: &Credentials,
@@ -238,14 +223,39 @@ pub fn archive_message(
             });
         }
         let uid_set = join_uids(&uids);
-        // Set \Seen FIRST while the message is still in INBOX. The
-        // flag is a per-message attribute, not a per-label one, so it
-        // persists across the MOVE that follows.
-        session.uid_store(&uid_set, "+FLAGS.SILENT (\\Seen)")?;
-        // MOVE to All Mail = "remove \Inbox label" in Gmail-IMAP semantics.
-        session.uid_mv(&uid_set, "[Gmail]/All Mail")?;
+        apply_archive_plan(session, &uid_set)?;
         Ok(())
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveCommand {
+    StoreFlags(&'static str),
+    UidExpunge,
+}
+
+fn archive_plan() -> [ArchiveCommand; 2] {
+    [
+        ArchiveCommand::StoreFlags("+FLAGS.SILENT (\\Seen \\Deleted)"),
+        ArchiveCommand::UidExpunge,
+    ]
+}
+
+fn apply_archive_plan(
+    session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
+    uid_set: &str,
+) -> Result<(), ImapError> {
+    for command in archive_plan() {
+        match command {
+            ArchiveCommand::StoreFlags(flags) => {
+                session.uid_store(uid_set, flags)?;
+            }
+            ArchiveCommand::UidExpunge => {
+                session.uid_expunge(uid_set)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Mark a message read on the server: `STORE +FLAGS.SILENT (\Seen)`.
@@ -456,5 +466,16 @@ mod tests {
         assert_eq!(gmail_msgid_from_local_id("gmail-ff"), Some(255));
         assert_eq!(gmail_msgid_from_local_id("gmail-uid-42"), None);
         assert_eq!(gmail_msgid_from_local_id("abc123@example.com"), None);
+    }
+
+    #[test]
+    fn archive_marks_deleted_then_expunges_only_the_target_uids() {
+        assert_eq!(
+            archive_plan(),
+            [
+                ArchiveCommand::StoreFlags("+FLAGS.SILENT (\\Seen \\Deleted)"),
+                ArchiveCommand::UidExpunge,
+            ]
+        );
     }
 }

@@ -2,6 +2,9 @@ import { render, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { readFileSync } from "node:fs";
+
+const styles = readFileSync("src/styles.css", "utf8");
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -174,6 +177,48 @@ describe("DailyContent notes editor", () => {
         (item) => item.textContent,
       ),
     ).toEqual(["A", "B"]);
+  });
+
+  it("keeps a prose row visually unbulleted when a list starts beneath it", async () => {
+    const { container } = renderDailyContent(
+      "- [08:51] Hello\n\n  - First list item",
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          ".tiptap-content > ul > li:first-child > ul > li",
+        ),
+      ).toBeTruthy();
+    });
+
+    expect(
+      container.querySelector(
+        ".tiptap-content > ul > li:first-child > .outline-fold-toggle",
+      ),
+    ).toBeTruthy();
+    expect(styles).toMatch(
+      /\.tiptap-content\[data-daily-timestamps\]\s*>\s*ul\s*>\s*li\[data-has-children\]\s*>\s*\.outline-fold-toggle\s*\{[^}]*display:\s*none;/,
+    );
+  });
+
+  it("omits the outer rail while keeping deeper list nesting", async () => {
+    const { container } = renderDailyContent(
+      "- [08:51] Parent row\n\n  - List item\n    - Nested A\n    - Nested B",
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          ".tiptap-content > ul > li:first-child > ul > li:first-child > ul",
+        ),
+      ).toBeTruthy();
+    });
+
+    expect(styles).toContain(`.tiptap-content[data-daily-timestamps] > ul > li > ul::before,
+.tiptap-content[data-daily-timestamps] > ul > li > ol::before {
+  content: none;
+}`);
   });
 
   it("nests a fresh cadence row when space completes its dash marker", async () => {

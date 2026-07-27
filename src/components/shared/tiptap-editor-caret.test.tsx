@@ -27,12 +27,19 @@ vi.mock("@/lib/hooks/use-vault-path", () => ({
 
 import { TiptapEditor } from "./tiptap-editor-impl";
 
+async function unmountAndDrainEditorTimers(unmount: () => void) {
+  unmount();
+  // Tiptap defers editor destruction, and ProseMirror schedules a final
+  // DOMObserver flush 20 ms later. Let both finish while jsdom still exists.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
 describe("TiptapEditor caret cadence", () => {
   it("installs Woodshed's controlled caret instead of relying on WebKit timing", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const { container } = render(
+    const { container, unmount } = render(
       <QueryClientProvider client={queryClient}>
         <TiptapEditor value="A note" onCommit={vi.fn()} />
       </QueryClientProvider>,
@@ -41,13 +48,15 @@ describe("TiptapEditor caret cadence", () => {
     await waitFor(() => {
       expect(container.querySelector(".tiptap-compact-caret")).toBeTruthy();
     });
+
+    await unmountAndDrainEditorTimers(unmount);
   });
 
   it("survives React's development remount cycle", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const { container } = render(
+    const { container, unmount } = render(
       <StrictMode>
         <QueryClientProvider client={queryClient}>
           <TiptapEditor value="A note" onCommit={vi.fn()} />
@@ -58,6 +67,8 @@ describe("TiptapEditor caret cadence", () => {
     await waitFor(() => {
       expect(container.querySelector(".tiptap-compact-caret")).toBeTruthy();
     });
+
+    await unmountAndDrainEditorTimers(unmount);
   });
 
   it("uses equal visible and hidden halves with no startup bias", () => {

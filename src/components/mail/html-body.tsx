@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { isTauri, tauriInvoke } from "@/lib/tauri";
 import { openExternalUrl } from "@/lib/open-external";
-import { Button } from "@/components/ui/button";
 
 interface HtmlBodyProps {
   /**
@@ -113,7 +112,6 @@ export function HtmlBody({ messageId }: HtmlBodyProps) {
 
 function HtmlBodyInner({ messageId }: HtmlBodyProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [loadRemoteImages, setLoadRemoteImages] = useState(false);
   const [height, setHeight] = useState(
     () => HEIGHT_CACHE.get(messageId) ?? DEFAULT_HEIGHT,
   );
@@ -123,14 +121,14 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
   // rendering, src reverts to null and the iframe blanks" behavior
   // falls out without setState-in-effect.
   const { data: rendered } = useQuery({
-    queryKey: ["email-body-render", messageId, loadRemoteImages],
+    queryKey: ["email-body-render", messageId, "remote-images"],
     enabled: isTauri(),
     staleTime: Infinity,
     queryFn: async () => {
       const result = await tauriInvoke<{
         cacheId: string;
         hasRemoteImages: boolean;
-      }>("email_body_render", { id: messageId, loadRemoteImages });
+      }>("email_body_render", { id: messageId, loadRemoteImages: true });
       if (!result) throw new Error("Email body renderer returned no result");
       return {
         ...result,
@@ -176,17 +174,6 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
 
   return (
     <div>
-      {rendered?.hasRemoteImages && !loadRemoteImages ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="mb-2 text-muted-foreground"
-          onClick={() => setLoadRemoteImages(true)}
-        >
-          Load remote images
-        </Button>
-      ) : null}
       <iframe
       ref={iframeRef}
       // `allow-scripts` lets the bridge inside the iframe run; we omit

@@ -461,6 +461,13 @@
   width: 1px;
   background: var(--border);
 }
+/* The first visible list sits beneath a freeform-looking journal row, so a
+   rail at that boundary reads as an outer container border. Start rails only
+   when that list itself has nested children. */
+.tiptap-content[data-daily-timestamps] > ul > li > ul::before,
+.tiptap-content[data-daily-timestamps] > ul > li > ol::before {
+  content: none;
+}
 /* Compact marker-to-text gap for nested rows. */
 .tiptap-content[data-daily-timestamps] ul ul > li {
   padding-left: 1.05rem;
@@ -531,13 +538,15 @@
     transparent 7.5px
   );
 }
-/* A freeform top-level row only shows a marker when it owns collapsible
-   children. Nested rows use the default left position above. */
+/* Top-level Cadence rows must stay visually freeform when a nested list is
+   added beneath them. The fold widget remains in the document for outline
+   state bookkeeping, but it must not retroactively add a bullet to the
+   parent row; the nested bullets and rail already communicate hierarchy. */
 .tiptap-content[data-daily-timestamps]
   > ul
   > li[data-has-children]
   > .outline-fold-toggle {
-  left: -1.45rem;
+  display: none;
 }
 /* ------------------------------------------------------------------------
    Outline mode (Roam-style)

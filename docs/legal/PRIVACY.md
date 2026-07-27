@@ -10,8 +10,9 @@ build is responsible for documenting any behavior it adds or changes.
 
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
-caches stay on your computer. Data leaves the device only when you configure
-and explicitly invoke an integration.
+caches stay on your computer. Configured integrations make direct network
+requests when you invoke them; opening an HTML email also loads its remote
+images through Woodshed's bounded cache by default.
 
 ## Data stored on your device
 
@@ -28,8 +29,9 @@ encryption and a backup strategy appropriate for the sensitivity of your data.
 
 ## Direct integrations
 
-Woodshed communicates directly with the following services only when configured
-and invoked:
+Woodshed communicates directly with the following services. Most network
+actions require a configured integration and an explicit command; remote image
+requests are the exception described below.
 
 - **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
   sends mail and replies. Synced messages are written to the local vault.
@@ -38,9 +40,9 @@ and invoked:
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. Public fetches reject private/local
   destinations and enforce redirect, timeout, size, and concurrency limits.
-- **Remote email images:** images are removed from sender HTML by default. They
-  are requested only after you choose **Load remote images**, through the same
-  bounded public-network policy. Loading an image can reveal your IP address and
+- **Remote email images:** opening an HTML email requests its remote images by
+  default through Woodshed's bounded public-network cache. Sender HTML never
+  fetches the URLs directly. Loading an image can reveal your IP address and
   time of access to the image host.
 - **Hermes-compatible agent endpoint:** an explicit agent or Sweep command sends
   the selected instruction and relevant vault or email content directly to the
