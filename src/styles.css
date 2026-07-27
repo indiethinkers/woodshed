@@ -461,6 +461,13 @@
   width: 1px;
   background: var(--border);
 }
+/* The first visible list sits beneath a freeform-looking journal row, so a
+   rail at that boundary reads as an outer container border. Start rails only
+   when that list itself has nested children. */
+.tiptap-content[data-daily-timestamps] > ul > li > ul::before,
+.tiptap-content[data-daily-timestamps] > ul > li > ol::before {
+  content: none;
+}
 /* Compact marker-to-text gap for nested rows. */
 .tiptap-content[data-daily-timestamps] ul ul > li {
   padding-left: 1.05rem;

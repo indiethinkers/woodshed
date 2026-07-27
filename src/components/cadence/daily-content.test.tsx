@@ -202,6 +202,25 @@ describe("DailyContent notes editor", () => {
     );
   });
 
+  it("omits the outer rail while keeping deeper list nesting", async () => {
+    const { container } = renderDailyContent(
+      "- [08:51] Parent row\n\n  - List item\n    - Nested A\n    - Nested B",
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          ".tiptap-content > ul > li:first-child > ul > li:first-child > ul",
+        ),
+      ).toBeTruthy();
+    });
+
+    expect(styles).toContain(`.tiptap-content[data-daily-timestamps] > ul > li > ul::before,
+.tiptap-content[data-daily-timestamps] > ul > li > ol::before {
+  content: none;
+}`);
+  });
+
   it("nests a fresh cadence row when space completes its dash marker", async () => {
     const body =
       "- [08:51] Projects for the August Release:\n- [08:52] -";
