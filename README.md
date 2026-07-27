@@ -1,46 +1,330 @@
 # Woodshed
 
-Woodshed is a desktop-first, local-first knowledge management app. Notes,
-tasks, calendar entries, people, resources, tables, and synced mail are plain
-Markdown files in a vault you control. The application is a native Tauri shell
-over a React interface; it does not require a Woodshed account or backend.
+**A desktop-first knowledge workspace where your files remain yours.**
 
-> Woodshed is under active development. Back up your vault before using a
-> development build with important data.
+Woodshed brings your calendar, email, notes, tasks, saved links, databases,
+contacts, and AI conversations into one local workspace.
 
-## Principles
+Its durable records are Markdown files with YAML frontmatter. You choose the
+vault directory; Woodshed reads, writes, links, and indexes those files without
+requiring a Woodshed account or hosted backend.
 
-- Files over app: the Markdown vault is the source of truth.
-- Local by default: there is no telemetry or Woodshed-operated data service.
-- Explicit integrations: network actions happen only after the user configures
-  and invokes Gmail, iCal, Hermes, Deepgram, or resource capture.
-- Narrow privilege: the webview has no general shell or filesystem permission;
-  Rust commands expose scoped vault and attachment operations.
+The result is a personal knowledge graph that stays useful outside the app.
+Tags become views, wikilinks become relationships, and every surface can add
+context to another.
 
-## Current platform
+> Woodshed is under active development. Back up an important vault before
+> opening it with a development build.
 
-macOS is the supported desktop target. The architecture is portable through
-Tauri, but Windows and Linux packaging are not currently maintained.
+## Why Woodshed
+
+Most productivity tools split work into separate databases. The meeting is in
+one app, its notes in another, the follow-up in a third, and the relevant person
+somewhere else.
+
+Woodshed treats those records as parts of one system. A person can connect to an
+event, a task, an email, a note, an area, or an Agent conversation through the
+same local graph.
+
+- **Files over app.** Markdown is the source of truth; Woodshed is a lens.
+- **Local by default.** There is no account system, analytics, or telemetry.
+- **One vault, many surfaces.** Records share tags, links, search, and context.
+- **Explicit integrations.** Network actions run only after user configuration
+  and invocation.
+- **Narrow privilege.** The webview uses scoped Rust commands instead of general
+  shell or filesystem permissions.
+
+## Features
+
+### Eight connected surfaces
+
+| Surface | What it does |
+|---|---|
+| **Cadence** | Combines the daily journal, calendar schedule, and task rail |
+| **Mail** | Unifies configured Gmail inboxes, threads, drafts, replies, archive, and Sweep |
+| **Agent** | Stores AI conversations as vault records and adds page-aware chat |
+| **Notebook** | Provides long-form Markdown editing with slash commands and embeds |
+| **Resources** | Captures web links, metadata, highlights, and personal notes |
+| **People** | Acts as a personal CRM connected to events, notes, mail, and areas |
+| **Databases** | Supports structured tables, board views, rows, and generated tag tables |
+| **Areas** | Groups related notes, tasks, events, and people around a focus |
+
+### Features across every surface
+
+- **Full-text command palette.** Search navigation, date keywords, and indexed
+  vault content from one place.
+- **Create from search.** Commands such as `new task`, `new note`, `new person`,
+  and `new table` create records without leaving the palette.
+- **Tags and tag tables.** Frontmatter and inline `#tags` produce indexed,
+  queryable views.
+- **Wikilinks and backlinks.** `[[Person or record]]` links connect the vault and
+  surface reverse references.
+- **Tabs and reference sidebar.** Keep several records open or pin supporting
+  context beside the current page.
+- **External-edit reactivity.** Changes made in another editor appear in the
+  running app after watcher invalidation and re-indexing.
+- **Tiptap editing.** Notes and record bodies support Markdown, slash commands,
+  images, YouTube/X embeds, and inline wikilinks.
+- **Voice tools.** Dictation and Agent voice mode use a user-configured Deepgram
+  account only when invoked.
+- **Recoverable deletion.** Supported destructive actions move records into the
+  vault's `.woodshed/trash/` tree.
+
+## How Woodshed stores data
+
+### The selected vault
+
+The user chooses a vault directory during onboarding. Woodshed stores that
+selection in app configuration; the vault can live anywhere the app can access.
+
+The repository and vault are independent. Neither path is derived from the
+other.
+
+```text
+<vault_root>/
+├── cadence/       Daily journals
+├── events/        Events and meeting notes
+├── tasks/         First-class tasks
+├── notebook/      Long-form notes
+├── people/        Personal CRM records
+├── resources/     Saved links and highlights
+├── tables/        Database schemas and rows
+├── areas/         Areas of focus
+├── inbox/         Gmail inbox records
+├── sent/          Sent messages
+├── archive/       Archived messages
+├── drafts/        Mail drafts
+├── agent/         Agent conversation transcripts
+├── sweep/         Mail workflow cards
+├── attachments/   User and mail attachments
+└── .woodshed/     Trash and record revisions
+```
+
+Most records pair structured frontmatter with a freeform Markdown body:
+
+```markdown
+---
+type: task
+id: t_ship-pricing-rewrite-01J...
+content: Ship pricing rewrite
+status: in-progress
+area: woodshed
+created: 2026-07-26T09:30:00-07:00
+scheduled: 2026-07-26
+tags: [task]
+time_spent_seconds: 1234
+---
+```
+
+Schemas live in `src-tauri/src/parsers/`. Domain renderers preserve the file
+format when a record has specialized fields or body semantics.
+
+### Derived and platform state
+
+Woodshed keeps rebuildable state under Tauri's platform-specific application
+data directory:
+
+| Path | Purpose |
+|---|---|
+| `<app_data_dir>/config.json` | Vault selection and non-secret preferences |
+| `<app_data_dir>/index.db` | SQLite FTS5 search and graph indexes |
+| `<app_data_dir>/gcal-cache/` | Parsed read-only iCal event caches |
+| `<app_data_dir>/woodshed.log` | Size-capped diagnostics log |
+
+Deleting the search index or calendar cache does not delete vault records.
+Secrets are stored in the operating-system credential store, not in these files.
+
+### Writes, watching, and search
+
+Rust commands validate paths and write records atomically. Supported iCloud
+locations use a direct-write fallback because rename behavior can be unreliable
+across the sync boundary.
+
+Each internal write updates the search index synchronously and records a
+self-write fingerprint. The watcher filters the echo before notifying React.
+
+External writes follow the other path: the watcher debounces the change,
+refreshes the affected index entry, and emits `vault:changed`. TanStack Query
+then invalidates the matching data.
+
+## Using Woodshed
+
+### First launch
+
+Onboarding asks for a vault location and profile information. The suggested
+location is only a default; choose any appropriate writable directory.
+
+Woodshed can scaffold an empty vault or add sample content. Settings later
+exposes the selected path, profile, appearance, integrations, Agent endpoint,
+and diagnostics.
+
+### Optional integrations
+
+| Integration | Capability | Secret storage |
+|---|---|---|
+| Gmail | Multi-account IMAP inbox and SMTP send/reply | OS credential store |
+| Google Calendar | Read-only iCal subscription and local event cache | OS credential store |
+| Hermes-compatible endpoint | Agent chat and confirmed Sweep actions | OS credential store |
+| Deepgram | Dictation, speech recognition, and Aura voice playback | OS credential store |
+
+Resource capture fetches only a URL submitted by the user. Public fetches reject
+private network targets and enforce redirect, time, and response-size limits.
+
+### Keyboard shortcuts
+
+Shortcuts below use macOS notation because macOS is the supported desktop
+target. Several handlers also accept Control in frontend-only environments.
+
+#### Navigation and workspace
+
+| Shortcut | Action |
+|---|---|
+| `⌘K` | Open or close global search and commands |
+| Type a letter or digit | Start global search when no editor or dialog is active |
+| `⌘T` | Open search in “new tab” mode |
+| `⌘1` … `⌘8` | Open Cadence, Mail, Agent, Notebook, Resources, People, Databases, or Areas |
+| `⌘[` / `⌘]` | Go back or forward in the active tab |
+| `⌘⇧[` / `⌘⇧]` | Select the previous or next tab |
+| `⌘W` | Close the active tab; close the window when it is the only tab |
+| `⌘⇧W` | Close the window |
+| `⌘,` | Open Settings |
+
+#### Panels and context
+
+| Shortcut or gesture | Action |
+|---|---|
+| `⌘\` | Show or hide the surface list panel |
+| `⌘/` | Show or hide the reference sidebar |
+| `⌘B` | Open page-aware Agent chat when focus is outside an editor |
+| `Shift` + click | Open an internal link in the reference sidebar |
+| `Shift` + `⌘` + click | Open an internal link in a new tab |
+
+Inside an editor, `⌘B` remains the normal bold shortcut. Type `/` for the block
+menu and `[[` to search wikilink targets.
+
+#### Mail
+
+| Context | Shortcut | Action |
+|---|---|---|
+| Inbox | `↑` / `↓` | Move the focused thread |
+| Inbox | `Enter` | Open the focused thread |
+| Inbox | `C` | Compose a message |
+| Inbox | `E` | Archive the focused or selected threads |
+| Inbox | `A` | Select or clear all visible threads |
+| Thread | `J` / `K` or `↓` / `↑` | Move between messages |
+| Thread | `R` | Reply inline |
+| Thread | `⇧R` | Open the full reply composer |
+| Thread | `F` | Forward the thread |
+| Thread | `E` | Archive the thread |
+| Thread | `Esc` | Return to the inbox |
+| Composer | `⌘Enter` | Send |
+
+#### Agent
+
+| Shortcut | Action |
+|---|---|
+| `⌘N` | Start a new conversation on the Agent surface |
+| `Enter` | Focus the Agent composer when focus is outside an interactive control |
+| `Esc` | Leave the composer or close voice mode |
+
+## Architecture
+
+### Stack
+
+| Layer | Technology |
+|---|---|
+| Desktop shell | Tauri 2 and WKWebView |
+| Frontend | React 19, Vite, TypeScript, TanStack Router and Query |
+| UI and editor | Tailwind, shadcn/ui, Tiptap |
+| Backend | Rust commands and domain modules |
+| Primary storage | Markdown and YAML frontmatter in the selected vault |
+| Derived storage | SQLite FTS5, normalized edges, iCal JSON cache |
+
+The runtime path is deliberately narrow:
+
+```text
+route or component
+  → TanStack Query hook
+  → typed Tauri client
+  → scoped Rust command
+  → vault file / integration / derived index
+  → watcher event and targeted query invalidation
+```
+
+The webview cannot browse arbitrary files or execute shell commands. Operations
+such as saving an attachment, opening a URL, or changing a record cross an
+explicit Rust command boundary.
+
+### Frontend modules
+
+| Path | Responsibility |
+|---|---|
+| `src/routes/` | File-based TanStack routes and route loaders |
+| `src/components/layout/` | Navigation rail, tabs, panels, title bar, providers |
+| `src/components/cadence/` | Daily journal, event, and task experiences |
+| `src/components/mail/` | Inbox, thread, compose, account, and Sweep UI |
+| `src/components/agent/` | Chat surface, streaming messages, tools, and voice mode |
+| `src/components/notebook/` | Note list and detail experiences |
+| `src/components/people/` | Personal CRM list, detail, and avatar flows |
+| `src/components/resources/` | Saved-link capture, list, and detail UI |
+| `src/components/tables/` | Database views, rows, cells, filters, and calculations |
+| `src/components/areas/` | Area list, detail, and cross-record aggregation |
+| `src/components/shared/` | Tiptap, command palette, wikilinks, and shared controls |
+| `src/lib/hooks/` | TanStack Query reads, mutations, and cache invalidation |
+| `src/lib/command-search.ts` | Local commands, date keywords, and result grouping |
+| `src/lib/tauri.ts` | Logged frontend boundary for backend invocation |
+
+### Rust modules
+
+| Path | Responsibility |
+|---|---|
+| `src-tauri/src/commands/` | Tauri command surface grouped by product domain |
+| `src-tauri/src/vault/` | Safe path resolution, bounded reads, writes, trash, migrations |
+| `src-tauri/src/parsers/` | Markdown and frontmatter schemas |
+| `src-tauri/src/index/` | FTS5 search, tags, wikilinks, and backlinks |
+| `src-tauri/src/watcher/` | Debounced filesystem events and self-write filtering |
+| `src-tauri/src/gmail/` | Gmail IMAP/SMTP clients, parsing, credentials, pooling |
+| `src-tauri/src/gcal/` | iCal parsing, filtering, recurrence, and caching |
+| `src-tauri/src/agent/` | Agent records, endpoint configuration, and stream protocol |
+| `src-tauri/src/sweep/` | Mail triage cards, prompts, plans, and status transitions |
+| `src-tauri/src/network.rs` | Public URL validation and bounded requests |
+| `src-tauri/src/email_render.rs` | Sanitized email rendering and remote-image blocking |
+| `src-tauri/src/image_cache.rs` | Bounded disk cache for approved remote images |
+| `src-tauri/src/state/` | Process-lifetime indexes and caches shared by commands |
+| `src-tauri/src/logging.rs` | Persistent rotating diagnostics |
+
+`src-tauri/src/lib.rs` assembles the application, shared state, custom URI
+schemes, menu behavior, plugins, and the complete Tauri command handler.
+
+For deeper implementation guidance, read [AGENTS.md](AGENTS.md).
 
 ## Development
 
-Prerequisites:
+### Requirements
 
+- macOS with the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 - [Bun](https://bun.sh/) 1.3.13
-- stable Rust with Cargo
-- the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for macOS
+- Stable Rust with Cargo
 
-Install and run the native app:
+### Run the desktop app
+
+From the repository root:
 
 ```sh
 bun install --frozen-lockfile
 bun run tauri:dev
 ```
 
-Frontend-only Vite mode is available as `bun run dev`, but it cannot exercise
-Tauri commands or the local file-backed behavior.
+`tauri:dev` starts Vite and opens the native application. Use bare
+`bun run dev` only for frontend work that does not need Tauri or vault I/O.
 
-Run the verification suite:
+Before starting another development session, check for a running
+`target/debug/woodshed` process. Reuse the existing native instance when one is
+already active.
+
+### Verification
+
+Run focused tests while iterating. The complete local suite is:
 
 ```sh
 bun run build
@@ -54,52 +338,38 @@ bun audit
 cargo audit --file src-tauri/Cargo.lock
 ```
 
-Optional development-only integration variables are documented in
-[`.env.example`](.env.example). `.env.local` is ignored by Git. Prefer entering
-credentials in Settings, which stores secrets in the operating-system
-credential store.
+Playwright and `tauri-driver` provide deliberate end-to-end coverage. Native
+window inspection remains the default for live UI review.
 
-## Architecture
+Optional development integration variables are documented in
+[`.env.example`](.env.example). Keep `.env.local`, credentials, and private
+vault fixtures out of Git.
 
-| Layer | Technology |
-|---|---|
-| Desktop shell | Tauri 2 / WKWebView |
-| Frontend | React, Vite, TanStack Router and Query, Tiptap, Tailwind |
-| Backend | Rust commands, parsers, atomic file writes, filesystem watcher |
-| Primary storage | Markdown and YAML frontmatter in the selected vault |
-| Derived storage | SQLite FTS5, normalized tag/wikilink edges, iCal JSON cache |
-
-The SQLite index and calendar cache can be rebuilt. Deleting them does not
-delete the vault. User-requested record deletion moves files into
-`.woodshed/trash/` inside the vault so accidental deletion is recoverable.
-
-## Privacy and network boundaries
+## Privacy and security
 
 Woodshed has no account system, analytics, crash reporter, or operated backend.
-Configured integrations communicate directly from the desktop app:
+Configured integrations communicate directly from the desktop app.
 
-- Gmail uses IMAP/SMTP. App Passwords are stored by the OS.
+- Gmail uses IMAP and SMTP. App Passwords are stored by the OS.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
-- Resource capture fetches the URL the user submits. Public fetches reject
-  private and local network destinations, redirects are revalidated, and
-  responses are size- and time-bounded.
-- Remote images in email are stripped by default and fetched only after the
-  user explicitly chooses to load them.
-- Hermes receives selected content only after an explicit agent or Sweep
-  action. Generated plans show a confirmation before creating records or
-  archiving mail.
-- Deepgram receives microphone audio or synthesis text only when voice features
-  are explicitly invoked.
+- Hermes receives selected content after an explicit Agent or Sweep action.
+- Deepgram receives audio or synthesis text only while voice tools are active.
+- Remote email images remain blocked until the user chooses to load them.
+- Public URL requests reject local and private network destinations.
 
-See [the privacy notice](docs/legal/PRIVACY.md) and
-[security model](docs/SECURITY-MODEL.md) for details.
+Generated Agent plans show confirmation before creating records, archiving mail,
+or performing other supported mutations.
 
-## Contributing and security
+See the [privacy notice](docs/legal/PRIVACY.md) and
+[security model](docs/SECURITY-MODEL.md) for the complete boundaries.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Please do
-not report vulnerabilities in public issues; follow [SECURITY.md](SECURITY.md).
-Maintainers preparing the first public repository should also follow the
-[open-source release checklist](docs/OPEN_SOURCE_RELEASE.md).
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Keep
+changes focused, add tests for changed behavior, and run the relevant checks.
+
+Report vulnerabilities through the private process in
+[SECURITY.md](SECURITY.md), not through public issues.
 
 ## License
 
