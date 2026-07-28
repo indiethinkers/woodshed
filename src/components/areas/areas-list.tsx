@@ -84,6 +84,9 @@ export function AreasList() {
         )
       : summaries;
     return next.toSorted((a, b) => {
+      const aUnassigned = a.area.id === UNASSIGNED_AREA_ID;
+      const bUnassigned = b.area.id === UNASSIGNED_AREA_ID;
+      if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
       if (sort === "activity") {
         const dateOrder = (b.latest?.date ?? "").localeCompare(
           a.latest?.date ?? "",

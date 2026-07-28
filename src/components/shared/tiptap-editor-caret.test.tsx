@@ -71,6 +71,32 @@ describe("TiptapEditor caret cadence", () => {
     await unmountAndDrainEditorTimers(unmount);
   });
 
+  it("ignores an external value update while the previous editor is destroyed", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ui = (value: string) => (
+      <QueryClientProvider client={queryClient}>
+        <TiptapEditor value={value} onCommit={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { container, rerender, unmount } = render(ui("First value"));
+
+    const content = await waitFor(() => {
+      const element = container.querySelector<
+        HTMLElement & { editor?: { destroy: () => void } }
+      >(".tiptap-content");
+      expect(element?.editor).toBeTruthy();
+      return element!;
+    });
+
+    content.editor!.destroy();
+
+    expect(() => rerender(ui("Second value"))).not.toThrow();
+
+    await unmountAndDrainEditorTimers(unmount);
+  });
+
   it("uses equal visible and hidden halves with no startup bias", () => {
     const caretRule = styles.match(/\.tiptap-compact-caret\s*\{([^}]*)\}/)?.[1];
 

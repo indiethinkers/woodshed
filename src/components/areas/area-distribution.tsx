@@ -114,7 +114,7 @@ export function AreaDistribution({
   return (
     <section className="mb-8" aria-label="Activity distribution across areas">
       <div className="mb-2.5 flex items-baseline gap-2">
-        <span className="font-mono text-[9px] font-medium uppercase tracking-[0.17em] text-muted-foreground/80">
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground">
           Where your attention went
         </span>
         <span className="h-px flex-1 bg-border/70" aria-hidden />

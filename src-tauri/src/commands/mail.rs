@@ -38,6 +38,10 @@ const ARCHIVED_LABEL: &str = "archived";
 #[serde(rename_all = "camelCase")]
 pub struct EmailSummary {
     pub id: String,
+    /// RFC 5322 Message-ID from the wire. This is distinct from `id`, which
+    /// is Woodshed's account-scoped local identity for Gmail messages.
+    #[serde(default)]
+    pub message_id: String,
     pub thread_id: String,
     /// Sender display name; falls back to the email address when From has
     /// no display-name part.
@@ -644,6 +648,7 @@ pub(crate) fn persist_sent_email(
 #[allow(clippy::too_many_arguments)] // Canonical construction point for the on-disk mail DTO.
 pub(crate) fn build_email_summary(
     id: String,
+    message_id: String,
     thread_id: String,
     inbox: String,
     from: String,
@@ -665,6 +670,7 @@ pub(crate) fn build_email_summary(
     let read = labels_to_read(&labels);
     EmailSummary {
         id,
+        message_id,
         thread_id,
         from,
         from_email,
@@ -1421,6 +1427,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
         "---\n\
          type: email\n\
          id: {id}\n\
+         message_id: {message_id}\n\
          thread: {thread}\n\
          inbox: {inbox}\n\
          from: {from}\n\
@@ -1435,6 +1442,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
 {attachments}\
          ---\n\n{body}\n",
         id = json_string(&email.id),
+        message_id = json_string(&email.message_id),
         thread = json_string(&email.thread_id),
         inbox = json_string(&email.inbox),
         from = yaml_string(&email.from),
@@ -1521,6 +1529,11 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
     let map = data.as_hashmap().ok()?;
 
     let id = map.get("id")?.as_string().ok()?;
+    let message_id = map
+        .get("message_id")
+        .and_then(|value| value.as_string().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| id.clone());
     let thread = map.get("thread")?.as_string().ok()?;
     // Tolerate older files that used `account:` before the rename to `inbox:`.
     let inbox = map
@@ -1548,6 +1561,7 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         .unwrap_or_else(|| derive_preview(&decode_html_entities(&body)));
     Some(EmailSummary {
         id,
+        message_id,
         thread_id: thread,
         from,
         from_email,
@@ -1750,6 +1764,7 @@ mod tests {
         let preview = derive_preview(&body);
         EmailSummary {
             id: "abc123".into(),
+            message_id: "abc123@example.test".into(),
             thread_id: "thread-1".into(),
             from: "Alex Rivera".into(),
             from_email: "alex@example.com".into(),
@@ -1774,6 +1789,7 @@ mod tests {
         let md = render_email_md(&original);
         let parsed = parse_email_md(&md).expect("parse roundtrip");
         assert_eq!(parsed.id, original.id);
+        assert_eq!(parsed.message_id, original.message_id);
         assert_eq!(parsed.thread_id, original.thread_id);
         assert_eq!(parsed.inbox, original.inbox);
         assert_eq!(parsed.from, original.from);
@@ -1873,6 +1889,7 @@ mod tests {
         let preview = derive_preview(&body);
         let original = EmailSummary {
             id: "CAHYfhA=Vw_ZGdyFMbDdCJLB2URqExf330MZ4aTUmGS9pnTU8pQ@Mail.gmail.com".into(),
+            message_id: "wire-message@example.test".into(),
             thread_id: "thread-2/abc=def".into(),
             from: "Beehiiv".into(),
             from_email: "noreply@beehiiv.com".into(),

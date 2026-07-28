@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { Plus, RefreshCw, X, AlertCircle, ExternalLink } from "lucide-react";
+import {
+  Plus,
+  RefreshCw,
+  X,
+  AlertCircle,
+  ExternalLink as ExternalLinkIcon,
+} from "lucide-react";
+import { ExternalAnchor } from "@/components/shared/external-link";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import {
   useGcalAccounts,
@@ -322,21 +329,19 @@ function AddCalendarForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setUrl(e.target.value)}
           required
           placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-          className="w-full px-2 py-1.5 rounded-sm border border-border bg-background font-mono text-[11px]"
+          className="w-full px-2.5 py-2 rounded-sm border border-border bg-background font-mono text-[13px]"
         />
-        <p className="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+        <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">
           Google Calendar → ⚙ Settings → [Calendar] → Integrate calendar →
           &quot;Secret address in iCal format.&quot;
         </p>
-        <a
+        <ExternalAnchor
           href={GOOGLE_CALENDAR_SETTINGS_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-1 inline-flex items-center gap-1 text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground hover:no-underline"
+          className="mt-1.5 inline-flex items-center gap-1.5 text-[13px] text-muted-foreground underline underline-offset-2 hover:text-foreground hover:no-underline"
         >
           Open Google Calendar settings
-          <ExternalLink className="h-2.5 w-2.5" strokeWidth={1.75} />
-        </a>
+          <ExternalLinkIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </ExternalAnchor>
       </div>
       <div>
         <input
@@ -344,9 +349,9 @@ function AddCalendarForm({ onDone }: { onDone: () => void }) {
           value={emails}
           onChange={(e) => setEmails(e.target.value)}
           placeholder="Your email(s) on this calendar — comma-separated"
-          className="w-full px-2 py-1.5 rounded-sm border border-border bg-background font-mono text-[11px]"
+          className="w-full px-2.5 py-2 rounded-sm border border-border bg-background font-mono text-[13px]"
         />
-        <p className="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+        <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">
           Used to filter out declined events and events you&apos;re not on
           (matches Google&apos;s own UI). Leave blank to surface every event in
           the feed.

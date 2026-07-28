@@ -1,9 +1,9 @@
 # Woodshed Privacy Policy
 
-**Effective:** 2026-05-08 · **Last updated:** 2026-07-26
+**Effective:** 2026-05-08 · **Last updated:** 2026-07-28
 **Contact:** daniel@indiethinkers.com
 
-> **Plain-English summary.** Woodshed is a local-first desktop application. We do not operate a server that receives or stores your data. Your vault, mail, calendar cache, index, preferences, and logs stay on your computer. Data leaves the device only when you configure and explicitly invoke Gmail, an iCal feed, resource capture, a Hermes-compatible agent endpoint, or Deepgram voice features.
+> **Plain-English summary.** Woodshed is a local-first desktop application. We do not operate a server that receives or stores your data. Your vault, mail, calendar cache, index, preferences, and logs stay on your computer. Data leaves the device only when you configure and explicitly invoke Gmail, an iCal feed, resource capture, or a Hermes-compatible agent endpoint.
 
 ## 1. Who we are
 
@@ -14,7 +14,7 @@
 - **Vault folder path and profile.** Stored locally so the app can reopen your vault and present your chosen identity.
 - **Markdown files and attachments.** Notes, tasks, events, people, resources, tables, mail, and attachments are stored in the vault you choose.
 - **Derived data.** The app-data directory contains a rebuildable SQLite search index, a rebuildable iCal cache, preferences, and rotating local diagnostics logs.
-- **Credentials.** Gmail App Passwords, Google Calendar secret iCal URLs, Hermes API keys, and Deepgram keys are stored in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Development builds may read values you place in `.env.local`.
+- **Credentials.** Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys are stored in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Development builds may read values you place in `.env.local`.
 
 Vault files and synced mail are not encrypted by Woodshed. Use operating-system disk encryption and backups appropriate for your data.
 
@@ -25,8 +25,6 @@ Vault files and synced mail are not encrypted by Woodshed. Use operating-system 
 - **Resource capture.** Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.
 - **Remote email images.** Sender images are removed by default. They are requested only after you choose **Load remote images**. Loading an image can reveal your IP address and time of access to its host.
 - **Hermes-compatible agent endpoint.** An explicit agent or Sweep action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Opening Sweep alone sends nothing. Proposed record creation and mail archive actions require confirmation.
-- **Deepgram.** Dictation sends a microphone clip for transcription. Voice playback sends reply text for speech synthesis. Nothing is sent until you invoke a voice feature.
-
 These providers receive requests directly from your device and process them under their own terms. Woodshed does not proxy or retain a server-side copy.
 
 ## 4. Information we do not collect

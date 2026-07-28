@@ -3,11 +3,9 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   CalendarDays,
   Database,
-  Hash,
   Plus,
   Rows3,
   Shapes,
-  Table2,
 } from "lucide-react";
 import {
   RecordLinkCell,
@@ -40,7 +38,10 @@ interface DatabaseRowItem {
   tag?: string;
 }
 
-const DEFAULT_SORTS: ViewSort[] = [{ column: "rows", direction: "desc" }];
+const DEFAULT_SORTS: ViewSort[] = [
+  { column: "kind", direction: "asc" },
+  { column: "rows", direction: "desc" },
+];
 
 const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
   {
@@ -51,9 +52,7 @@ const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
     width: 360,
     value: (row) => row.name,
     render: (row, href) => (
-      <RecordLinkCell href={href} icon={rowIcon(row)}>
-        {row.name}
-      </RecordLinkCell>
+      <RecordLinkCell href={href}>{row.name}</RecordLinkCell>
     ),
   },
   {
@@ -85,11 +84,6 @@ const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
     value: (row) => row.created,
   },
 ];
-
-function rowIcon(row: DatabaseRowItem) {
-  if (row.kind === "Custom") return Table2;
-  return Hash;
-}
 
 export function DatabasesList() {
   const navigate = useNavigate();

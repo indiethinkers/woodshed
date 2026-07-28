@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Plus, X } from "lucide-react";
+import { ExternalAnchor } from "@/components/shared/external-link";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import { tauriInvoke } from "@/lib/tauri";
 
@@ -316,15 +317,13 @@ function AddAccountForm({
         <label htmlFor="gmail-app-password">App password</label>
         <p className="mt-0.5 text-[10px] text-muted-foreground/70">
           Create a 16-character password at{" "}
-          <a
+          <ExternalAnchor
             href="https://myaccount.google.com/apppasswords"
-            target="_blank"
-            rel="noreferrer"
             className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground hover:no-underline"
           >
             myaccount.google.com/apppasswords
             <ExternalLink className="h-2.5 w-2.5" strokeWidth={1.75} />
-          </a>
+          </ExternalAnchor>
           .
         </p>
         <input

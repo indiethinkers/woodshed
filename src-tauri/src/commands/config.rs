@@ -62,26 +62,6 @@ pub fn profile_set(app: AppHandle, profile: Profile) -> Result<(), String> {
     Ok(())
 }
 
-/// Selected Deepgram Aura voice id (e.g. `aura-luna-en`) for voice-mode spoken
-/// replies. Empty string = use the backend default (Asteria). Stored in
-/// config.json, not the keychain — it's a preference, not a secret.
-#[tauri::command]
-pub fn voice_get(app: AppHandle) -> Result<String, String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store
-        .get("voice")
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default())
-}
-
-#[tauri::command]
-pub fn voice_set(app: AppHandle, voice: String) -> Result<(), String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    store.set("voice", serde_json::Value::String(voice));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 #[tauri::command]
 pub fn warning_dismissed_get(app: AppHandle, key: String) -> Result<bool, String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;

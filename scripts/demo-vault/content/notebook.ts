@@ -756,8 +756,6 @@ const NOTES: NoteSeed[] = [
       "   Sender HTML never fetches anything directly.",
       "5. **Agent** — requests to the endpoint the user configured, only after an",
       "   explicit send.",
-      "6. **Dictation** — microphone audio to the configured speech provider, only",
-      "   while invoked.",
       "",
       "## What does not happen",
       "",

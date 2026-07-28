@@ -1,7 +1,85 @@
 import type { DynamicToolUIPart } from "ai";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { AgentThoughtTool, AgentWorkIndicator } from "./agent-surface";
+
+const chatMock = vi.hoisted(() => ({
+  addToolApprovalResponse: vi.fn(),
+  error: undefined,
+  messages: [],
+  sendMessage: vi.fn(),
+  setMessages: vi.fn(),
+  status: "ready",
+  stop: vi.fn(),
+}));
+const navigateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@ai-sdk/react", () => ({
+  useChat: () => chatMock,
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    Link: ({ children, ...props }: React.ComponentProps<"a">) => (
+      <a {...props}>{children}</a>
+    ),
+    useNavigate: () => navigateMock,
+    useRouterState: () => "/agent",
+  };
+});
+
+vi.mock("@/lib/hooks/use-vault-path", () => ({
+  useVaultPath: () => ({ data: "/tmp/vault" }),
+}));
+
+vi.mock("@/lib/tauri", () => ({
+  tauriInvoke: vi.fn(async (command: string) => {
+    if (command === "agent_config_get") {
+      return {
+        baseUrl: "http://127.0.0.1:9000/v1",
+        displayName: "Hermes",
+        hasApiKey: true,
+        model: "synthetic-model",
+        sessionKey: "",
+      };
+    }
+    if (command === "agent_chats_all") return [];
+    return null;
+  }),
+}));
+
+import {
+  AgentSurface,
+  AgentThoughtTool,
+  AgentWorkIndicator,
+} from "./agent-surface";
+import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
+
+describe("AgentSurface voice controls", () => {
+  it("does not expose dictation or voice conversation controls", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Hermes" })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Start voice conversation" }),
+    ).not.toBeInTheDocument();
+  });
+});
 
 describe("AgentWorkIndicator", () => {
   it("renders a compact working chip without the heavy step queue", () => {

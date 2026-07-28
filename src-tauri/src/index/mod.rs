@@ -1980,6 +1980,7 @@ mod tests {
 
         let email = mail::EmailSummary {
             id: "msg-1".to_string(),
+            message_id: "msg-1@example.test".to_string(),
             thread_id: "thread-1".to_string(),
             from: "Alex Example".to_string(),
             from_email: "alex@example.com".to_string(),

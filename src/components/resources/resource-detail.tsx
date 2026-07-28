@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { FavoriteToggle } from "@/components/shared/favorite-toggle";
+import { ExternalAnchor } from "@/components/shared/external-link";
 import { FilePathLine } from "@/components/shared/file-path-pill";
 import { TagEditor } from "@/components/shared/tag-editor";
 import { TiptapEditor } from "@/components/shared/tiptap-editor";
@@ -166,17 +167,15 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
       <PropertyList>
         <PropertyRow label="Source">
           {resource.url ? (
-            <a
+            <ExternalAnchor
               href={resource.url}
-              target="_blank"
-              rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 text-[15px] text-foreground hover:underline underline-offset-2 -mx-1 px-1 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 truncate"
             >
               <span className="truncate">
                 {resource.url}
               </span>
               <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
-            </a>
+            </ExternalAnchor>
           ) : (
             <EmptyValue />
           )}

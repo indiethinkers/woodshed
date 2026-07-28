@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BookIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
+import { ExternalAnchor } from "@/components/shared/external-link";
 
 export type SourcesProps = ComponentProps<"div">;
 
@@ -57,14 +58,12 @@ export const SourcesContent = ({
   />
 );
 
-export type SourceProps = ComponentProps<"a">;
+export type SourceProps = Omit<ComponentProps<"a">, "href"> & { href: string };
 
 export const Source = ({ href, title, children, ...props }: SourceProps) => (
-  <a
+  <ExternalAnchor
     className="flex items-center gap-2"
     href={href}
-    rel="noreferrer"
-    target="_blank"
     {...props}
   >
     {children ?? (
@@ -73,5 +72,5 @@ export const Source = ({ href, title, children, ...props }: SourceProps) => (
         <span className="block font-medium">{title}</span>
       </>
     )}
-  </a>
+  </ExternalAnchor>
 );

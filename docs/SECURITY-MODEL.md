@@ -4,7 +4,7 @@
 
 - vault files and attachments;
 - locally cached email and calendar data;
-- Gmail App Passwords, iCal secret URLs, Hermes keys, and Deepgram keys;
+- Gmail App Passwords, iCal secret URLs, and Hermes keys;
 - the authority to send/archive mail, create records, and contact integrations.
 
 ## Trust boundaries
@@ -72,8 +72,7 @@ response, attachment, and stream budgets are enforced independently.
 
 The Hermes endpoint is user-configured and may intentionally be local, so it is
 not subject to the public-host SSRF rule. Its URL syntax, requests, response
-sizes, stream sizes, and timeouts are still bounded. Deepgram uses fixed HTTPS
-endpoints with bounded input and output.
+sizes, stream sizes, and timeouts are still bounded.
 
 ## Explicit authority
 
@@ -81,8 +80,7 @@ External writes are initiated by the user. Agent-generated action plans display
 the concrete operation fields—including resource URLs and task scheduling—and
 require confirmation before creating records or archiving mail. Confirmation
 text is normalized and bounded before display, and execution uses those exact
-confirmed values. Opening Sweep alone sends nothing. Voice data is sent only
-after the user invokes dictation or voice mode.
+confirmed values. Opening Sweep alone sends nothing.
 
 ## Residual assumptions
 

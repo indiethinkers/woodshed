@@ -10,10 +10,12 @@
 
 use crate::commands::mail::{
     build_email_summary, mail_get_local_inner, persist_inbox_email, persist_sent_email,
-    save_attachment_bytes, vault_root, Attachment,
+    sanitize_attachment_filename, save_attachment_bytes, strip_brackets, vault_root, Attachment,
+    EmailSummary,
 };
 use crate::gmail::{creds, imap_client, parse, smtp_client, CredsError};
 use crate::AppState;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{AppHandle, State};
@@ -25,6 +27,9 @@ use tauri_plugin_store::StoreExt;
 /// the OS keychain.
 const STORE_FILE: &str = "config.json";
 const STORE_KEY: &str = "gmail_accounts";
+const MAX_OUTGOING_ATTACHMENT_COUNT: usize = 10;
+const MAX_OUTGOING_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
+const MAX_OUTGOING_ATTACHMENTS_TOTAL_BYTES: usize = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -398,12 +403,15 @@ pub async fn gmail_sync_recent(
         // and X-GM-MSGID are not account-scoped: the same delivered message can
         // legitimately exist in two configured inboxes.
         let id = canonical_uid.clone();
+        let wire_message_id = parsed.message_id.clone();
         let thread_id = if parsed.gm_thrid != 0 {
             format!("gmail-thread-{:x}", parsed.gm_thrid)
-        } else if let Some(root_message_id) = parsed.thread_root_message_id {
-            root_message_id
         } else {
-            id.clone()
+            choose_thread_id(
+                &id,
+                (!wire_message_id.is_empty()).then_some(wire_message_id.as_str()),
+                parsed.thread_root_message_id.as_deref(),
+            )
         };
 
         // Read state mirrors the IMAP \Seen flag. We translate to the
@@ -437,6 +445,7 @@ pub async fn gmail_sync_recent(
 
         let summary = build_email_summary(
             id.clone(),
+            wire_message_id,
             thread_id,
             inbox.clone(),
             parsed.from.clone(),
@@ -518,6 +527,16 @@ pub struct GmailComposeInput {
     pub bcc: Vec<String>,
     pub subject: String,
     pub body: String,
+    #[serde(default)]
+    pub attachments: Vec<GmailOutgoingAttachment>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailOutgoingAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub data_base64: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -538,6 +557,8 @@ pub struct GmailReplyInput {
     #[serde(default)]
     pub cc: Vec<String>,
     pub body: String,
+    #[serde(default)]
+    pub attachments: Vec<GmailOutgoingAttachment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -589,6 +610,8 @@ pub async fn gmail_send(
     let persisted_from = sender_name
         .clone()
         .unwrap_or_else(|| credentials.email.clone());
+    let vault = vault_root(&app)?;
+    let attachments = decode_outgoing_attachments(input.attachments.clone())?;
 
     let outbound = smtp_client::OutboundMessage {
         from_email: credentials.email.clone(),
@@ -598,14 +621,18 @@ pub async fn gmail_send(
         bcc: input.bcc.clone(),
         subject: input.subject.clone(),
         body: input.body.clone(),
+        attachments,
         in_reply_to: None,
         references: Vec::new(),
     };
     let outcome = smtp_client::send(&credentials, &outbound)
         .await
         .map_err(|e| smtp_err_to_string(e, &credentials.email))?;
+    let persisted_attachments =
+        persist_outgoing_attachments(&state, &vault, &outcome.message_id, &outbound.attachments);
 
     let summary = build_email_summary(
+        outcome.message_id.clone(),
         outcome.message_id.clone(),
         outcome.message_id.clone(), // thread_id = msgid for new compose
         active_inbox.clone(),
@@ -616,7 +643,7 @@ pub async fn gmail_send(
         None,
         outcome.sent_at.clone(),
         vec!["sent".into()],
-        Vec::new(),
+        persisted_attachments,
     );
     persist_sent_email(&app, &state, &summary)?;
 
@@ -677,6 +704,7 @@ pub async fn gmail_reply(
         None => Vec::new(),
     };
     let cc = input.cc;
+    let attachments = decode_outgoing_attachments(input.attachments)?;
 
     // Subject: prefix with "Re: " unless one's already there.
     let subject = if original.subject.to_lowercase().starts_with("re:") {
@@ -695,22 +723,26 @@ pub async fn gmail_reply(
         bcc: Vec::new(),
         subject: subject.clone(),
         body: input.body.clone(),
-        in_reply_to: Some(original.id.clone()),
+        attachments,
+        in_reply_to: Some(wire_message_id(&original).to_string()),
         // We don't currently persist the original References chain in
         // frontmatter — pass just the original message-id, which is the
         // minimum viable thread linkage. Gmail threads on subject + this
         // header anyway; full chain preservation is a follow-up.
-        references: vec![original.id.clone()],
+        references: vec![wire_message_id(&original).to_string()],
     };
     let outcome = smtp_client::send(&credentials, &outbound)
         .await
         .map_err(|e| smtp_err_to_string(e, &credentials.email))?;
+    let persisted_attachments =
+        persist_outgoing_attachments(&state, &vault, &outcome.message_id, &outbound.attachments);
 
     let thread_id = input
         .thread_id
         .unwrap_or_else(|| original.thread_id.clone());
 
     let summary = build_email_summary(
+        outcome.message_id.clone(),
         outcome.message_id.clone(),
         thread_id.clone(),
         active_inbox,
@@ -721,7 +753,7 @@ pub async fn gmail_reply(
         None,
         outcome.sent_at.clone(),
         vec!["sent".into()],
-        Vec::new(),
+        persisted_attachments,
     );
     persist_sent_email(&app, &state, &summary)?;
 
@@ -870,9 +902,112 @@ fn smtp_err_to_string(e: smtp_client::SmtpError, email: &str) -> String {
     s
 }
 
+fn choose_thread_id(
+    local_id: &str,
+    wire_message_id: Option<&str>,
+    thread_root_message_id: Option<&str>,
+) -> String {
+    thread_root_message_id
+        .or(wire_message_id)
+        .map(strip_brackets)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| local_id.to_string())
+}
+
+fn wire_message_id(email: &EmailSummary) -> &str {
+    if email.message_id.trim().is_empty() {
+        &email.id
+    } else {
+        &email.message_id
+    }
+}
+
+fn decode_outgoing_attachments(
+    attachments: Vec<GmailOutgoingAttachment>,
+) -> Result<Vec<smtp_client::OutgoingAttachment>, String> {
+    if attachments.len() > MAX_OUTGOING_ATTACHMENT_COUNT {
+        return Err(format!(
+            "too many attachments (maximum {MAX_OUTGOING_ATTACHMENT_COUNT})"
+        ));
+    }
+
+    let mut total = 0_usize;
+    let mut decoded = Vec::with_capacity(attachments.len());
+    for (index, attachment) in attachments.into_iter().enumerate() {
+        let max_encoded_len = MAX_OUTGOING_ATTACHMENT_BYTES.div_ceil(3) * 4;
+        if attachment.data_base64.len() > max_encoded_len + 4 {
+            return Err("attachment exceeds the 10 MB limit".into());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(attachment.data_base64.as_bytes())
+            .map_err(|_| "attachment data is not valid base64".to_string())?;
+        if bytes.len() > MAX_OUTGOING_ATTACHMENT_BYTES {
+            return Err("attachment exceeds the 10 MB limit".into());
+        }
+        total = total
+            .checked_add(bytes.len())
+            .ok_or_else(|| "attachment size overflow".to_string())?;
+        if total > MAX_OUTGOING_ATTACHMENTS_TOTAL_BYTES {
+            return Err("attachments exceed the 20 MB total limit".into());
+        }
+
+        let filename =
+            sanitize_attachment_filename(&attachment.filename, &format!("outgoing-{index}"));
+        if filename.len() > 255 {
+            return Err("attachment filename is too long".into());
+        }
+        let content_type = attachment.content_type.trim();
+        if content_type.len() > 127 {
+            return Err("attachment content type is too long".into());
+        }
+        decoded.push(smtp_client::OutgoingAttachment {
+            filename,
+            content_type: if content_type.is_empty() {
+                "application/octet-stream".into()
+            } else {
+                content_type.to_string()
+            },
+            bytes,
+        });
+    }
+    Ok(decoded)
+}
+
+fn persist_outgoing_attachments(
+    state: &State<AppState>,
+    vault: &std::path::Path,
+    message_id: &str,
+    attachments: &[smtp_client::OutgoingAttachment],
+) -> Vec<Attachment> {
+    attachments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, attachment)| {
+            match save_attachment_bytes(
+                state,
+                vault,
+                message_id,
+                &index.to_string(),
+                &attachment.filename,
+                &attachment.content_type,
+                &attachment.bytes,
+            ) {
+                Ok(metadata) => Some(metadata),
+                Err(_) => {
+                    // SMTP already accepted the message. Keep the sent record
+                    // recoverable without logging private filenames or paths.
+                    eprintln!("gmail: could not cache a sent attachment locally");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod credential_metadata_tests {
     use super::*;
+    use base64::Engine;
 
     #[test]
     fn gmail_metadata_never_serializes_app_password() {
@@ -887,5 +1022,47 @@ mod credential_metadata_tests {
         assert!(!json.contains("super-secret"));
         assert!(!json.contains("appPassword"));
         assert!(json.contains("credentialConfigured"));
+    }
+
+    #[test]
+    fn replies_share_the_root_wire_message_id_when_gmail_thread_ids_are_unavailable() {
+        let original = choose_thread_id(
+            "gmail-uid-account-42-7",
+            Some("root-message@example.test"),
+            None,
+        );
+        let reply = choose_thread_id(
+            "gmail-uid-account-42-8",
+            Some("reply-message@example.test"),
+            Some("root-message@example.test"),
+        );
+
+        assert_eq!(original, "root-message@example.test");
+        assert_eq!(reply, original);
+    }
+
+    #[test]
+    fn outgoing_attachments_decode_only_inside_the_bounded_mail_command() {
+        let decoded = decode_outgoing_attachments(vec![GmailOutgoingAttachment {
+            filename: "brief.txt".into(),
+            content_type: "text/plain".into(),
+            data_base64: "aGVsbG8=".into(),
+        }])
+        .expect("valid attachment");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].filename, "brief.txt");
+        assert_eq!(decoded[0].bytes, b"hello");
+
+        let oversized = GmailOutgoingAttachment {
+            filename: "large.bin".into(),
+            content_type: "application/octet-stream".into(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(vec![
+                0_u8;
+                MAX_OUTGOING_ATTACHMENT_BYTES
+                    + 1
+            ]),
+        };
+        assert!(decode_outgoing_attachments(vec![oversized]).is_err());
     }
 }

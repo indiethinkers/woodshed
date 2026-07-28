@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/shared/markdown";
+import { ExternalAnchor } from "@/components/shared/external-link";
 import { useDailyJournal } from "@/lib/hooks/use-daily-journal";
 import { useAreas } from "@/lib/hooks/use-areas";
 import { useEvent, useIcalEvent } from "@/lib/hooks/use-events";
@@ -308,15 +309,13 @@ function ResourceReference({ id, href }: { id: string; href: string }) {
       <ReferenceFields>
         {resource.url && (
           <ReferenceField label="Source">
-            <a
+            <ExternalAnchor
               href={resource.url}
-              target="_blank"
-              rel="noreferrer"
               className="inline-flex min-w-0 items-center gap-1 text-foreground underline-offset-2 hover:underline"
             >
               <span className="truncate">{resource.source || resource.url}</span>
               <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-            </a>
+            </ExternalAnchor>
           </ReferenceField>
         )}
         <ReferenceField label="Saved">{formatDate(resource.saved)}</ReferenceField>
@@ -458,15 +457,13 @@ function ResolvedEventReference({
         )}
         {event.meetingUrl && (
           <ReferenceField label="Meeting">
-            <a
+            <ExternalAnchor
               href={event.meetingUrl}
-              target="_blank"
-              rel="noreferrer"
               className="inline-flex min-w-0 items-center gap-1 text-foreground underline-offset-2 hover:underline"
             >
               <span className="truncate">Join meeting</span>
               <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-            </a>
+            </ExternalAnchor>
           </ReferenceField>
         )}
       </ReferenceFields>

@@ -120,4 +120,18 @@ describe("AreaDistribution", () => {
       screen.getByRole("img", { name: /Invisible 50%/ }),
     ).toBeInTheDocument();
   });
+
+  it("uses foreground contrast for the section label in light mode", () => {
+    render(
+      <AreaDistribution
+        areas={[area("a", "Alpha", "#3987e5")]}
+        items={items([["a", "2026-07-20", 1]])}
+        today={TODAY}
+      />,
+    );
+
+    expect(screen.getByText(/Where your attention went/i)).toHaveClass(
+      "text-foreground",
+    );
+  });
 });

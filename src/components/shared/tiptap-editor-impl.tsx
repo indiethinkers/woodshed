@@ -1290,7 +1290,7 @@ export function TiptapEditor({
   // focused but unchanged, accept the external value so a stale instance can't
   // later blur and save old markdown over newer file/query content.
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     const currentMarkdown = (
       editor.storage as unknown as { markdown: MarkdownStorage }
     ).markdown.getMarkdown();

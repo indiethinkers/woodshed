@@ -77,8 +77,6 @@ same local graph.
   running app after watcher invalidation and re-indexing.
 - **Tiptap editing.** Notes and record bodies support Markdown, slash commands,
   images, YouTube/X embeds, and inline wikilinks.
-- **Voice tools.** Dictation and Agent voice mode use a user-configured Deepgram
-  account only when invoked.
 - **Recoverable deletion.** Supported destructive actions move records into the
   vault's `.woodshed/trash/` tree.
 
@@ -177,7 +175,6 @@ and diagnostics.
 | Gmail | Multi-account IMAP inbox and SMTP send/reply | OS credential store |
 | Google Calendar | Read-only iCal subscription and local event cache | OS credential store |
 | Hermes-compatible endpoint | Agent chat and confirmed Sweep actions | OS credential store |
-| Deepgram | Dictation, speech recognition, and Aura voice playback | OS credential store |
 
 Resource capture fetches only a URL submitted by the user. Public fetches reject
 private network targets and enforce redirect, time, and response-size limits.
@@ -237,7 +234,7 @@ menu and `[[` to search wikilink targets.
 |---|---|
 | `⌘N` | Start a new conversation on the Agent surface |
 | `Enter` | Focus the Agent composer when focus is outside an interactive control |
-| `Esc` | Leave the composer or close voice mode |
+| `Esc` | Leave the composer |
 
 ## Architecture
 
@@ -275,7 +272,7 @@ explicit Rust command boundary.
 | `src/components/layout/` | Navigation rail, tabs, panels, title bar, providers |
 | `src/components/cadence/` | Daily journal, event, and task experiences |
 | `src/components/mail/` | Inbox, thread, compose, account, and Sweep UI |
-| `src/components/agent/` | Chat surface, streaming messages, tools, and voice mode |
+| `src/components/agent/` | Chat surface, streaming messages, and tools |
 | `src/components/notebook/` | Note list and detail experiences |
 | `src/components/people/` | Personal CRM list, detail, and avatar flows |
 | `src/components/resources/` | Saved-link capture, list, and detail UI |
@@ -365,7 +362,6 @@ Configured integrations communicate directly from the desktop app.
 - Gmail uses IMAP and SMTP. App Passwords are stored by the OS.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent or Sweep action.
-- Deepgram receives audio or synthesis text only while voice tools are active.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 
