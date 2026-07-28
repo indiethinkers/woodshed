@@ -53,13 +53,12 @@ pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
     vault_lib::ensure_dirs(&target)
         .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
 
-    // The search index is a single database keyed to vault-relative paths, so
-    // the outgoing vault's rows would surface as dead search hits against the
-    // new one. Dropping it is safe — it is derived state, and `watcher_start`
-    // rebuilds when `document_count()` is zero. Done before the path is
-    // written so a failure here leaves the old vault fully intact; losing the
-    // index for the *current* vault would only cost one rebuild anyway.
-    discard_search_index(&app)?;
+    // Drop the derived caches that live in app data rather than in the vault.
+    // Both would otherwise show the outgoing vault's content inside the
+    // incoming one. Done before the path is written, so a failure here leaves
+    // the old vault fully intact — and losing a cache for the *current* vault
+    // costs one rebuild, nothing more.
+    discard_derived_caches(&app)?;
 
     config::vault_path_set(app.clone(), target.to_string_lossy().to_string())?;
     crate::log_info!("vault::switch", "switched vault, restarting");
@@ -156,30 +155,65 @@ fn ensure_safe_to_adopt(target: &Path) -> Result<(), String> {
     ))
 }
 
-/// Remove the derived search index so the next boot rebuilds from the new
-/// vault. Sidecars are cleared too: the index runs in rollback-journal mode
-/// today, but leaving a stale `-wal` behind if that ever changes would
-/// resurrect the previous vault's rows.
-fn discard_search_index(app: &tauri::AppHandle) -> Result<(), String> {
+/// Drop the derived caches under `<app_data_dir>` that describe one vault's
+/// content, so the incoming vault does not inherit the outgoing one's.
+///
+/// Both are disposable by design ("derived state is disposable"), and both are
+/// stored outside the vault, which is exactly why a vault switch has to clear
+/// them explicitly:
+///
+/// * **Search index** — one database keyed to vault-relative paths. Left in
+///   place, the old vault's rows surface as dead search hits.
+/// * **Calendar caches** — `gcal-cache/<account>.json`, keyed by account rather
+///   than by vault, and merged into Cadence at read time. Left in place, the
+///   previous vault's meetings appear on the new vault's schedule, while the
+///   iCal note attachments they pair with (`events/`) correctly did not come
+///   along — so the schedule shows events whose notes cannot exist.
+///
+/// Calendar accounts stay configured; the next sync repopulates the cache.
+fn discard_derived_caches(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
 
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data dir: {e}"))?;
+
+    // Sidecars are cleared too: the index runs in rollback-journal mode today,
+    // but a stale `-wal` would resurrect the previous vault's rows if that ever
+    // changes.
     let db = crate::index::default_db_path(&app_data);
     for candidate in [
         db.clone(),
         db.with_extension("db-wal"),
         db.with_extension("db-shm"),
     ] {
-        match std::fs::remove_file(&candidate) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("clear search index {}: {e}", candidate.display())),
+        remove_if_present(&candidate).map_err(|e| format!("clear search index: {e}"))?;
+    }
+
+    let gcal_dir = app_data.join("gcal-cache");
+    if gcal_dir.is_dir() {
+        for entry in
+            std::fs::read_dir(&gcal_dir).map_err(|e| format!("read {}: {e}", gcal_dir.display()))?
+        {
+            let path = entry
+                .map_err(|e| format!("read {}: {e}", gcal_dir.display()))?
+                .path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                remove_if_present(&path).map_err(|e| format!("clear calendar cache: {e}"))?;
+            }
         }
     }
+
     Ok(())
+}
+
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
