@@ -1,5 +1,10 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  customLoading: false,
+  generatedLoading: false,
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -28,7 +33,7 @@ vi.mock("@/lib/hooks/use-tables", () => ({
         rowCount: 1,
       },
     ],
-    isLoading: false,
+    isLoading: mocks.customLoading,
   }),
   useDatabaseFavoriteMutations: () => ({
     setTableFavorite: { mutate: vi.fn() },
@@ -42,11 +47,16 @@ vi.mock("@/lib/hooks/use-tables", () => ({
 vi.mock("@/lib/hooks/use-tag-table", () => ({
   useTagsWithCounts: () => ({
     data: [{ tag: "generated", count: 100 }],
-    isLoading: false,
+    isLoading: mocks.generatedLoading,
   }),
 }));
 
 import { DatabasesList } from "./databases-list";
+
+beforeEach(() => {
+  mocks.customLoading = false;
+  mocks.generatedLoading = false;
+});
 
 describe("DatabasesList", () => {
   it("renders Custom and Generated as separate inline databases", () => {
@@ -88,5 +98,18 @@ describe("DatabasesList", () => {
     expect(within(custom).queryByRole("img", { hidden: true })).toBeNull();
     expect(custom.querySelector("svg")).toBeNull();
     expect(generated.querySelector("svg")).toBeNull();
+  });
+
+  it("uses compact loading states for both inline databases", () => {
+    mocks.customLoading = true;
+    mocks.generatedLoading = true;
+
+    render(<DatabasesList />);
+
+    expect(
+      screen
+        .getAllByTestId("record-table-skeleton")
+        .map((skeleton) => skeleton.getAttribute("data-compact")),
+    ).toEqual(["true", "true"]);
   });
 });

@@ -4,6 +4,32 @@ import type { EmailSummary } from "@/lib/mail-lib/types";
 import { useAutoMarkRead } from "./email-detail";
 
 describe("useAutoMarkRead", () => {
+  it("continues with every unread message when the first optimistic update rerenders", async () => {
+    const first = email({ id: "message-1", read: false });
+    const second = email({ id: "message-2", read: false });
+    let finishFirst!: () => void;
+    const markRead = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const { rerender } = renderHook(
+      ({ messages }) => useAutoMarkRead(messages, false, markRead),
+      { initialProps: { messages: [first, second] } },
+    );
+
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith(first.id));
+    rerender({ messages: [{ ...first, read: true }, second] });
+
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith(second.id));
+    finishFirst();
+  });
+
   it("does not retry a failed message on each unread-state render", async () => {
     const message = email({ read: false, labels: ["inbox", "unread"] });
     const markRead = vi.fn().mockRejectedValue(new Error("remote read failed"));

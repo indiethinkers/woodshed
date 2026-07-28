@@ -363,21 +363,12 @@ export function useAutoMarkRead(
       .map((message) => message.id);
     if (unreadIds.length === 0) return;
 
-    let cancelled = false;
-    for (const id of unreadIds) attemptedIds.current.add(id);
-    void (async () => {
-      for (const id of unreadIds) {
-        if (cancelled) return;
-        try {
-          await markRead(id);
-        } catch {
-          console.error("Automatic mark-read failed.");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    for (const id of unreadIds) {
+      attemptedIds.current.add(id);
+      void markRead(id).catch(() => {
+        console.error("Automatic mark-read failed.");
+      });
+    }
   }, [isLoading, messages, markRead]);
 }
 

@@ -453,11 +453,12 @@ function useVisibleRowRange(
       const top =
         current.getBoundingClientRect().top -
         scrollEl.getBoundingClientRect().top;
-      const start = Math.max(0, Math.floor(-top / ROW_HEIGHT) - OVERSCAN);
-      const end = Math.min(
+      const [start, end] = calculateVisibleRowRange({
         rowCount,
-        Math.ceil((scrollEl.clientHeight - top) / ROW_HEIGHT) + OVERSCAN,
-      );
+        top,
+        viewportHeight: scrollEl.clientHeight,
+        overscan: OVERSCAN,
+      });
       setRange((prev) =>
         prev[0] === start && prev[1] === end ? prev : [start, end],
       );
@@ -478,6 +479,28 @@ function useVisibleRowRange(
   }, [rowCount, bodyRef]);
 
   return range;
+}
+
+export function calculateVisibleRowRange({
+  rowCount,
+  top,
+  viewportHeight,
+  overscan = 12,
+}: {
+  rowCount: number;
+  top: number;
+  viewportHeight: number;
+  overscan?: number;
+}): [number, number] {
+  const start = Math.min(
+    rowCount,
+    Math.max(0, Math.floor(-top / ROW_HEIGHT) - overscan),
+  );
+  const end = Math.min(
+    rowCount,
+    Math.max(start, Math.ceil((viewportHeight - top) / ROW_HEIGHT) + overscan),
+  );
+  return [start, end];
 }
 
 function RecordTableGrid<T>({
@@ -521,7 +544,7 @@ function RecordTableGrid<T>({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [start, end] = useVisibleRowRange(rows.length, bodyRef);
 
-  if (loading) return <TableSkeleton />;
+  if (loading) return <TableSkeleton compact={compact} />;
 
   const visibleKeys = rows.map(rowKey);
   const anySelected = visibleKeys.some((key) => selectedKeys.has(key));
@@ -1020,15 +1043,20 @@ function ViewTab({
 
 // Mirrors the real grid's bones (header row + bordered 36px rows) so the
 // loaded table lands on the same layout instead of jumping.
-function TableSkeleton() {
+function TableSkeleton({ compact }: { compact: boolean }) {
+  const widths = compact ? [40, 56, 32] : [40, 56, 32, 48, 36, 52, 44, 28];
   return (
-    <div className="min-h-[240px] animate-pulse border-y border-border/60">
+    <div
+      data-testid="record-table-skeleton"
+      data-compact={compact}
+      className={`${compact ? "" : "min-h-[240px]"} animate-pulse border-y border-border/60`}
+    >
       <div className="flex h-8 items-center gap-6 border-b border-border/60 px-2.5">
         <div className="h-3 w-24 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
       </div>
-      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+      {widths.map((width, i) => (
         <div
           key={i}
           className="flex h-9 items-center gap-6 border-b border-border/40 px-2.5"
@@ -1036,7 +1064,7 @@ function TableSkeleton() {
           <div
             className="h-3 rounded bg-muted"
             style={{
-              width: `${[40, 56, 32, 48, 36, 52, 44, 28][i]}%`,
+              width: `${width}%`,
               maxWidth: 280,
             }}
           />
