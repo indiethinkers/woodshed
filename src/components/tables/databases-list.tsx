@@ -5,7 +5,6 @@ import {
   Database,
   Plus,
   Rows3,
-  Shapes,
 } from "lucide-react";
 import {
   RecordLinkCell,
@@ -46,30 +45,18 @@ const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
     name: "Name",
     type: "text",
     icon: Database,
-    width: 360,
+    width: 480,
     value: (row) => row.name,
     render: (row, href) => (
       <RecordLinkCell href={href}>{row.name}</RecordLinkCell>
     ),
   },
   {
-    id: "kind",
-    name: "Kind",
-    type: "select",
-    icon: Shapes,
-    width: 160,
-    options: [
-      { id: "Custom", name: "Custom", color: "blue" },
-      { id: "Generated", name: "Generated", color: "teal" },
-    ],
-    value: (row) => row.kind,
-  },
-  {
     id: "rows",
     name: "Rows",
     type: "number",
     icon: Rows3,
-    width: 120,
+    width: 140,
     value: (row) => row.rows,
   },
   {
@@ -77,7 +64,7 @@ const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
     name: "Created",
     type: "date",
     icon: CalendarDays,
-    width: 170,
+    width: 190,
     value: (row) => row.created,
   },
 ];

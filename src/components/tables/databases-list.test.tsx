@@ -43,10 +43,10 @@ describe("DatabasesList", () => {
 
     const customGroup = screen
       .getByRole("heading", { name: "Custom" })
-      .closest("[data-record-group]")!;
+      .closest<HTMLElement>("[data-record-group]")!;
     const generatedGroup = screen
       .getByRole("heading", { name: "Generated" })
-      .closest("[data-record-group]")!;
+      .closest<HTMLElement>("[data-record-group]")!;
     const custom = screen.getByRole("link", { name: "Custom database" });
     const generated = screen.getByRole("link", { name: "#generated" });
     expect(
@@ -63,6 +63,11 @@ describe("DatabasesList", () => {
     expect(generatedGroup.compareDocumentPosition(generated)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+    expect(within(customGroup).getByRole("separator")).toBeInTheDocument();
+    expect(within(generatedGroup).getByRole("separator")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Kind$/ }),
+    ).not.toBeInTheDocument();
     expect(within(custom).queryByRole("img", { hidden: true })).toBeNull();
     expect(custom.querySelector("svg")).toBeNull();
     expect(generated.querySelector("svg")).toBeNull();

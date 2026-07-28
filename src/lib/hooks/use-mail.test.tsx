@@ -14,7 +14,7 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useArchiveOne, useMail } from "./use-mail";
+import { useArchiveOne, useMail, useMarkRead } from "./use-mail";
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -56,6 +56,39 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
     .getQueryData<InfiniteData<MailPage, number>>(["emails"])
     ?.pages.flatMap((page) => page.items);
 }
+
+describe("useMarkRead", () => {
+  it("clears unread state everywhere an opened thread is rendered", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["email", email.id], email);
+    qc.setQueryData(["thread", email.threadId], [email]);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current(email.id);
+    });
+
+    expect(cachedEmails(qc)?.[0]).toMatchObject({ read: true });
+    expect(qc.getQueryData<EmailSummary>(["email", email.id])).toMatchObject({
+      read: true,
+    });
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", email.threadId])?.[0],
+    ).toMatchObject({ read: true });
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("useArchiveOne", () => {
   let qc: QueryClient;

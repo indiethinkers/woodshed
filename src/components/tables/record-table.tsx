@@ -650,16 +650,25 @@ function DatabaseGroupHeader({
   return (
     <div
       data-record-group={label}
-      className="flex h-9 items-center border-b border-border/60 bg-muted/35"
+      className="flex h-9 items-center border-b border-border/30 bg-transparent"
     >
-      <div className="sticky left-0 flex min-w-[240px] items-baseline gap-2.5 px-2.5">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+      <div className="sticky left-0 flex min-w-[240px] items-center gap-2.5 px-2.5 pr-3">
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/35 ring-[3px] ring-foreground/[0.04]"
+        />
+        <h2 className="text-[12px] font-medium text-foreground/90">
           {label}
         </h2>
-        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="rounded-full bg-muted/70 px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground ring-1 ring-inset ring-border/50">
           {count} {countLabel}
         </span>
       </div>
+      <span
+        role="separator"
+        aria-orientation="horizontal"
+        className="mr-3 h-px min-w-12 flex-1 bg-border/60"
+      />
     </div>
   );
 }
