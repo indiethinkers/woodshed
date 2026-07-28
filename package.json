@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "demo:vault": "bun run scripts/demo-vault/index.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.232",
