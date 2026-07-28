@@ -1738,17 +1738,24 @@ pub struct EmailBodyRenderResult {
     has_remote_images: bool,
 }
 
+const EMAIL_BODY_RENDER_CACHE_VERSION: u8 = 2;
+
+fn email_body_cache_id(id: &str, load_remote_images: bool) -> String {
+    let mode = if load_remote_images {
+        "remote-images"
+    } else {
+        "images-blocked"
+    };
+    format!("{id}:{mode}:v{EMAIL_BODY_RENDER_CACHE_VERSION}")
+}
+
 #[tauri::command]
 pub async fn email_body_render(
     app: AppHandle,
     id: String,
     load_remote_images: bool,
 ) -> Result<EmailBodyRenderResult, String> {
-    let cache_id = if load_remote_images {
-        format!("{id}:remote-images")
-    } else {
-        format!("{id}:images-blocked")
-    };
+    let cache_id = email_body_cache_id(&id, load_remote_images);
     let vault = vault_root(&app)?;
     let (md_path, _sub) =
         find_email_path_anywhere(&vault, &id).ok_or_else(|| format!("email not found: {id}"))?;
@@ -1808,6 +1815,18 @@ pub async fn email_body_render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_email_cache_ids_include_the_renderer_version() {
+        assert_eq!(
+            email_body_cache_id("message-1", true),
+            "message-1:remote-images:v2"
+        );
+        assert_eq!(
+            email_body_cache_id("message-1", false),
+            "message-1:images-blocked:v2"
+        );
+    }
 
     fn sample_email() -> EmailSummary {
         let body = "Hey — wanna grab lunch?\n\nWas thinking 12:30 at https://joes.example.com."

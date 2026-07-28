@@ -294,7 +294,7 @@ export function RecordTable<T>({
         </div>
       )}
 
-      <GeneratedDatabase
+      <RecordTableGrid
         columns={columns}
         emptyMessage={emptyMessage}
         errorState={errorState}
@@ -465,7 +465,7 @@ function useVisibleRowRange(
   return range;
 }
 
-function GeneratedDatabase<T>({
+function RecordTableGrid<T>({
   columns,
   emptyMessage,
   errorState,
@@ -689,7 +689,7 @@ function DatabaseRow<T>({
   quietEmptyCells: boolean;
 }) {
   return (
-    // Fixed h-9: the windowed renderer in GeneratedDatabase assumes a
+    // Fixed h-9: the windowed renderer in RecordTableGrid assumes a
     // uniform ROW_HEIGHT. Every cell truncates, so nothing needs to grow.
     <div
       className={`group flex h-9 items-stretch border-b border-border/40 transition-colors ${

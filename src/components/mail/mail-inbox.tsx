@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ChevronDown,
   Mail as MailIcon,
@@ -62,7 +61,7 @@ export function MailInbox() {
     visibleThreads.length === 0
       ? 0
       : Math.min(rawCursor, visibleThreads.length - 1);
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
 
   // Multi-select for bulk archive. `a` toggles select-all of currently-
   // visible threads; `e` archives the selection (or the cursor row when
@@ -251,13 +250,7 @@ export function MailInbox() {
                     people={people}
                     isCursor={idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
-                    onClick={() => {
-                      setCursor(idx);
-                      void navigate({
-                        to: "/mail/$id",
-                        params: { id: thread.email.id },
-                      });
-                    }}
+                    onClick={() => setCursor(idx)}
                     ref={(el) => {
                       rowRefs.current[idx] = el;
                     }}
@@ -301,7 +294,7 @@ interface EmailRowProps {
   isCursor: boolean;
   isSelected: boolean;
   onClick: () => void;
-  ref?: React.Ref<HTMLDivElement>;
+  ref?: React.Ref<HTMLAnchorElement>;
 }
 
 function EmailRow({
@@ -324,7 +317,9 @@ function EmailRow({
   const senderPerson = findPersonForMailSender(people, email);
   const senderName = senderPerson?.name ?? email.from;
   return (
-    <div
+    <Link
+      to="/mail/$id"
+      params={{ id: email.id }}
       ref={ref}
       data-mail-thread-row
       onClick={onClick}
@@ -366,7 +361,7 @@ function EmailRow({
       <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
         {formatRelativeDate(email.date)}
       </span>
-    </div>
+    </Link>
   );
 }
 

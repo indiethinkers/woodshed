@@ -10,7 +10,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children }: { children: ReactNode }) => <a href="#">{children}</a>,
+  Link: ({
+    children,
+    params,
+    to: _to,
+    ...props
+  }: React.ComponentProps<"a"> & {
+    children: ReactNode;
+    params?: { id?: string };
+    to?: string;
+  }) => (
+    <a {...props} href={params?.id ? `/mail/${params.id}` : "#"}>
+      {children}
+    </a>
+  ),
   useNavigate: () => mocks.navigate,
 }));
 
@@ -83,16 +96,12 @@ describe("MailInbox", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
-  it("opens an email thread with one click", () => {
+  it("renders each email thread as a single-click route link", () => {
     mocks.emails = [email({ id: "message-1" })];
     const { container } = render(<MailInbox />);
 
-    fireEvent.click(container.querySelector("[data-mail-thread-row]")!);
-
-    expect(mocks.navigate).toHaveBeenCalledWith({
-      to: "/mail/$id",
-      params: { id: "message-1" },
-    });
+    const row = container.querySelector("[data-mail-thread-row]")!;
+    expect(row).toHaveAttribute("href", "/mail/message-1");
   });
 
   it("archives every inbox message represented by a thread row", async () => {
