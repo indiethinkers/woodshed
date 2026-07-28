@@ -731,12 +731,13 @@ fn is_css_hex_literal(tag: &str) -> bool {
 pub struct TagCount {
     pub tag: String,
     pub count: usize,
+    pub created: Option<String>,
 }
 
-/// Single-pass scan that emits `(tag, count)` for every distinct tag
-/// the vault knows about. Powers the Tables sidebar's auto-generated
-/// section without forcing N round-trips of `tag_table` (which scans
-/// the vault once per call). `#event` is always present.
+/// Single-pass scan that emits tag, count, and earliest creation date
+/// for every distinct tag the vault knows about. Powers the Tables sidebar's
+/// auto-generated section without forcing N round-trips of `tag_table`, which
+/// scans the vault once per call. `#event` is always present.
 #[tauri::command]
 pub async fn tags_with_counts(
     app: AppHandle,
@@ -752,16 +753,27 @@ pub async fn tags_with_counts(
         }
     }
 
-    let mut counts: std::collections::HashMap<String, usize> = state
+    let mut counts: std::collections::HashMap<String, (usize, Option<i64>)> = state
         .ensure_index(&app)?
         .tag_counts()
         .map_err(|e| format!("query tag counts: {e}"))?
         .into_iter()
+        .map(|(tag, count, created_at)| (tag, (count, created_at)))
         .collect();
 
-    let bump = |t: &str, c: &mut std::collections::HashMap<String, usize>| {
+    let bump = |t: &str,
+                created_at: Option<i64>,
+                c: &mut std::collections::HashMap<String, (usize, Option<i64>)>| {
         if !t.is_empty() {
-            *c.entry(t.to_lowercase()).or_insert(0) += 1;
+            let aggregate = c.entry(t.to_lowercase()).or_insert((0, None));
+            aggregate.0 += 1;
+            if let Some(candidate) = created_at {
+                aggregate.1 = Some(
+                    aggregate
+                        .1
+                        .map_or(candidate, |current| current.min(candidate)),
+                );
+            }
         }
     };
 
@@ -780,17 +792,28 @@ pub async fn tags_with_counts(
             continue;
         }
         if seen_uids.insert(ev.uid.clone()) {
-            bump("event", &mut counts);
+            bump(
+                "event",
+                crate::index::parse_record_time_ms(&ev.dtstart_rfc3339),
+                &mut counts,
+            );
         }
     }
 
     // Always surface `#event` even on an empty vault so the sidebar's
     // canonical entry never disappears.
-    counts.entry("event".to_string()).or_insert(0);
+    counts.entry("event".to_string()).or_insert((0, None));
 
     let mut out: Vec<TagCount> = counts
         .into_iter()
-        .map(|(tag, count)| TagCount { tag, count })
+        .map(|(tag, (count, created_at))| TagCount {
+            tag,
+            count,
+            created: created_at.and_then(|millis| {
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+                    .map(|date| date.to_rfc3339())
+            }),
+        })
         .collect();
     // Sort by descending count, then alphabetically — most-used tags
     // float to the top of the sidebar, ties resolve deterministically.
@@ -948,6 +971,7 @@ mod tests {
         let counts = vec![TagCount {
             tag: "event".to_string(),
             count: 3,
+            created: Some("2026-01-02T08:00:00+00:00".to_string()),
         }];
         *state.tags_counts_cache.lock().unwrap() = Some((gen0, counts.clone()));
 

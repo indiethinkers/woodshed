@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS documents (
     hint        TEXT,
     href        TEXT NOT NULL,
     area        TEXT,
+    created_at  INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_documents_kind ON documents(kind);
@@ -106,6 +107,10 @@ pub struct IndexedDoc {
     pub hint: Option<String>,
     pub href: String,
     pub area: Option<String>,
+    /// Record creation time in epoch milliseconds. Derived from durable
+    /// frontmatter where available, with the indexed file timestamp as the
+    /// fallback for legacy records.
+    pub created_at: i64,
     /// Explicit and implicit tags supplied by the parser. Inline hashtags
     /// are extracted from `body` during upsert for taggable record kinds.
     pub tags: Vec<String>,
@@ -179,6 +184,7 @@ impl IndexHandle {
             .with_context(|| format!("open index db {}", db_path.display()))?;
         conn.execute_batch(SCHEMA_SQL).context("apply schema")?;
         migrate_space_to_area(&conn).context("migrate space → area column")?;
+        migrate_created_at(&conn).context("add index creation timestamp")?;
         backfill_normalized_edges_once(&mut conn).context("backfill normalized index edges")?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -317,7 +323,16 @@ impl IndexHandle {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        Ok(value.as_deref() != Some("1") || mail_value.as_deref() != Some("1"))
+        let created_value = conn
+            .query_row(
+                "SELECT value FROM index_metadata WHERE key = 'tag_created_at_v1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value.as_deref() != Some("1")
+            || mail_value.as_deref() != Some("1")
+            || created_value.as_deref() != Some("1"))
     }
 
     /// Return only the vault-relative paths carrying `tag`. Tag-table
@@ -340,14 +355,20 @@ impl IndexHandle {
     /// Count normalized tags without reading vault files. Each source file
     /// contributes at most once per tag because document_tags is unique on
     /// `(source_path, tag)`.
-    pub fn tag_counts(&self) -> Result<Vec<(String, usize)>> {
+    pub fn tag_counts(&self) -> Result<Vec<(String, usize, Option<i64>)>> {
         let conn = self.conn.lock_recover();
         let mut stmt = conn.prepare(
-            "SELECT tag, COUNT(*) FROM document_tags GROUP BY tag ORDER BY COUNT(*) DESC, tag",
+            "SELECT t.tag, COUNT(*), MIN(NULLIF(d.created_at, 0)) \
+             FROM document_tags t JOIN documents d ON d.path = t.source_path \
+             GROUP BY t.tag ORDER BY COUNT(*) DESC, t.tag",
         )?;
         let counts = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as usize,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(counts)
@@ -586,6 +607,11 @@ impl IndexHandle {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         )?;
+        tx.execute(
+            "INSERT INTO index_metadata (key, value) VALUES ('tag_created_at_v1', '1') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
         tx.commit()?;
         Ok(count)
     }
@@ -641,6 +667,24 @@ fn migrate_space_to_area(conn: &Connection) -> Result<()> {
     if has_space && !has_area {
         conn.execute("ALTER TABLE documents RENAME COLUMN space TO area", [])
             .context("ALTER TABLE space → area")?;
+    }
+    Ok(())
+}
+
+/// Add the rebuildable record-creation timestamp to indexes created before
+/// generated tag tables exposed their Created column. The rebuild marker
+/// causes startup to repopulate the new column from durable vault records.
+fn migrate_created_at(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(documents)")?;
+    let cols: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !cols.iter().any(|column| column == "created_at") {
+        conn.execute(
+            "ALTER TABLE documents ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .context("ALTER TABLE add created_at")?;
     }
     Ok(())
 }
@@ -776,8 +820,8 @@ fn scan_table_rows(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut us
 
 fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
     conn.execute(
-        "INSERT INTO documents (kind, doc_id, path, title, body, hint, href, area, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+        "INSERT INTO documents (kind, doc_id, path, title, body, hint, href, area, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
          ON CONFLICT(path) DO UPDATE SET \
              kind = excluded.kind, \
              doc_id = excluded.doc_id, \
@@ -786,6 +830,7 @@ fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
              hint = excluded.hint, \
              href = excluded.href, \
              area = excluded.area, \
+             created_at = excluded.created_at, \
              updated_at = excluded.updated_at",
         params![
             doc.kind,
@@ -796,6 +841,7 @@ fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
             doc.hint,
             doc.href,
             doc.area,
+            doc.created_at,
             doc.updated_at,
         ],
     )
@@ -1200,6 +1246,27 @@ fn file_mtime_ms(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+fn created_at_ms(value: Option<&str>, fallback: i64) -> i64 {
+    value.and_then(parse_record_time_ms).unwrap_or(fallback)
+}
+
+pub(crate) fn parse_record_time_ms(raw: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|date| date.timestamp_millis())
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
+                .map(|date| date.and_utc().timestamp_millis())
+                .ok()
+        })
+        .or_else(|| {
+            chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+                .map(|date| date.and_utc().timestamp_millis())
+        })
+}
+
 fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
     let hint_parts: Vec<String> = [match t.status {
         parsers::TaskStatus::Backlog => "backlog",
@@ -1223,6 +1290,7 @@ fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
         hint: Some(hint_parts.join(" · ")),
         href,
         area: Some(t.area.clone()),
+        created_at: created_at_ms(t.created.as_deref(), updated_at),
         tags: t.tags.clone(),
         updated_at,
     }
@@ -1245,6 +1313,7 @@ fn project_event(e: &parsers::Event, path: &str, updated_at: i64) -> IndexedDoc 
         hint: Some(format_event_date_hint(&e.date)),
         href: format!("/cadence/event/{}", e.id),
         area: Some(e.area.clone()),
+        created_at: created_at_ms(Some(&e.date), updated_at),
         tags,
         updated_at,
     }
@@ -1260,6 +1329,7 @@ fn project_daily(d: &parsers::DailyJournal, path: &str, updated_at: i64) -> Inde
         hint: Some(d.date.clone()),
         href: format!("/cadence/{}", d.date),
         area: None,
+        created_at: created_at_ms(Some(&d.date), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1280,6 +1350,7 @@ fn project_note(n: &parsers::Note, path: &str, updated_at: i64) -> IndexedDoc {
         hint,
         href: format!("/notebook/{}", n.id),
         area: n.area.clone(),
+        created_at: created_at_ms(Some(&n.created), updated_at),
         tags: n.tags.clone(),
         updated_at,
     }
@@ -1309,6 +1380,7 @@ fn project_person(p: &parsers::Person, path: &str, updated_at: i64) -> IndexedDo
         hint,
         href: format!("/people/{}", p.id),
         area: p.area.clone(),
+        created_at: created_at_ms(p.created.as_deref(), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1324,6 +1396,7 @@ fn project_resource(b: &parsers::Resource, path: &str, updated_at: i64) -> Index
         hint: Some(b.source.clone()),
         href: format!("/resources/{}", b.id),
         area: None,
+        created_at: created_at_ms(Some(&b.saved), updated_at),
         tags: b.tags.clone(),
         updated_at,
     }
@@ -1340,6 +1413,7 @@ fn project_area(area: &parsers::Area, path: &str, updated_at: i64) -> IndexedDoc
         href: format!("/areas/{}", area.id),
         // Areas don't have an `area:` field themselves — they ARE the area.
         area: Some(area.id.clone()),
+        created_at: created_at_ms(area.created.as_deref(), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1361,6 +1435,7 @@ fn project_agent_chat(chat: &agent::AgentChatRecord, path: &str, updated_at: i64
         hint: Some(format!("{} · {}", chat.agent, chat.model)),
         href: format!("/agent?chat={}", chat.id),
         area: None,
+        created_at: created_at_ms(Some(&chat.created), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1393,6 +1468,7 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
         hint,
         href: format!("/mail/{}", email.id),
         area: None,
+        created_at: created_at_ms(Some(&email.date), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1415,6 +1491,7 @@ fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
         hint: Some(row.table.clone()),
         href: format!("/tables/{}/{}", row.table, row.id),
         area: None,
+        created_at: created_at_ms(Some(&row.created), updated_at),
         tags: Vec::new(),
         updated_at,
     }
@@ -1574,6 +1651,39 @@ mod tests {
         (tmp, handle)
     }
 
+    #[test]
+    fn opening_an_existing_index_adds_the_created_at_column() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("legacy.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE documents (
+                rowid INTEGER PRIMARY KEY,
+                kind TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL DEFAULT '',
+                hint TEXT,
+                href TEXT NOT NULL,
+                area TEXT,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let handle = IndexHandle::open(&path).unwrap();
+        let conn = handle.conn.lock_recover();
+        let mut stmt = conn.prepare("PRAGMA table_info(documents)").unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(columns.iter().any(|column| column == "created_at"));
+    }
+
     fn doc(kind: &'static str, id: &str, title: &str, body: &str) -> IndexedDoc {
         IndexedDoc {
             kind,
@@ -1584,6 +1694,7 @@ mod tests {
             hint: None,
             href: format!("/{}", id),
             area: None,
+            created_at: 0,
             tags: Vec::new(),
             updated_at: 0,
         }
@@ -1630,11 +1741,28 @@ mod tests {
         assert!(idx.tagged_paths("ffffff").unwrap().is_empty());
 
         let counts = idx.tag_counts().unwrap();
-        assert!(counts.contains(&("roadmap".to_string(), 1)));
-        assert!(counts.contains(&("open-source".to_string(), 1)));
+        assert!(counts.contains(&("roadmap".to_string(), 1, None)));
+        assert!(counts.contains(&("open-source".to_string(), 1, None)));
 
         idx.delete_by_path("note/n1.md").unwrap();
         assert!(idx.tagged_paths("roadmap").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_counts_include_the_earliest_created_record() {
+        let (_tmp, idx) = tmp_index();
+        let mut newer = doc("note", "n1", "Newer", "#roadmap");
+        newer.created_at = 200;
+        idx.upsert(&newer).unwrap();
+
+        let mut older = doc("task", "t1", "Older", "#roadmap");
+        older.created_at = 100;
+        idx.upsert(&older).unwrap();
+
+        assert_eq!(
+            idx.tag_counts().unwrap(),
+            vec![("roadmap".to_string(), 2, Some(100))]
+        );
     }
 
     #[test]

@@ -46,7 +46,13 @@ vi.mock("@/lib/hooks/use-tables", () => ({
 }));
 vi.mock("@/lib/hooks/use-tag-table", () => ({
   useTagsWithCounts: () => ({
-    data: [{ tag: "generated", count: 100 }],
+    data: [
+      {
+        tag: "generated",
+        count: 100,
+        created: "2026-01-02T08:00:00Z",
+      },
+    ],
     isLoading: mocks.generatedLoading,
   }),
 }));
@@ -94,8 +100,9 @@ describe("DatabasesList", () => {
       within(customTable).getByRole("button", { name: "Created" }),
     ).toBeInTheDocument();
     expect(
-      within(generatedTable).queryByRole("button", { name: "Created" }),
-    ).toBeNull();
+      within(generatedTable).getByRole("button", { name: "Created" }),
+    ).toBeInTheDocument();
+    expect(generatedTable).toHaveTextContent("Jan 2, 2026");
     expect(
       within(customTable).getByRole("button", { name: "New database" }),
     ).toBeInTheDocument();

@@ -23,7 +23,6 @@ interface DatabaseRowItem {
   id: string;
   name: string;
   rows: number;
-  /** Custom tables only — generated tag tables have no creation date. */
   created: string | null;
   href: string;
   favorite: boolean;
@@ -53,22 +52,25 @@ const ROWS_COLUMN: RecordColumn<DatabaseRowItem> = {
   value: (row) => row.rows,
 };
 
+const CREATED_COLUMN: RecordColumn<DatabaseRowItem> = {
+  id: "created",
+  name: "Created",
+  type: "date",
+  icon: CalendarDays,
+  width: 190,
+  value: (row) => row.created,
+};
+
 const CUSTOM_COLUMNS: RecordColumn<DatabaseRowItem>[] = [
   NAME_COLUMN,
   ROWS_COLUMN,
-  {
-    id: "created",
-    name: "Created",
-    type: "date",
-    icon: CalendarDays,
-    width: 190,
-    value: (row) => row.created,
-  },
+  CREATED_COLUMN,
 ];
 
 const GENERATED_COLUMNS: RecordColumn<DatabaseRowItem>[] = [
   NAME_COLUMN,
   ROWS_COLUMN,
+  CREATED_COLUMN,
 ];
 
 export function DatabasesList() {
@@ -105,7 +107,7 @@ export function DatabasesList() {
         id: `tag:${row.tag}`,
         name: `#${row.tag}`,
         rows: row.count,
-        created: null,
+        created: row.created,
         href: `/databases/tags/${encodeURIComponent(row.tag)}`,
         favorite: tagFavoriteSet.has(`tag:${row.tag}`),
         tag: row.tag,
