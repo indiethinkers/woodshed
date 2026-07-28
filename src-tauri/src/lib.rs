@@ -405,6 +405,7 @@ pub fn run() {
             agent_cmd::agent_chat_update,
             agent_cmd::agent_chat_delete,
             vault_cmd::vault_init,
+            vault_cmd::vault_switch,
             vault_cmd::vault_is_icloud,
             vault_cmd::vault_git_sync,
             vault_cmd::vault_reveal,

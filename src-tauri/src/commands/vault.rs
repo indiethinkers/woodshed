@@ -20,6 +20,103 @@ pub fn vault_init(path: String, seed_samples: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Point Woodshed at a different vault and relaunch.
+///
+/// The relaunch is the design, not a shortcut. `watcher_start` is the single
+/// place that scaffolds directories, runs migrations, hydrates the events,
+/// people and calendar caches, grants the attachment asset scope, and opens the
+/// search index — and it deliberately refuses to run twice
+/// (`commands/watcher.rs:50`). Redoing all of that in-process would mean tearing
+/// down every one of those caches by hand, and the asset scope granted for the
+/// old vault's `attachments/` cannot be revoked, so a live switch would quietly
+/// leave the previous vault reachable. Restarting reruns the whole boot path
+/// against the new vault with no special cases.
+///
+/// Every fallible step runs before anything is committed, so a rejected path
+/// leaves the configured vault untouched.
+#[tauri::command]
+pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let current = config::vault_path_get(app.clone())?;
+    let target = resolve_switch_target(&path, current.as_deref())?;
+
+    // Scaffold any missing canonical subdirs. Non-destructive: `ensure_dirs`
+    // creates what is absent and leaves existing data alone, so pointing at a
+    // folder that is already a vault is safe.
+    vault_lib::ensure_dirs(&target)
+        .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
+
+    // The search index is a single database keyed to vault-relative paths, so
+    // the outgoing vault's rows would surface as dead search hits against the
+    // new one. Dropping it is safe — it is derived state, and `watcher_start`
+    // rebuilds when `document_count()` is zero. Done before the path is
+    // written so a failure here leaves the old vault fully intact; losing the
+    // index for the *current* vault would only cost one rebuild anyway.
+    discard_search_index(&app)?;
+
+    config::vault_path_set(app.clone(), target.to_string_lossy().to_string())?;
+    crate::log_info!("vault::switch", "switched vault, restarting");
+
+    // Never returns.
+    app.restart();
+}
+
+/// Validate a requested vault path against the configured one.
+///
+/// Split out from [`vault_switch`] so the rules that decide whether a restart
+/// is warranted are testable without an `AppHandle`. Both paths are
+/// canonicalized before comparison so `..`, a trailing slash, or a symlink
+/// cannot disguise the current vault as a different one and trigger a pointless
+/// relaunch.
+fn resolve_switch_target(requested: &str, current: Option<&str>) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(requested.trim());
+    if requested.as_os_str().is_empty() {
+        return Err("Choose a folder for your vault.".to_string());
+    }
+
+    let target = requested
+        .canonicalize()
+        .map_err(|e| format!("Cannot open {}: {e}", requested.display()))?;
+    if !target.is_dir() {
+        return Err(format!("{} is not a folder.", target.display()));
+    }
+
+    let already_current = current
+        .map(PathBuf::from)
+        .and_then(|c| c.canonicalize().ok())
+        .is_some_and(|c| c == target);
+    if already_current {
+        return Err("That is already your vault.".to_string());
+    }
+
+    Ok(target)
+}
+
+/// Remove the derived search index so the next boot rebuilds from the new
+/// vault. Sidecars are cleared too: the index runs in rollback-journal mode
+/// today, but leaving a stale `-wal` behind if that ever changes would
+/// resurrect the previous vault's rows.
+fn discard_search_index(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir: {e}"))?;
+    let db = crate::index::default_db_path(&app_data);
+    for candidate in [
+        db.clone(),
+        db.with_extension("db-wal"),
+        db.with_extension("db-shm"),
+    ] {
+        match std::fs::remove_file(&candidate) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("clear search index {}: {e}", candidate.display())),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultGitSyncResult {
@@ -383,6 +480,92 @@ mod tests {
             people, 0,
             "expected no seeded files when seed_samples=false"
         );
+    }
+
+    #[test]
+    fn switch_target_accepts_a_different_existing_folder() {
+        let tmp = TempDir::new().unwrap();
+        let current = tmp.path().join("old");
+        let next = tmp.path().join("new");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+
+        let resolved =
+            resolve_switch_target(next.to_str().unwrap(), Some(current.to_str().unwrap())).unwrap();
+        assert_eq!(resolved, next.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn switch_target_accepts_any_folder_when_none_is_configured() {
+        let tmp = TempDir::new().unwrap();
+        let next = tmp.path().join("first-vault");
+        fs::create_dir_all(&next).unwrap();
+
+        assert!(resolve_switch_target(next.to_str().unwrap(), None).is_ok());
+    }
+
+    #[test]
+    fn switch_target_rejects_the_current_vault() {
+        let tmp = TempDir::new().unwrap();
+        let current = tmp.path().join("vault");
+        fs::create_dir_all(&current).unwrap();
+        let current_str = current.to_str().unwrap();
+
+        // Spelled the same, with a trailing slash, and via `..` — all three are
+        // the configured vault and must not cause a restart.
+        for spelling in [
+            current_str.to_string(),
+            format!("{current_str}/"),
+            format!("{current_str}/../vault"),
+        ] {
+            let err = resolve_switch_target(&spelling, Some(current_str)).unwrap_err();
+            assert!(
+                err.contains("already your vault"),
+                "spelling {spelling:?} gave: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn switch_target_rejects_blank_missing_and_non_directory_paths() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("notes.md");
+        fs::write(&file, "not a vault\n").unwrap();
+        let missing = tmp.path().join("does-not-exist");
+
+        assert!(resolve_switch_target("   ", None)
+            .unwrap_err()
+            .contains("Choose a folder"));
+        assert!(resolve_switch_target(missing.to_str().unwrap(), None)
+            .unwrap_err()
+            .contains("Cannot open"));
+        assert!(resolve_switch_target(file.to_str().unwrap(), None)
+            .unwrap_err()
+            .contains("is not a folder"));
+    }
+
+    #[test]
+    fn switching_into_an_existing_vault_preserves_its_records() {
+        // `vault_switch` scaffolds the destination with `ensure_dirs`. Pointing
+        // at a folder that is already a populated vault must add the missing
+        // canonical subdirs without touching anything already there.
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("existing-vault");
+        fs::create_dir_all(target.join("notebook")).unwrap();
+        let note = target.join("notebook").join("keep-me.md");
+        fs::write(&note, "---\ntype: note\n---\n\noriginal\n").unwrap();
+
+        let resolved = resolve_switch_target(target.to_str().unwrap(), None).unwrap();
+        vault_lib::ensure_dirs(&resolved).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&note).unwrap(),
+            "---\ntype: note\n---\n\noriginal\n",
+            "existing record was modified by the switch"
+        );
+        for sub in vault_lib::VAULT_SUBDIRS {
+            assert!(resolved.join(sub).is_dir(), "missing subdir {sub}");
+        }
     }
 
     #[test]

@@ -212,11 +212,17 @@ changing behavior:
 
 ### Vault data
 
-`<vault_root>` is selected during onboarding, which is the only place the path
-is set — `vault_path_set` is invoked from `src/routes/welcome.tsx` alone.
-Settings shows the configured vault and can reveal it or rebuild the index, but
-has no control for choosing a different one. It contains user-owned source
-records and managed attachments.
+`<vault_root>` is selected during onboarding and can be changed from
+Settings → Vault. It contains user-owned source records and managed
+attachments.
+
+Switching vaults relaunches the application. `watcher_start` is the only place
+that runs migrations, hydrates the events, people and calendar caches, grants
+the attachment asset scope, and opens the search index, and it refuses to run
+twice — so `vault_switch` discards the derived search index, writes the new
+path, and restarts rather than rebuilding that state in process. Neither the
+outgoing nor the incoming folder is modified beyond scaffolding missing
+canonical subdirectories.
 
 ```text
 <vault_root>/
