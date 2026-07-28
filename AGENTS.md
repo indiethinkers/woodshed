@@ -212,8 +212,11 @@ changing behavior:
 
 ### Vault data
 
-`<vault_root>` is selected during onboarding and can be changed from Settings.
-It contains user-owned source records and managed attachments.
+`<vault_root>` is selected during onboarding, which is the only place the path
+is set — `vault_path_set` is invoked from `src/routes/welcome.tsx` alone.
+Settings shows the configured vault and can reveal it or rebuild the index, but
+has no control for choosing a different one. It contains user-owned source
+records and managed attachments.
 
 ```text
 <vault_root>/

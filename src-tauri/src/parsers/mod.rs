@@ -3,6 +3,11 @@
 // Roundtrip equality is the hard requirement: serialize(parse(x)) == x for any
 // well-formed input. Frontmatter key order is fixed by the struct definition so
 // rewrites produce stable diffs.
+//
+// One deliberate exception: `serialize_resource` always writes `area: None`,
+// because resources do not belong to an area. A hand-written `area:` on a
+// resource file therefore survives the parse but is dropped on the next write.
+// See the comment on that field and `resource_legacy_area_is_dropped_on_write`.
 
 use anyhow::{anyhow, Context, Result};
 use gray_matter::{engine::YAML, Matter};
@@ -972,6 +977,12 @@ pub fn serialize_resource(resource: &Resource) -> Result<String> {
         title: resource.title.clone(),
         url: resource.url.clone(),
         source: resource.source.clone(),
+        // Intentionally not `resource.area`. Resources do not belong to an
+        // area, so the key is shed on every write rather than round-tripped —
+        // the one documented exception to the invariant at the top of this
+        // module. `Resource::area` exists only to keep parsing legacy files
+        // that still carry the key. Pinned by
+        // `resource_legacy_area_is_dropped_on_write`.
         area: None,
         saved: resource.saved.clone(),
         author: resource.author.clone(),
