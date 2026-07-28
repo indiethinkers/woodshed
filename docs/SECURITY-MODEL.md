@@ -45,9 +45,16 @@ inbox nor crosses IPC with the whole corpus. Message bodies and HTML load only
 for an opened message, and thread lookup selects bounded indexed paths before
 opening matching records.
 
-Secrets live in the operating-system credential store. `config.json` stores
-only non-secret account metadata. Older plaintext fields are accepted solely
-for one-time migration and are skipped during serialization.
+Gmail App Passwords and custom Hermes bearer keys live in an atomic, owner-only
+(`0600`) `secrets.json` file under the application-data directory. It is
+plaintext by design and relies on operating-system account isolation and
+full-disk encryption; it is never included in logs, diagnostics, exports, or the
+vault. Local Hermes keys are read from bounded, regular, non-symlink profile
+files, and only for loopback endpoints. Secret iCal URLs remain in the
+operating-system credential store. `config.json` stores only non-secret account
+metadata. Older plaintext fields are accepted solely for one-time migration and
+are skipped during serialization; legacy Gmail and Hermes Keychain entries are
+imported only after a verified write to `secrets.json`.
 
 ## Network policy
 

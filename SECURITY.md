@@ -28,7 +28,8 @@ High-priority reports include:
 
 - vault path traversal, symlink escape, or unintended file access;
 - command injection or webview-to-shell/filesystem privilege escalation;
-- credential disclosure or persistence outside the OS credential store;
+- credential disclosure, loose file permissions, or persistence outside the
+  documented app-data broker and OS credential-store boundaries;
 - remote-content script execution or email HTML sandbox escape;
 - SSRF, redirect rebinding, or unbounded network-resource consumption;
 - unintended transmission of vault, mail, or calendar data;

@@ -137,12 +137,17 @@ data directory:
 | Path | Purpose |
 |---|---|
 | `<app_data_dir>/config.json` | Vault selection and non-secret preferences |
+| `<app_data_dir>/secrets.json` | Owner-only Gmail and custom Hermes secrets |
 | `<app_data_dir>/index.db` | SQLite FTS5 search and graph indexes |
 | `<app_data_dir>/gcal-cache/` | Parsed read-only iCal event caches |
 | `<app_data_dir>/woodshed.log` | Size-capped diagnostics log |
 
 Deleting the search index or calendar cache does not delete vault records.
-Secrets are stored in the operating-system credential store, not in these files.
+`config.json` holds no secrets. Gmail App Passwords and custom Hermes bearer
+keys live in `secrets.json`, which is owner-readable only (`0600`) and protected
+by operating-system account isolation and full-disk encryption rather than
+Keychain prompts. It is never included in logs, diagnostics, exports, or the
+vault. Secret iCal URLs remain in the operating-system credential store.
 
 ### Writes, watching, and search
 
@@ -172,9 +177,9 @@ and diagnostics.
 
 | Integration | Capability | Secret storage |
 |---|---|---|
-| Gmail | Multi-account IMAP inbox and SMTP send/reply | OS credential store |
+| Gmail | Multi-account IMAP inbox and SMTP send/reply | Owner-only app-data file |
 | Google Calendar | Read-only iCal subscription and local event cache | OS credential store |
-| Hermes-compatible endpoint | Agent chat and confirmed Sweep actions | OS credential store |
+| Hermes-compatible endpoint | Agent chat and confirmed Sweep actions | Local profile discovery, or owner-only app-data file |
 
 Resource capture fetches only a URL submitted by the user. Public fetches reject
 private network targets and enforce redirect, time, and response-size limits.
@@ -359,9 +364,12 @@ vault fixtures out of Git.
 Woodshed has no account system, analytics, crash reporter, or operated backend.
 Configured integrations communicate directly from the desktop app.
 
-- Gmail uses IMAP and SMTP. App Passwords are stored by the OS.
+- Gmail uses IMAP and SMTP. App Passwords are stored in an owner-only app-data
+  file that relies on OS account isolation and disk encryption.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent or Sweep action.
+  Loopback endpoints authenticate from the matching local Hermes profile; custom
+  and remote endpoints use the same owner-only app-data file.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 

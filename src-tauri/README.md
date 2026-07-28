@@ -81,8 +81,9 @@ work without prerender placeholders.
   (IMAP/SMTP), gcal (iCal subscription), search, watcher control,
   vault init, config, and the persistent log file.
 - Gmail integration via IMAP + SMTP + App Passwords (no OAuth, no
-  CASA audit). Keychain storage via the `keyring` crate, service name
-  `Woodshed Gmail`. Multi-account.
+  CASA audit). Prompt-free owner-only storage through `CredentialBroker`, with
+  the former `Woodshed Gmail` Keychain entries accepted for one-time migration.
+  Multi-account.
 - Google Calendar integration via iCal subscription (no OAuth, no
   Google verification). Secret URLs live in the operating-system credential
   store; non-secret metadata stays in the Tauri store. Parsed events cache as JSON in

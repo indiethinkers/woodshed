@@ -14,7 +14,7 @@
 - **Vault folder path and profile.** Stored locally so the app can reopen your vault and present your chosen identity.
 - **Markdown files and attachments.** Notes, tasks, events, people, resources, tables, mail, and attachments are stored in the vault you choose.
 - **Derived data.** The app-data directory contains a rebuildable SQLite search index, a rebuildable iCal cache, preferences, and rotating local diagnostics logs.
-- **Credentials.** Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys are stored in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Upgraded installations delete the obsolete transcription credential and preference on the next launch. Development builds may read values you place in `.env.local`.
+- **Credentials.** Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only (`0600`) plaintext file in Woodshed's application-data directory. It relies on operating-system account isolation and disk encryption. Local Hermes keys are read from the matching Hermes profile without being copied into Woodshed. Google Calendar secret iCal URLs remain in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Upgraded installations delete the obsolete transcription credential and preference on the next launch. Development builds may read values you place in `.env.local`.
 
 Vault files and synced mail are not encrypted by Woodshed. Use operating-system disk encryption and backups appropriate for your data.
 
@@ -41,7 +41,7 @@ Diagnostics remain on the device in a file capped at 1 MiB with one rotated gene
 
 Data persists on your device until you remove it. In-app deletion moves records to `.woodshed/trash/` inside the vault for recovery. Uninstalling Woodshed does not delete the vault.
 
-Removing an account deletes its credential when the OS credential store allows it. You can revoke a Gmail App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Reset a leaked Google Calendar secret URL in Google Calendar settings. Delete the app-data directory to remove preferences, indexes, caches, and logs; remove Woodshed credential entries separately through the OS.
+Removing an account deletes its Woodshed-stored credential. You can revoke a Gmail App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Reset a leaked Google Calendar secret URL in Google Calendar settings. Delete the app-data directory to remove preferences, indexes, caches, logs, and Woodshed's `secrets.json`; remove iCal and Deepgram credential entries separately through the OS.
 
 Because we operate no data backend, we do not hold a remote copy to access, export, or delete.
 

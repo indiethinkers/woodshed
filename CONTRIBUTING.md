@@ -36,8 +36,9 @@ email fixtures containing real messages, credentials, generated `dist/`, or
 - Do not expose generic shell or filesystem permissions to the webview.
 - Route public URL fetches through `src-tauri/src/network.rs` and set explicit
   time, redirect, and response-size limits.
-- Store secrets in the operating-system credential store; configuration files
-  may contain only non-secret metadata and migration-only deserialization fields.
+- Route Gmail and Hermes secrets through `CredentialBroker`; route iCal secrets
+  through the operating-system credential store. Configuration files may contain
+  only non-secret metadata and migration-only deserialization fields.
 - Sanitize HTML at the boundary and route remote email images through the
   bounded cache; never let sender HTML fetch remote URLs directly.
 - Preserve recoverability for destructive operations.

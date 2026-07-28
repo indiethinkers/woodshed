@@ -19,9 +19,13 @@ images through Woodshed's bounded cache by default.
 - The selected vault contains Markdown records, synced mail, and attachments.
 - The application-data directory contains non-secret preferences, a rebuildable
   SQLite search index, a rebuildable iCal event cache, and rotating local logs.
-- Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys
-  are stored in the operating-system credential store. Legacy
-  plaintext configuration values are migrated there and scrubbed on first use.
+- Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
+  (`0600`) plaintext file in the application-data directory, protected by
+  operating-system account isolation and disk encryption. Local Hermes keys are
+  read from the matching Hermes profile without being copied into Woodshed.
+  Google Calendar secret iCal URLs are stored in the operating-system credential
+  store. Legacy plaintext configuration values are migrated and scrubbed on
+  first use.
 - Upgraded installations delete the obsolete transcription credential and
   preference on the next launch.
 - Development builds may read explicitly configured values from `.env.local`.
@@ -68,10 +72,11 @@ Vault records persist until you remove them. In-app record deletion moves files
 to `.woodshed/trash/` inside the vault so they can be recovered or permanently
 removed by you. Uninstalling the app does not delete the vault.
 
-Removing an account deletes its stored credential when the operating-system
-credential store allows it. You can also revoke Gmail App Passwords in your
-Google Account. Deleting the app-data directory removes preferences, indexes,
-caches, and logs; it does not remove credentials managed separately by the OS.
+Removing an account deletes its stored credential, including any legacy entry
+the operating-system credential store still holds. You can also revoke Gmail
+App Passwords in your Google Account. Deleting the app-data directory removes
+preferences, indexes, caches, logs, and the owner-only credential file; it does
+not remove credentials managed separately by the OS.
 
 Because Woodshed operates no data backend, maintainers do not hold a remote copy
 of your data to access, export, or delete.

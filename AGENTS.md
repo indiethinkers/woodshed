@@ -262,14 +262,21 @@ and not necessarily beside the vault.
 ```text
 <app_data_dir>/
 ├── config.json                 Non-secret settings and account metadata
+├── secrets.json                Owner-only Gmail and custom Hermes secrets
 ├── index.db                    Derived FTS5 index
 ├── gcal-cache/<account>.json   Derived iCal event caches
 └── woodshed.log                Rotating application log
 ```
 
-Credentials and secret integration URLs belong in the operating-system
-credential store. Do not add secrets to the vault, `config.json`, fixtures, or
-source-controlled environment files.
+Gmail App Passwords and custom Hermes bearer keys go through `CredentialBroker`,
+which persists them atomically to an owner-only (`0600`) `secrets.json`. That
+file is plaintext by design; its protection is operating-system account
+isolation and full-disk encryption, and using it avoids a Keychain prompt on
+every cold start. Never include it in logs, diagnostics, exports, or the vault.
+
+Secret integration URLs belong in the operating-system credential store. Do not
+add secrets to the vault, `config.json`, fixtures, or source-controlled
+environment files.
 
 ### Migrations
 
@@ -384,7 +391,9 @@ opening records from Cadence, tag tables, Areas, or backlinks.
 ### Gmail
 
 Woodshed talks directly to Gmail through IMAP and SMTP. Each account uses an
-email address, sender name, and App Password stored by the OS.
+email address, sender name, and App Password held by `CredentialBroker` in the
+owner-only app-data credential file. Legacy Keychain entries are imported once,
+only after a verified local write.
 
 Gmail is the source of truth for inbox membership and `\Seen` state. Refresh
 reconciles the full remote inbox before pruning stale Review cards.
@@ -415,6 +424,12 @@ bounded cache by default; never let sender HTML fetch remote URLs directly.
 
 Agent chats are durable vault records. Requests go directly to the configured
 Hermes-compatible endpoint only after explicit user action.
+
+A loopback endpoint authenticates without a pasted token: Woodshed resolves the
+key from the local Hermes profile that owns the configured API port, reading
+bounded, regular, non-symlink profile files only. That key is used in place, not
+copied into Woodshed. Custom and remote endpoints still require an explicit
+bearer key, stored through `CredentialBroker`.
 
 Sweep cards are workflow records. `to_review` cards depend on local inbox
 membership; queued, working, and done cards may outlive the source email.
