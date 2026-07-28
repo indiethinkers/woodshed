@@ -562,6 +562,12 @@ impl IndexHandle {
         for kind in ALL_KINDS {
             scan(kind.subdir(), &tx, &mut count)?;
         }
+        // `Kind::Event.subdir()` still reports `cadence/`, where events used to
+        // live inline in daily frontmatter. Since they were lifted into
+        // one-file-per-event records this directory is their real home, and
+        // without scanning it explicitly no event body reaches the index —
+        // meeting notes stay unsearchable and events contribute no backlinks.
+        scan(crate::vault::EVENTS_DIR, &tx, &mut count)?;
         // Pre-migration vaults still have files under daily/. Pick
         // them up so the search index works during the transition;
         // migrate_legacy_folders empties the folder on next boot.
@@ -1083,6 +1089,11 @@ impl Kind {
     fn from_subdir(s: &str) -> Option<Kind> {
         match s {
             "tasks" => Some(Kind::Task),
+            // Events live one-per-file here since `lift_inline_events_to_files`
+            // moved them out of daily frontmatter. Their bodies are meeting
+            // notes, so they belong in search and their wikilinks have to
+            // produce backlinks like any other record.
+            crate::vault::EVENTS_DIR => Some(Kind::Event),
             // Accept legacy "calendar" too — vaults migrate at boot but
             // the watcher may fire on a path before the migration runs.
             crate::vault::CADENCE_DIR | crate::vault::LEGACY_CALENDAR_DIR => Some(Kind::Event),
@@ -1851,6 +1862,109 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(idx.search("alpha", 10).unwrap().len(), 1);
         assert_eq!(idx.search("brainstorm", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rebuild_from_vault_indexes_events_and_their_backlinks() {
+        // Regression: `Kind::Event.subdir()` reports `cadence/`, so before
+        // `events/` was scanned explicitly no event record reached the index.
+        // Meeting notes were unsearchable and no event produced a backlink.
+        use crate::parsers::{self, Event, RecurringRule};
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::EVENTS_DIR)).unwrap();
+
+        let event = Event {
+            id: "e_design_review".to_string(),
+            title: "Design review".to_string(),
+            subtitle: None,
+            date: "2026-07-27T11:00:00-07:00".to_string(),
+            duration: 60,
+            area: "product".to_string(),
+            attendees: vec!["sam-chen".to_string()],
+            recurring: RecurringRule::Weekly,
+            provider: None,
+            account_id: None,
+            external_id: None,
+            writable: None,
+            rrule_original: None,
+            local_metadata_overrides: Vec::new(),
+            tags: vec![],
+            body: "Failure modes get written down before anything ships. [[Sam Chen]] owns it."
+                .to_string(),
+        };
+        std::fs::write(
+            vault
+                .join(crate::vault::EVENTS_DIR)
+                .join("e_design_review.md"),
+            parsers::serialize_event(&event).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("index.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        // The body is meeting notes; it has to be searchable.
+        let hits = idx.search("failure modes", 10).unwrap();
+        assert!(
+            hits.iter().any(|h| h.path == "events/e_design_review.md"),
+            "event body missing from search: {hits:?}"
+        );
+
+        // A wikilink in an event body has to produce a backlink, like any
+        // other record. Note this comes from the `[[...]]`, not `attendees`.
+        let backlinks = idx.backlinks_for_target("Sam Chen").unwrap();
+        assert!(
+            backlinks
+                .iter()
+                .any(|b| b.source == "events/e_design_review.md"),
+            "event did not register a backlink: {backlinks:?}"
+        );
+    }
+
+    #[test]
+    fn attendees_alone_do_not_create_backlinks() {
+        // Documents the split: `attendees` drives the People activity feed and
+        // area inference, but backlink edges come only from `[[wikilinks]]` in
+        // title + body. Removing a name from a title removes it from the graph.
+        use crate::parsers::{self, Event, RecurringRule};
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::EVENTS_DIR)).unwrap();
+
+        let event = Event {
+            id: "e_standup".to_string(),
+            title: "Standup".to_string(),
+            subtitle: None,
+            date: "2026-07-27T09:00:00-07:00".to_string(),
+            duration: 15,
+            area: "product".to_string(),
+            attendees: vec!["morgan-diaz".to_string()],
+            recurring: RecurringRule::None,
+            provider: None,
+            account_id: None,
+            external_id: None,
+            writable: None,
+            rrule_original: None,
+            local_metadata_overrides: Vec::new(),
+            tags: vec![],
+            body: "No wikilink anywhere in this record.".to_string(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::EVENTS_DIR).join("e_standup.md"),
+            parsers::serialize_event(&event).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("index.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        assert!(
+            idx.backlinks_for_target("Morgan Diaz").unwrap().is_empty(),
+            "attendees must not create backlink edges"
+        );
     }
 
     #[test]

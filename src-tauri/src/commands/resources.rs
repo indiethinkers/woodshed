@@ -1045,6 +1045,9 @@ pub fn resource_update(
     if let Some(s) = update.source {
         resource.source = s;
     }
+    // Resources do not belong to an area. Cleared here as well as in
+    // `serialize_resource` so an in-memory update can never reintroduce a value
+    // that the next write would silently drop.
     resource.area = None;
     if let Some(author) = update.author {
         resource.author = if author.trim().is_empty() {

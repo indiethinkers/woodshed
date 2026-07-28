@@ -20,6 +20,202 @@ pub fn vault_init(path: String, seed_samples: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Point Woodshed at a different vault and relaunch.
+///
+/// The relaunch is the design, not a shortcut. `watcher_start` is the single
+/// place that scaffolds directories, runs migrations, hydrates the events,
+/// people and calendar caches, grants the attachment asset scope, and opens the
+/// search index — and it deliberately refuses to run twice
+/// (`commands/watcher.rs:50`). Redoing all of that in-process would mean tearing
+/// down every one of those caches by hand, and the asset scope granted for the
+/// old vault's `attachments/` cannot be revoked, so a live switch would quietly
+/// leave the previous vault reachable. Restarting reruns the whole boot path
+/// against the new vault with no special cases.
+///
+/// Every fallible step runs before anything is committed, so a rejected path
+/// leaves the configured vault untouched.
+#[tauri::command]
+pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let current = config::vault_path_get(app.clone())?;
+    let target = resolve_switch_target(&path, current.as_deref())?;
+
+    // Refuse arbitrary folders before touching anything. Adopting a folder is
+    // not read-only: `ensure_dirs` scaffolds sixteen subdirectories into it,
+    // and the boot migration after the restart renames `calendar/` and
+    // `daily/` contents into `cadence/` and rewrites every `.md` under
+    // `resources/`. A mis-click in the folder picker must not be able to
+    // rearrange someone's files.
+    ensure_safe_to_adopt(&target)?;
+
+    // Scaffold any missing canonical subdirs. Non-destructive: `ensure_dirs`
+    // creates what is absent and leaves existing data alone, so pointing at a
+    // folder that is already a vault is safe.
+    vault_lib::ensure_dirs(&target)
+        .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
+
+    // Drop the derived caches that live in app data rather than in the vault.
+    // Both would otherwise show the outgoing vault's content inside the
+    // incoming one. Done before the path is written, so a failure here leaves
+    // the old vault fully intact — and losing a cache for the *current* vault
+    // costs one rebuild, nothing more.
+    discard_derived_caches(&app)?;
+
+    config::vault_path_set(app.clone(), target.to_string_lossy().to_string())?;
+    crate::log_info!("vault::switch", "switched vault, restarting");
+
+    // Never returns.
+    app.restart();
+}
+
+/// Validate a requested vault path against the configured one.
+///
+/// Split out from [`vault_switch`] so the rules that decide whether a restart
+/// is warranted are testable without an `AppHandle`. Both paths are
+/// canonicalized before comparison so `..`, a trailing slash, or a symlink
+/// cannot disguise the current vault as a different one and trigger a pointless
+/// relaunch.
+fn resolve_switch_target(requested: &str, current: Option<&str>) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(requested.trim());
+    if requested.as_os_str().is_empty() {
+        return Err("Choose a folder for your vault.".to_string());
+    }
+
+    let target = requested
+        .canonicalize()
+        .map_err(|e| format!("Cannot open {}: {e}", requested.display()))?;
+    if !target.is_dir() {
+        return Err(format!("{} is not a folder.", target.display()));
+    }
+
+    let already_current = current
+        .map(PathBuf::from)
+        .and_then(|c| c.canonicalize().ok())
+        .is_some_and(|c| c == target);
+    if already_current {
+        return Err("That is already your vault.".to_string());
+    }
+
+    Ok(target)
+}
+
+/// How many canonical subdirectories a non-empty folder must already have
+/// before it is treated as an existing vault rather than someone's documents.
+/// Three is enough that an incidental `resources/` or `tables/` does not
+/// qualify, and low enough that a partially-populated vault still does.
+const VAULT_RECOGNITION_THRESHOLD: usize = 3;
+
+/// Reject folders that are neither empty nor already a vault.
+///
+/// Adopting a folder mutates it. `ensure_dirs` scaffolds every entry in
+/// `VAULT_SUBDIRS`, and the migration that runs on the next boot
+/// (`vault::migration::migrate_legacy_folders`) renames the contents of
+/// `calendar/` and `daily/` into `cadence/` and rewrites the frontmatter of
+/// every `.md` under `resources/`. Those are the right behaviours for a vault
+/// and the wrong ones for a folder the user picked by accident.
+///
+/// Dotfiles do not count as content: a `.git` directory is expected on a
+/// git-synced vault, and `.DS_Store` should never make a folder look occupied.
+fn ensure_safe_to_adopt(target: &Path) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+
+    let mut visible = 0usize;
+    let mut canonical = 0usize;
+    let mut has_woodshed_dir = false;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+        let raw_name = entry.file_name();
+        let name = raw_name.to_string_lossy();
+
+        if name == ".woodshed" {
+            has_woodshed_dir = true;
+            continue;
+        }
+        if name.starts_with('.') {
+            continue;
+        }
+        visible += 1;
+        if vault_lib::VAULT_SUBDIRS.contains(&name.as_ref()) && entry.path().is_dir() {
+            canonical += 1;
+        }
+    }
+
+    let empty = visible == 0;
+    let looks_like_vault = has_woodshed_dir || canonical >= VAULT_RECOGNITION_THRESHOLD;
+    if empty || looks_like_vault {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{} has files in it but is not a Woodshed vault. Choose an empty folder \
+         or an existing vault — Woodshed creates its own folders here and may \
+         move files that match an older vault layout.",
+        target.display()
+    ))
+}
+
+/// Drop the derived caches under `<app_data_dir>` that describe one vault's
+/// content, so the incoming vault does not inherit the outgoing one's.
+///
+/// Both are disposable by design ("derived state is disposable"), and both are
+/// stored outside the vault, which is exactly why a vault switch has to clear
+/// them explicitly:
+///
+/// * **Search index** — one database keyed to vault-relative paths. Left in
+///   place, the old vault's rows surface as dead search hits.
+/// * **Calendar caches** — `gcal-cache/<account>.json`, keyed by account rather
+///   than by vault, and merged into Cadence at read time. Left in place, the
+///   previous vault's meetings appear on the new vault's schedule, while the
+///   iCal note attachments they pair with (`events/`) correctly did not come
+///   along — so the schedule shows events whose notes cannot exist.
+///
+/// Calendar accounts stay configured; the next sync repopulates the cache.
+fn discard_derived_caches(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir: {e}"))?;
+
+    // Sidecars are cleared too: the index runs in rollback-journal mode today,
+    // but a stale `-wal` would resurrect the previous vault's rows if that ever
+    // changes.
+    let db = crate::index::default_db_path(&app_data);
+    for candidate in [
+        db.clone(),
+        db.with_extension("db-wal"),
+        db.with_extension("db-shm"),
+    ] {
+        remove_if_present(&candidate).map_err(|e| format!("clear search index: {e}"))?;
+    }
+
+    let gcal_dir = app_data.join("gcal-cache");
+    if gcal_dir.is_dir() {
+        for entry in
+            std::fs::read_dir(&gcal_dir).map_err(|e| format!("read {}: {e}", gcal_dir.display()))?
+        {
+            let path = entry
+                .map_err(|e| format!("read {}: {e}", gcal_dir.display()))?
+                .path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                remove_if_present(&path).map_err(|e| format!("clear calendar cache: {e}"))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultGitSyncResult {
@@ -383,6 +579,161 @@ mod tests {
             people, 0,
             "expected no seeded files when seed_samples=false"
         );
+    }
+
+    #[test]
+    fn switch_target_accepts_a_different_existing_folder() {
+        let tmp = TempDir::new().unwrap();
+        let current = tmp.path().join("old");
+        let next = tmp.path().join("new");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+
+        let resolved =
+            resolve_switch_target(next.to_str().unwrap(), Some(current.to_str().unwrap())).unwrap();
+        assert_eq!(resolved, next.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn switch_target_accepts_any_folder_when_none_is_configured() {
+        let tmp = TempDir::new().unwrap();
+        let next = tmp.path().join("first-vault");
+        fs::create_dir_all(&next).unwrap();
+
+        assert!(resolve_switch_target(next.to_str().unwrap(), None).is_ok());
+    }
+
+    #[test]
+    fn switch_target_rejects_the_current_vault() {
+        let tmp = TempDir::new().unwrap();
+        let current = tmp.path().join("vault");
+        fs::create_dir_all(&current).unwrap();
+        let current_str = current.to_str().unwrap();
+
+        // Spelled the same, with a trailing slash, and via `..` — all three are
+        // the configured vault and must not cause a restart.
+        for spelling in [
+            current_str.to_string(),
+            format!("{current_str}/"),
+            format!("{current_str}/../vault"),
+        ] {
+            let err = resolve_switch_target(&spelling, Some(current_str)).unwrap_err();
+            assert!(
+                err.contains("already your vault"),
+                "spelling {spelling:?} gave: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn switch_target_rejects_blank_missing_and_non_directory_paths() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("notes.md");
+        fs::write(&file, "not a vault\n").unwrap();
+        let missing = tmp.path().join("does-not-exist");
+
+        assert!(resolve_switch_target("   ", None)
+            .unwrap_err()
+            .contains("Choose a folder"));
+        assert!(resolve_switch_target(missing.to_str().unwrap(), None)
+            .unwrap_err()
+            .contains("Cannot open"));
+        assert!(resolve_switch_target(file.to_str().unwrap(), None)
+            .unwrap_err()
+            .contains("is not a folder"));
+    }
+
+    #[test]
+    fn adopting_accepts_an_empty_folder() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("fresh");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_ignores_dotfiles_when_judging_emptiness() {
+        // A git-synced vault has `.git`; macOS scatters `.DS_Store`. Neither
+        // makes a folder "occupied" for this purpose.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("dotfiles-only");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(dir.join(".DS_Store"), "").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_accepts_a_populated_vault() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("vault");
+        vault_lib::ensure_dirs(&dir).unwrap();
+        fs::write(dir.join("notebook").join("n.md"), "---\ntype: note\n---\n").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_accepts_a_vault_identified_only_by_its_woodshed_dir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("sparse-vault");
+        fs::create_dir_all(dir.join(".woodshed")).unwrap();
+        fs::write(dir.join("stray.md"), "notes\n").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_rejects_someone_elses_documents() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("documents");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("taxes.pdf"), "x").unwrap();
+        fs::write(dir.join("notes.md"), "x").unwrap();
+
+        let err = ensure_safe_to_adopt(&dir).unwrap_err();
+        assert!(err.contains("not a Woodshed vault"), "got: {err}");
+    }
+
+    #[test]
+    fn adopting_rejects_a_folder_the_migration_would_rearrange() {
+        // The case this guard exists for. `calendar/` and `daily/` contents are
+        // renamed into `cadence/` by the boot migration, and every `.md` under
+        // `resources/` is rewritten. One incidental match must not be enough to
+        // pass for a vault.
+        for incidental in ["calendar", "daily", "resources"] {
+            let tmp = TempDir::new().unwrap();
+            let dir = tmp.path().join("not-a-vault");
+            fs::create_dir_all(dir.join(incidental)).unwrap();
+            fs::write(dir.join(incidental).join("mine.md"), "important\n").unwrap();
+            fs::write(dir.join("readme.txt"), "x").unwrap();
+
+            assert!(
+                ensure_safe_to_adopt(&dir).is_err(),
+                "folder containing only {incidental}/ was accepted as a vault"
+            );
+        }
+    }
+
+    #[test]
+    fn switching_into_an_existing_vault_preserves_its_records() {
+        // `vault_switch` scaffolds the destination with `ensure_dirs`. Pointing
+        // at a folder that is already a populated vault must add the missing
+        // canonical subdirs without touching anything already there.
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("existing-vault");
+        fs::create_dir_all(target.join("notebook")).unwrap();
+        let note = target.join("notebook").join("keep-me.md");
+        fs::write(&note, "---\ntype: note\n---\n\noriginal\n").unwrap();
+
+        let resolved = resolve_switch_target(target.to_str().unwrap(), None).unwrap();
+        vault_lib::ensure_dirs(&resolved).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&note).unwrap(),
+            "---\ntype: note\n---\n\noriginal\n",
+            "existing record was modified by the switch"
+        );
+        for sub in vault_lib::VAULT_SUBDIRS {
+            assert!(resolved.join(sub).is_dir(), "missing subdir {sub}");
+        }
     }
 
     #[test]

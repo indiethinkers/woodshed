@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Check, Copy, FolderOpen, RefreshCw, FileText } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FolderOpen,
+  FolderSymlink,
+  RefreshCw,
+  FileText,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SettingsPage, SettingsGroup } from "@/components/settings/settings-page";
 import { useReindex } from "@/lib/hooks/use-search";
@@ -10,13 +17,20 @@ export const Route = createFileRoute("/settings/vault")({
   component: VaultSettingsPage,
 });
 
-function VaultSettingsPage() {
+// Exported separately from the Route so the vitest suite can render the page
+// without a RouterProvider, matching the pattern in `routes/welcome.tsx`.
+export function VaultSettingsPage() {
   const [vaultPath, setVaultPath] = useState<string>("");
   const [logPath, setLogPath] = useState<string>("");
   const [logPathCopied, setLogPathCopied] = useState(false);
   const [logTail, setLogTail] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [lastIndexed, setLastIndexed] = useState<number | null>(null);
+  // Path the user picked but has not confirmed yet. Switching restarts the
+  // app, so it never happens straight off the folder picker.
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const reindex = useReindex();
   const qc = useQueryClient();
 
@@ -32,6 +46,37 @@ function VaultSettingsPage() {
   async function openInFinder() {
     if (!isTauri() || !vaultPath) return;
     await tauriInvoke<void>("vault_reveal");
+  }
+
+  async function pickNewVault() {
+    // Native folder picker is a Tauri-only affordance, same as onboarding.
+    if (!isTauri()) return;
+    setSwitchError(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose vault folder",
+      });
+      if (typeof selected === "string") setPendingPath(selected);
+    } catch (e) {
+      setSwitchError(`Could not open the folder picker: ${String(e)}`);
+    }
+  }
+
+  async function confirmSwitch() {
+    if (!pendingPath) return;
+    setSwitching(true);
+    setSwitchError(null);
+    try {
+      await tauriInvoke<void>("vault_switch", { path: pendingPath });
+      // Unreachable in the app: a successful switch relaunches the process.
+      // Reachable under `bun run dev`, where the command is a no-op stub.
+    } catch (e) {
+      setSwitchError(String(e));
+      setSwitching(false);
+    }
   }
 
   async function openLogInFinder() {
@@ -68,7 +113,10 @@ function VaultSettingsPage() {
 
   return (
     <SettingsPage section="Vault">
-      <SettingsGroup label="Location">
+      <SettingsGroup
+        label="Location"
+        description="You can point Woodshed at an empty folder or at another vault; the one you leave is never touched."
+      >
         <div className="flex items-center gap-3">
           <span className="min-w-0 flex-1 px-2 py-1 rounded-sm bg-muted font-mono text-[14px] text-foreground break-all">
             {vaultPath || "(not configured)"}
@@ -82,7 +130,77 @@ function VaultSettingsPage() {
             <FolderOpen className="h-3.5 w-3.5" />
             Open in Finder
           </button>
+          <button
+            type="button"
+            onClick={pickNewVault}
+            disabled={switching}
+            className="h-7 px-3 inline-flex items-center gap-1.5 rounded-sm border border-border text-[13px] text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <FolderSymlink className="h-3.5 w-3.5" />
+            Change…
+          </button>
         </div>
+
+        {pendingPath && (
+          <div className="mt-3 rounded-md border border-border bg-background/55 p-3">
+            <div className="text-[13px] font-medium text-foreground">
+              Switch to this vault?
+            </div>
+            <code className="mt-2 block overflow-x-auto whitespace-nowrap rounded-sm border border-border/70 bg-muted/45 px-2.5 py-2 font-mono text-[12px] leading-5 text-foreground/85">
+              {pendingPath}
+            </code>
+            <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
+              Woodshed will relaunch and re-index. It creates its own folders
+              here, and brings older vault layouts up to date — so this has to
+              be an empty folder or a vault, not a folder of other documents.
+              The vault you are leaving is not touched.
+            </p>
+            {pendingPath.includes("/Library/Mobile Documents/") && (
+              <p className="mt-2 text-[12px] leading-snug text-amber-600 dark:text-amber-500">
+                This folder is inside iCloud Drive. Woodshed works there, but
+                files may sync or evict while it is running.
+              </p>
+            )}
+            {switchError && (
+              <p
+                role="alert"
+                className="mt-2 text-[12px] leading-snug text-red-600 dark:text-red-400"
+              >
+                {switchError}
+              </p>
+            )}
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={confirmSwitch}
+                disabled={switching}
+                className="h-7 px-3 rounded-sm bg-accent text-accent-foreground text-[13px] disabled:opacity-50"
+              >
+                {switching ? "Switching…" : "Switch and relaunch"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingPath(null);
+                  setSwitchError(null);
+                }}
+                disabled={switching}
+                className="h-7 px-3 rounded-sm border border-border text-[13px] text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!pendingPath && switchError && (
+          <p
+            role="alert"
+            className="mt-3 text-[12px] leading-snug text-red-600 dark:text-red-400"
+          >
+            {switchError}
+          </p>
+        )}
       </SettingsGroup>
 
       <SettingsGroup

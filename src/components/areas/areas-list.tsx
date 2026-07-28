@@ -8,6 +8,7 @@ import {
   Plus,
   Search,
 } from "lucide-react";
+import { AreaDistribution } from "@/components/areas/area-distribution";
 import { NewAreaForm } from "@/components/areas/new-area-form";
 import {
   buildAreaItems,
@@ -134,6 +135,10 @@ export function AreasList() {
         </section>
       ) : null}
 
+      {!creating && !query.trim() ? (
+        <AreaDistribution areas={areas} items={allItems} today={today} />
+      ) : null}
+
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative block w-full sm:max-w-[320px]">
           <Search
@@ -180,14 +185,15 @@ export function AreasList() {
         </div>
       ) : visible.length > 0 ? (
         <div className="border-y border-border/70">
-          <div className="hidden grid-cols-[minmax(0,1fr)_220px_240px_16px] gap-6 border-b border-border/60 px-1 py-2 font-mono text-[9px] uppercase tracking-[0.15em] text-muted-foreground/70 md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_64px_minmax(0,200px)_56px_16px] gap-6 border-b border-border/60 px-1 py-2 font-mono text-[9px] uppercase tracking-[0.15em] text-muted-foreground/70 md:grid">
             <span>Area</span>
-            <span>Records</span>
-            <span>Latest</span>
+            <span className="text-right">Records</span>
+            <span>Composition</span>
+            <span className="text-right">Last</span>
             <span />
           </div>
           {visible.map((summary) => (
-            <AreaRow key={summary.area.id} summary={summary} />
+            <AreaRow key={summary.area.id} summary={summary} today={today} />
           ))}
         </div>
       ) : (
@@ -204,77 +210,103 @@ export function AreasList() {
   );
 }
 
-function AreaRow({ summary }: { summary: AreaSummary }) {
+/** Days after which an area reads as dormant rather than merely quiet. */
+const DORMANT_DAYS = 30;
+
+function AreaRow({ summary, today }: { summary: AreaSummary; today: string }) {
   const { area, counts, latest, total } = summary;
   const isUnassigned = area.id === UNASSIGNED_AREA_ID;
+  // Only render a description when one exists. The old placeholder repeated
+  // "No description yet." on every row, which crowded out the numbers without
+  // telling the reader anything.
   const description = isUnassigned
     ? "Records that have not been assigned to an area."
-    : previewMarkdown(area.description ?? "") || "No description yet.";
+    : previewMarkdown(area.description ?? "");
+  const age = latest ? daysBetween(latest.date.slice(0, 10), today) : null;
+  const dormant = age === null || age > DORMANT_DAYS;
 
   return (
     <Link
       to="/areas/$area"
       params={{ area: area.id }}
-      className="group grid min-h-[84px] grid-cols-[minmax(0,1fr)_16px] items-center gap-4 border-b border-border/55 px-1 py-4 transition-colors last:border-b-0 hover:bg-foreground/[0.025] focus:outline-none focus-visible:bg-foreground/[0.04] md:grid-cols-[minmax(0,1fr)_220px_240px_16px] md:gap-6"
+      title={latest ? `Latest: ${latest.title}` : "No activity yet"}
+      className="group grid min-h-[44px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border/55 px-1 py-2.5 transition-colors last:border-b-0 hover:bg-foreground/[0.025] focus:outline-none focus-visible:bg-foreground/[0.04] md:grid-cols-[minmax(0,1fr)_64px_minmax(0,200px)_56px_16px] md:gap-6"
     >
-      <div className="flex min-w-0 items-start gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {isUnassigned ? (
-          <CircleDashed className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <CircleDashed className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (
           <span
             aria-hidden
-            className="mt-[7px] h-2 w-2 shrink-0 rounded-full"
+            className="h-2 w-2 shrink-0 rounded-full"
             style={{ background: area.color }}
           />
         )}
         <div className="min-w-0">
-          <h2 className="truncate text-[15px] font-medium text-foreground">
+          <h2 className="truncate text-[14px] font-medium text-foreground">
             {area.name}
           </h2>
-          <p className="mt-1 truncate text-[12px] text-muted-foreground/80">
-            {description}
-          </p>
+          {description ? (
+            <p className="truncate text-[11.5px] text-muted-foreground/75">
+              {description}
+            </p>
+          ) : null}
         </div>
       </div>
 
-      <div className="hidden min-w-0 md:block">
-        <div className="font-mono text-[12px] tabular-nums text-foreground/85">
-          {total} {total === 1 ? "record" : "records"}
-        </div>
-        <div className="mt-1 truncate text-[10.5px] text-muted-foreground/70">
-          {formatBreakdown(counts)}
-        </div>
+      <div className="hidden font-mono text-[12px] tabular-nums text-foreground/85 md:block md:text-right">
+        {total}
       </div>
 
-      <div className="hidden min-w-0 md:block">
-        {latest ? (
-          <>
-            <div className="truncate text-[12px] text-foreground/80">
-              {latest.title}
-            </div>
-            <div className="mt-1 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-              {formatAreaItemDate(latest.date)}
-            </div>
-          </>
-        ) : (
-          <span className="text-[12px] text-muted-foreground/60">No activity</span>
+      <div className="hidden min-w-0 truncate font-mono text-[10.5px] tabular-nums text-muted-foreground/70 md:block">
+        {formatBreakdown(counts)}
+      </div>
+
+      <div
+        className={cn(
+          "hidden font-mono text-[10.5px] tabular-nums md:block md:text-right",
+          dormant ? "text-muted-foreground/50" : "text-muted-foreground",
         )}
+      >
+        {formatAge(age)}
       </div>
-      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+
+      <ArrowRight className="hidden h-3.5 w-3.5 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground md:block" />
     </Link>
   );
 }
 
+/** Whole days between two YYYY-MM-DD dates. */
+function daysBetween(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return Number.POSITIVE_INFINITY;
+  return Math.round((b - a) / 86_400_000);
+}
+
+/** Compact recency: today · 3d · 4w · 7mo. Wide columns of dates read as noise. */
+function formatAge(days: number | null): string {
+  if (days === null || !Number.isFinite(days)) return "—";
+  if (days <= 0) return "today";
+  if (days === 1) return "1d";
+  if (days < 7) return `${days}d`;
+  if (days < 56) return `${Math.round(days / 7)}w`;
+  return `${Math.round(days / 30)}mo`;
+}
+
+/** `71e · 84t · 5n · 19p` — dense enough to sit on one line. */
 function formatBreakdown(counts: Record<AreaItemType, number>) {
-  return [
-    [counts.event, "events"],
-    [counts.task, "tasks"],
-    [counts.note, "notes"],
-    [counts.person, "people"],
-  ]
-    .filter(([value]) => value !== 0)
-    .map(([value, label]) => `${value} ${label}`)
-    .join(" · ") || "No records";
+  return (
+    [
+      [counts.event, "e"],
+      [counts.task, "t"],
+      [counts.note, "n"],
+      [counts.person, "p"],
+    ]
+      .filter(([value]) => value !== 0)
+      .map(([value, suffix]) => `${value}${suffix}`)
+      .join(" · ") || "empty"
+  );
 }
 
 function SortButton({
