@@ -115,7 +115,7 @@ export function VaultSettingsPage() {
     <SettingsPage section="Vault">
       <SettingsGroup
         label="Location"
-        description="Your vault is a folder of Markdown files. You can point Woodshed at an empty folder or at another vault; the one you leave is never touched."
+        description="You can point Woodshed at an empty folder or at another vault; the one you leave is never touched."
       >
         <div className="flex items-center gap-3">
           <span className="min-w-0 flex-1 px-2 py-1 rounded-sm bg-muted font-mono text-[14px] text-foreground break-all">

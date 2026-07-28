@@ -74,10 +74,13 @@ export function AreasSidebar() {
   );
 }
 
-// The index sidebar is deliberately a restrained pulse, not a second content
-// surface. One-line rows and a short cap preserve context without competing
-// with the area overview in the main panel.
-const RECENT_LIMIT = 10;
+// The index sidebar is a navigational spine first and a pulse second. It used
+// to show only a global "recently changed" feed, which meant the one page where
+// you are choosing an area was also the one page whose sidebar could not take
+// you to one. Areas sit on top; a short recent strip sits underneath.
+const RECENT_LIMIT = 5;
+/** Days of silence after which an area is marked dormant in the rail. */
+const DORMANT_DAYS = 30;
 
 export function AreasRecentSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -88,7 +91,9 @@ export function AreasRecentSidebar() {
   const { data: eventRows = [] } = useTagTable("event");
   const today = useToday();
 
-  const items = useMemo(
+  // Built once and used twice: the per-area rail counts every record, while the
+  // recent strip below takes only the dated tail.
+  const allItems = useMemo(
     () =>
       buildAreaItems({
         events: eventRows,
@@ -97,7 +102,13 @@ export function AreasRecentSidebar() {
         people,
         area: null,
         today,
-      })
+      }),
+    [eventRows, tasks, notes, people, today],
+  );
+
+  const items = useMemo(
+    () =>
+      allItems
         // A chronological feed only makes sense for dated records; people
         // carry no activity timestamp, so they're omitted here (they still
         // appear in each area's detail view). Cap at today so "Recent"
@@ -105,34 +116,108 @@ export function AreasRecentSidebar() {
         // Cadence, not in this backward-looking pulse.
         .filter((item) => item.date && item.date.slice(0, 10) <= today)
         .slice(0, RECENT_LIMIT),
-    [eventRows, tasks, notes, people, today],
+    [allItems, today],
   );
+
+  // Per-area totals and freshness, so the rail carries the same signal the
+  // overview does rather than being a bare list of names.
+  const areaStats = useMemo(() => {
+    const stats = new Map<string, { total: number; age: number }>();
+    for (const item of allItems) {
+      const key = item.area || UNASSIGNED_AREA_ID;
+      const day = item.date?.slice(0, 10);
+      const age =
+        day && day <= today
+          ? Math.round(
+              (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) /
+                86_400_000,
+            )
+          : Number.POSITIVE_INFINITY;
+      const prev = stats.get(key);
+      stats.set(key, {
+        total: (prev?.total ?? 0) + 1,
+        age: Math.min(prev?.age ?? Number.POSITIVE_INFINITY, age),
+      });
+    }
+    return stats;
+  }, [allItems, today]);
+
+  const rail = [
+    ...areas,
+    { id: UNASSIGNED_AREA_ID, name: "Unassigned", color: "" },
+  ];
 
   return (
     <ListSidebar>
       <AreaSidebarCreateControl />
-      {items.length === 0 ? (
-        <ListSidebarEmpty>No recent activity yet.</ListSidebarEmpty>
-      ) : (
-        <div className="space-y-0.5">
-          <Link
-            to="/areas"
-            aria-current="page"
-            className="mb-3 flex h-8 items-center gap-2 rounded-md bg-foreground/[0.055] px-2 text-[12.5px] font-medium text-foreground"
-          >
-            <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
-            Overview
-            <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
-              {areas.length}
-            </span>
-          </Link>
-          <div className="mb-2 flex items-center gap-2 px-2">
-            <span className="font-mono text-[9px] font-medium uppercase tracking-[0.17em] text-muted-foreground/80">
-              Recently changed
-            </span>
-            <span className="h-px flex-1 bg-border/70" />
-          </div>
-          {items.map((item) => {
+      <div className="space-y-0.5">
+        <Link
+          to="/areas"
+          aria-current="page"
+          className="mb-3 flex h-8 items-center gap-2 rounded-md bg-foreground/[0.055] px-2 text-[12.5px] font-medium text-foreground"
+        >
+          <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
+          Overview
+          <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
+            {areas.length}
+          </span>
+        </Link>
+
+        {rail.map((area) => {
+          const href = `/areas/${area.id}`;
+          const stat = areaStats.get(area.id);
+          const dormant = !stat || stat.age > DORMANT_DAYS;
+          const isUnassigned = area.id === UNASSIGNED_AREA_ID;
+          return (
+            <Link
+              key={area.id}
+              to={href}
+              title={
+                stat
+                  ? `${area.name} — ${stat.total} records`
+                  : `${area.name} — no records`
+              }
+              className="group flex h-8 min-w-0 items-center gap-2 rounded-md px-2 transition-colors hover:bg-foreground/[0.04]"
+            >
+              {isUnassigned ? (
+                <CircleDashed className="h-3 w-3 shrink-0 text-muted-foreground" />
+              ) : (
+                <span
+                  aria-hidden
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: area.color }}
+                />
+              )}
+              <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground/90">
+                {area.name}
+              </span>
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                {stat?.total ?? 0}
+              </span>
+              {/* Activity marker, not a second colour channel: filled = touched
+                  in the last month, hollow = dormant. */}
+              <span
+                aria-label={dormant ? "dormant" : "active"}
+                className={
+                  dormant
+                    ? "h-1.5 w-1.5 shrink-0 rounded-full border border-border"
+                    : "h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/45"
+                }
+              />
+            </Link>
+          );
+        })}
+
+        <div className="mb-2 mt-5 flex items-center gap-2 px-2">
+          <span className="font-mono text-[9px] font-medium uppercase tracking-[0.17em] text-muted-foreground/80">
+            Recently changed
+          </span>
+          <span className="h-px flex-1 bg-border/70" />
+        </div>
+        {items.length === 0 ? (
+          <ListSidebarEmpty>No recent activity yet.</ListSidebarEmpty>
+        ) : (
+          items.map((item) => {
             const Icon = areaItemIcons[item.type];
             const areaRecord = areas.find((area) => area.id === item.area);
             return (
@@ -163,9 +248,9 @@ export function AreasRecentSidebar() {
                 </span>
               </Link>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </ListSidebar>
   );
 }
