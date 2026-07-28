@@ -118,7 +118,7 @@ export function AreaDistribution({
           Where your attention went
         </span>
         <span className="h-px flex-1 bg-border/70" aria-hidden />
-        <span className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground/60">
+        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
           {windowed ? `Last ${WINDOW_DAYS} days` : "All time"}
         </span>
       </div>

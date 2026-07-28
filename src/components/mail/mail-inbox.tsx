@@ -251,13 +251,13 @@ export function MailInbox() {
                     people={people}
                     isCursor={idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
-                    onClick={() => setCursor(idx)}
-                    onDoubleClick={() =>
+                    onClick={() => {
+                      setCursor(idx);
                       void navigate({
                         to: "/mail/$id",
                         params: { id: thread.email.id },
-                      })
-                    }
+                      });
+                    }}
                     ref={(el) => {
                       rowRefs.current[idx] = el;
                     }}
@@ -301,7 +301,6 @@ interface EmailRowProps {
   isCursor: boolean;
   isSelected: boolean;
   onClick: () => void;
-  onDoubleClick: () => void;
   ref?: React.Ref<HTMLDivElement>;
 }
 
@@ -312,7 +311,6 @@ function EmailRow({
   isCursor,
   isSelected,
   onClick,
-  onDoubleClick,
   ref,
 }: EmailRowProps) {
   // Selected wins over cursor visually — the multi-selection is the
@@ -330,7 +328,6 @@ function EmailRow({
       ref={ref}
       data-mail-thread-row
       onClick={onClick}
-      onDoubleClick={onDoubleClick}
       className={`relative flex items-center gap-4 pl-4 pr-3 py-2.5 rounded-md cursor-pointer transition-colors ${bgClass}`}
     >
       {isSelected && (

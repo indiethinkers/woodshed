@@ -1,4 +1,4 @@
-import { Extension } from "@tiptap/core";
+import { Extension, type Editor, type Range } from "@tiptap/core";
 import { PluginKey } from "@tiptap/pm/state";
 import {
   Suggestion,
@@ -21,9 +21,35 @@ export type WikilinkPickerSelection =
   | { kind: "create"; text: string; type: WikilinkType };
 
 export const WikilinkSuggestionPluginKey = new PluginKey("wikilink-suggestion");
+export const AtLinkSuggestionPluginKey = new PluginKey("at-link-suggestion");
 
 export interface WikilinkSuggestionOptions {
   suggestion: Omit<SuggestionOptions<unknown, WikilinkPickerSelection>, "editor">;
+  atSuggestion: Omit<SuggestionOptions<unknown, WikilinkPickerSelection>, "editor">;
+}
+
+function insertWikilink(
+  editor: Editor,
+  range: Range,
+  selection: WikilinkPickerSelection,
+) {
+  const text = selection.text.trim();
+  if (!text) return;
+
+  const attrs: { text: string; type?: WikilinkType | null } = {
+    text,
+    type: selection.kind === "create" ? selection.type : null,
+  };
+
+  editor
+    .chain()
+    .focus()
+    .deleteRange(range)
+    .insertContentAt(range.from, [
+      { type: "wikilink", attrs },
+      { type: "text", text: " " },
+    ])
+    .run();
 }
 
 /**
@@ -86,24 +112,43 @@ export const WikilinkSuggestion = Extension.create<WikilinkSuggestionOptions>({
           };
         },
         command: ({ editor, range, props }) => {
-          const selection = props as WikilinkPickerSelection;
-          const text = selection.text.trim();
-          if (!text) return;
-
-          const attrs: { text: string; type?: WikilinkType | null } = {
+          insertWikilink(editor, range, props as WikilinkPickerSelection);
+        },
+      },
+      atSuggestion: {
+        char: "@",
+        allowSpaces: true,
+        allowedPrefixes: null,
+        startOfLine: false,
+        pluginKey: AtLinkSuggestionPluginKey,
+        items: () => [],
+        // Start-of-block or whitespace only, so typing an email address does
+        // not open record search. The leading whitespace stays outside the
+        // replacement range; only `@query` becomes the durable wikilink.
+        findSuggestionMatch: (config: Trigger): SuggestionMatch => {
+          const { $position } = config;
+          const parent = $position.parent;
+          if (!parent) return null;
+          const before = parent.textBetween(
+            0,
+            $position.parentOffset,
+            null,
+            "￼",
+          );
+          const match = before.match(/(?:^|\s)@([^@\n]*)$/);
+          if (!match) return null;
+          const text = `@${match[1]}`;
+          return {
+            range: {
+              from: $position.pos - text.length,
+              to: $position.pos,
+            },
+            query: match[1],
             text,
-            type: selection.kind === "create" ? selection.type : null,
           };
-
-          editor
-            .chain()
-            .focus()
-            .deleteRange(range)
-            .insertContentAt(range.from, [
-              { type: "wikilink", attrs },
-              { type: "text", text: " " },
-            ])
-            .run();
+        },
+        command: ({ editor, range, props }) => {
+          insertWikilink(editor, range, props as WikilinkPickerSelection);
         },
       },
     };
@@ -114,6 +159,10 @@ export const WikilinkSuggestion = Extension.create<WikilinkSuggestionOptions>({
       Suggestion<unknown, WikilinkPickerSelection>({
         editor: this.editor,
         ...this.options.suggestion,
+      }),
+      Suggestion<unknown, WikilinkPickerSelection>({
+        editor: this.editor,
+        ...this.options.atSuggestion,
       }),
     ];
   },

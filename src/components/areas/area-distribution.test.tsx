@@ -134,4 +134,18 @@ describe("AreaDistribution", () => {
       "text-foreground",
     );
   });
+
+  it("keeps the time-window label readable in light mode", () => {
+    render(
+      <AreaDistribution
+        areas={[area("a", "Alpha", "#3987e5")]}
+        items={items([["a", "2026-07-20", 1]])}
+        today={TODAY}
+      />,
+    );
+
+    const label = screen.getByText(/Last 30 days/i);
+    expect(label).toHaveClass("text-[10px]", "text-muted-foreground");
+    expect(label).not.toHaveClass("text-muted-foreground/60");
+  });
 });

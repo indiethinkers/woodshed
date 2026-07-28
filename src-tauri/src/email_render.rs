@@ -190,7 +190,13 @@ fn sanitize_and_rewrite(
                     Ok(())
                 }),
                 element!("img", move |el| {
-                    if el.get_attribute("loading").is_none() {
+                    // The iframe grows to match its document and does not own
+                    // the outer scroll viewport. WebKit can leave a lazy image
+                    // permanently "below the fold": the image waits for a
+                    // larger iframe while the iframe waits for image layout.
+                    if load_remote_images {
+                        let _ = el.set_attribute("loading", "eager");
+                    } else if el.get_attribute("loading").is_none() {
                         let _ = el.set_attribute("loading", "lazy");
                     }
                     if el.get_attribute("decoding").is_none() {
@@ -339,11 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_remote_img_src_to_wsmail() {
-        let raw = r#"<img src="https://cdn.example.com/x.png" />"#;
+    fn rewrites_remote_images_for_automatic_eager_loading() {
+        let raw = r#"<img src="https://cdn.example.com/x.png" loading="lazy" />"#;
         let out = render_email(raw, empty_dims(), true).unwrap();
         assert!(out.contains("wsmail://localhost/img/"));
-        assert!(out.contains("loading=\"lazy\""));
+        assert!(out.contains("loading=\"eager\""));
+        assert!(!out.contains("loading=\"lazy\""));
         assert!(out.contains("decoding=\"async\""));
         assert!(out.contains("fetchpriority=\"high\""));
     }

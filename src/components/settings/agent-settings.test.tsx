@@ -19,19 +19,21 @@ vi.mock("@/lib/tauri", () => ({
 import { AgentSettingsSection } from "./agent-settings";
 
 describe("AgentSettingsSection", () => {
-  it("explains bearer-token setup without exposing protocol internals", async () => {
+  it("explains where the Hermes token comes from in one paragraph", async () => {
     render(<AgentSettingsSection />);
 
     await waitFor(() => {
       expect(screen.getByLabelText("Bearer token")).toBeEnabled();
     });
 
-    expect(
-      screen.getByText(/Paste the token itself, without “Bearer” or “Authorization:”/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Woodshed adds the Authorization: Bearer header/),
-    ).toBeInTheDocument();
+    const help = document.getElementById("hermes-token-help")!;
+    expect(help.tagName).toBe("P");
+    expect(help).toHaveTextContent(/API_SERVER_KEY/);
+    expect(help).toHaveTextContent(/Woodshed does not issue it/);
+    expect(help).toHaveTextContent(
+      /Paste only the value—without “Bearer” or “Authorization:”/,
+    );
+    expect(help.querySelector("p")).toBeNull();
     expect(screen.queryByText("Tools")).not.toBeInTheDocument();
     expect(screen.queryByText("Output Schema")).not.toBeInTheDocument();
   });

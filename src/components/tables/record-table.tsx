@@ -70,6 +70,10 @@ interface RecordTableProps<T> {
   loading?: boolean;
   rowKey: (row: T) => string;
   rowHref: (row: T) => string;
+  /** Optional visual grouping applied after the current filters and sorts. */
+  groupBy?: (row: T) => string;
+  /** Preferred group order; unlisted groups follow alphabetically. */
+  groupOrder?: readonly string[];
   /** Big page title — matches the `#tag` heading on the event table. */
   title: string;
   /** Noun used in the "visible / total" count, e.g. "notes". */
@@ -134,6 +138,8 @@ export function RecordTable<T>({
   loading = false,
   rowKey,
   rowHref,
+  groupBy,
+  groupOrder,
   title,
   unit = "rows",
   action,
@@ -296,6 +302,9 @@ export function RecordTable<T>({
         rowHref={rowHref}
         rowKey={rowKey}
         rows={visibleRows}
+        groupBy={groupBy}
+        groupOrder={groupOrder}
+        unit={unit}
         sorts={sorts}
         onSort={onSortsChange}
         selectable={selectable}
@@ -464,6 +473,9 @@ function GeneratedDatabase<T>({
   rowHref,
   rowKey,
   rows,
+  groupBy,
+  groupOrder,
+  unit,
   sorts,
   onSort,
   selectable,
@@ -480,6 +492,9 @@ function GeneratedDatabase<T>({
   rowHref: (row: T) => string;
   rowKey: (row: T) => string;
   rows: T[];
+  groupBy?: (row: T) => string;
+  groupOrder?: readonly string[];
+  unit: string;
   sorts: ViewSort[];
   onSort: (sorts: ViewSort[]) => void;
   selectable: boolean;
@@ -493,7 +508,35 @@ function GeneratedDatabase<T>({
   quietEmptyCells: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const [start, end] = useVisibleRowRange(rows.length, bodyRef);
+  const bodyEntries = useMemo<TableBodyEntry<T>[]>(() => {
+    if (!groupBy) {
+      return rows.map((row) => ({ type: "row", row }));
+    }
+
+    const groups = new Map<string, T[]>();
+    for (const row of rows) {
+      const key = groupBy(row);
+      const existing = groups.get(key);
+      if (existing) existing.push(row);
+      else groups.set(key, [row]);
+    }
+
+    const ranks = new Map(groupOrder?.map((key, index) => [key, index]));
+    const keys = [...groups.keys()].sort((a, b) => {
+      const aRank = ranks.get(a) ?? Number.MAX_SAFE_INTEGER;
+      const bRank = ranks.get(b) ?? Number.MAX_SAFE_INTEGER;
+      return aRank - bRank || a.localeCompare(b);
+    });
+
+    return keys.flatMap((key) => {
+      const groupRows = groups.get(key) ?? [];
+      return [
+        { type: "group" as const, key, count: groupRows.length },
+        ...groupRows.map((row) => ({ type: "row" as const, row })),
+      ];
+    });
+  }, [groupBy, groupOrder, rows]);
+  const [start, end] = useVisibleRowRange(bodyEntries.length, bodyRef);
 
   if (loading) return <TableSkeleton />;
 
@@ -533,14 +576,25 @@ function GeneratedDatabase<T>({
 
         <div ref={bodyRef}>
           {start > 0 && <div aria-hidden style={{ height: start * ROW_HEIGHT }} />}
-          {rows.slice(start, end).map((row) => {
-            const key = rowKey(row);
+          {bodyEntries.slice(start, end).map((entry) => {
+            if (entry.type === "group") {
+              return (
+                <DatabaseGroupHeader
+                  key={`group:${entry.key}`}
+                  count={entry.count}
+                  label={entry.key}
+                  unit={unit}
+                />
+              );
+            }
+
+            const key = rowKey(entry.row);
             return (
               <DatabaseRow
                 key={key}
                 columns={columns}
-                href={rowHref(row)}
-                row={row}
+                href={rowHref(entry.row)}
+                row={entry.row}
                 selectable={selectable}
                 isSelected={selectedKeys.has(key)}
                 anySelected={anySelected}
@@ -550,8 +604,11 @@ function GeneratedDatabase<T>({
               />
             );
           })}
-          {end < rows.length && (
-            <div aria-hidden style={{ height: (rows.length - end) * ROW_HEIGHT }} />
+          {end < bodyEntries.length && (
+            <div
+              aria-hidden
+              style={{ height: (bodyEntries.length - end) * ROW_HEIGHT }}
+            />
           )}
         </div>
 
@@ -571,6 +628,37 @@ function GeneratedDatabase<T>({
               </p>
             </div>
           ))}
+      </div>
+    </div>
+  );
+}
+
+type TableBodyEntry<T> =
+  | { type: "group"; key: string; count: number }
+  | { type: "row"; row: T };
+
+function DatabaseGroupHeader({
+  count,
+  label,
+  unit,
+}: {
+  count: number;
+  label: string;
+  unit: string;
+}) {
+  const countLabel = count === 1 ? singularize(unit) : unit;
+  return (
+    <div
+      data-record-group={label}
+      className="flex h-9 items-center border-b border-border/60 bg-muted/35"
+    >
+      <div className="sticky left-0 flex min-w-[240px] items-baseline gap-2.5 px-2.5">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+          {label}
+        </h2>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+          {count} {countLabel}
+        </span>
       </div>
     </div>
   );

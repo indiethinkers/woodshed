@@ -741,6 +741,34 @@ export function TiptapEditor({
             },
           }),
         },
+        atSuggestion: {
+          render: () => ({
+            onStart: (props) => {
+              setWikilinkState({
+                query: props.query,
+                command: (selection) => props.command(selection),
+                clientRect: props.clientRect ?? null,
+              });
+            },
+            onUpdate: (props) => {
+              setWikilinkState({
+                query: props.query,
+                command: (selection) => props.command(selection),
+                clientRect: props.clientRect ?? null,
+              });
+            },
+            onExit: () => {
+              setWikilinkState(null);
+            },
+            onKeyDown: ({ event }) => {
+              if (event.key === "Escape") {
+                setWikilinkState(null);
+                return true;
+              }
+              return wikilinkPickerRef.current?.onKeyDown(event) ?? false;
+            },
+          }),
+        },
       }),
       SlashCommand.configure({
         suggestion: {

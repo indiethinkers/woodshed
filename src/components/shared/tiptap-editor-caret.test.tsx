@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -23,6 +23,19 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/lib/hooks/use-vault-path", () => ({
   useVaultPath: () => ({ data: "/tmp/vault", isPending: false }),
+}));
+
+vi.mock("@/lib/hooks/use-search", () => ({
+  useSearch: () => ({
+    data: [
+      {
+        docId: "project-note",
+        title: "Project",
+        hint: "Note",
+        kind: "note",
+      },
+    ],
+  }),
 }));
 
 import { TiptapEditor } from "./tiptap-editor-impl";
@@ -93,6 +106,79 @@ describe("TiptapEditor caret cadence", () => {
     content.editor!.destroy();
 
     expect(() => rerender(ui("Second value"))).not.toThrow();
+
+    await unmountAndDrainEditorTimers(unmount);
+  });
+
+  it("opens record search when the user types @", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { container, unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <TiptapEditor value="" onCommit={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    const content = await waitFor(() => {
+      const element = container.querySelector<
+        HTMLElement & {
+          editor?: {
+            commands: { insertContent: (value: string) => void };
+            getJSON: () => unknown;
+          };
+        }
+      >(".tiptap-content");
+      expect(element?.editor).toBeTruthy();
+      return element!;
+    });
+
+    act(() => {
+      content.editor!.commands.insertContent("@Project");
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector("[data-wikilink-picker]")).toBeTruthy();
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Project\s*Note$/i }),
+    );
+
+    await waitFor(() => {
+      expect(JSON.stringify(content.editor!.getJSON())).toContain(
+        '"type":"wikilink","attrs":{"text":"Project"',
+      );
+    });
+
+    await unmountAndDrainEditorTimers(unmount);
+  });
+
+  it("does not treat an email address as a record search", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { container, unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <TiptapEditor value="" onCommit={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    const content = await waitFor(() => {
+      const element = container.querySelector<
+        HTMLElement & {
+          editor?: { commands: { insertContent: (value: string) => void } };
+        }
+      >(".tiptap-content");
+      expect(element?.editor).toBeTruthy();
+      return element!;
+    });
+
+    act(() => {
+      content.editor!.commands.insertContent("person@example.test");
+    });
+
+    expect(document.querySelector("[data-wikilink-picker]")).toBeNull();
 
     await unmountAndDrainEditorTimers(unmount);
   });

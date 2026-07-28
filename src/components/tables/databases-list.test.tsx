@@ -38,14 +38,31 @@ vi.mock("@/lib/hooks/use-tag-table", () => ({
 import { DatabasesList } from "./databases-list";
 
 describe("DatabasesList", () => {
-  it("groups custom databases first and omits row page icons", () => {
+  it("renders visible Custom and Generated groups and omits row page icons", () => {
     render(<DatabasesList />);
 
+    const customGroup = screen
+      .getByRole("heading", { name: "Custom" })
+      .closest("[data-record-group]")!;
+    const generatedGroup = screen
+      .getByRole("heading", { name: "Generated" })
+      .closest("[data-record-group]")!;
     const custom = screen.getByRole("link", { name: "Custom database" });
     const generated = screen.getByRole("link", { name: "#generated" });
     expect(
-      custom.compareDocumentPosition(generated) & Node.DOCUMENT_POSITION_FOLLOWING,
+      customGroup.compareDocumentPosition(generatedGroup) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(customGroup).toHaveTextContent("Custom");
+    expect(customGroup).toHaveTextContent("1 database");
+    expect(generatedGroup).toHaveTextContent("Generated");
+    expect(generatedGroup).toHaveTextContent("1 database");
+    expect(customGroup.compareDocumentPosition(custom)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(generatedGroup.compareDocumentPosition(generated)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
     expect(within(custom).queryByRole("img", { hidden: true })).toBeNull();
     expect(custom.querySelector("svg")).toBeNull();
     expect(generated.querySelector("svg")).toBeNull();

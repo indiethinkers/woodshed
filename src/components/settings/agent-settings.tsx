@@ -228,18 +228,16 @@ export function AgentSettingsSection() {
               className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
             />
           </div>
-          <span
+          <p
             id="hermes-token-help"
-            className="mt-2 block space-y-1 text-[13px] leading-5 text-muted-foreground"
+            className="mt-2 text-[13px] leading-5 text-muted-foreground"
           >
-            <span className="block">
-              Paste the token itself, without “Bearer” or “Authorization:”.
-              Woodshed stores it in your operating system keychain.
-            </span>
-            <span className="block">
-              Woodshed adds the Authorization: Bearer header when it connects.
-            </span>
-          </span>
+            This is the value you set as <code>API_SERVER_KEY</code> when
+            configuring the Hermes API server; Woodshed does not issue it.
+            Paste only the value—without “Bearer” or “Authorization:”—and
+            Woodshed stores it in your operating system keychain and adds the
+            authorization header when connecting.
+          </p>
         </div>
 
         <label className="text-[12px] text-muted-foreground">

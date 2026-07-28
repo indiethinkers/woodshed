@@ -6,11 +6,12 @@ import type { EmailSummary } from "@/lib/mail-lib/types";
 const mocks = vi.hoisted(() => ({
   emails: [] as EmailSummary[],
   archiveOne: vi.fn(),
+  navigate: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children: ReactNode }) => <a href="#">{children}</a>,
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
 }));
 
 vi.mock("@/components/layout/list-panel-context-internal", () => ({
@@ -51,6 +52,7 @@ import { MailInbox } from "./mail-inbox";
 beforeEach(() => {
   mocks.emails = [];
   mocks.archiveOne.mockReset();
+  mocks.navigate.mockReset();
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -81,6 +83,18 @@ describe("MailInbox", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
+  it("opens an email thread with one click", () => {
+    mocks.emails = [email({ id: "message-1" })];
+    const { container } = render(<MailInbox />);
+
+    fireEvent.click(container.querySelector("[data-mail-thread-row]")!);
+
+    expect(mocks.navigate).toHaveBeenCalledWith({
+      to: "/mail/$id",
+      params: { id: "message-1" },
+    });
+  });
+
   it("archives every inbox message represented by a thread row", async () => {
     mocks.emails = [
       email({ id: "message-2", date: "2026-07-24T09:00:00-07:00" }),
@@ -101,10 +115,10 @@ describe("MailInbox", () => {
 function email(overrides: Partial<EmailSummary>): EmailSummary {
   return {
     id: "message-1",
-    threadId: "checking-in-thread",
+    threadId: "project-update-thread",
     from: "Avery Example",
     fromEmail: "avery@example.com",
-    subject: "Re: Checking In",
+    subject: "Project update",
     body: "Sounds good",
     html: null,
     preview: "Sounds good",

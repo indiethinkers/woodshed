@@ -38,10 +38,7 @@ interface DatabaseRowItem {
   tag?: string;
 }
 
-const DEFAULT_SORTS: ViewSort[] = [
-  { column: "kind", direction: "asc" },
-  { column: "rows", direction: "desc" },
-];
+const DEFAULT_SORTS: ViewSort[] = [{ column: "rows", direction: "desc" }];
 
 const COLUMNS: RecordColumn<DatabaseRowItem>[] = [
   {
@@ -142,6 +139,8 @@ export function DatabasesList() {
       loading={isLoading || isLoadingGenerated}
       rowKey={(row) => row.id}
       rowHref={(row) => row.href}
+      groupBy={(row) => row.kind}
+      groupOrder={["Custom", "Generated"]}
       showViewTab={false}
       totalOnlyWhenUnfiltered
       favorite={{
