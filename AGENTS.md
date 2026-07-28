@@ -220,9 +220,15 @@ Switching vaults relaunches the application. `watcher_start` is the only place
 that runs migrations, hydrates the events, people and calendar caches, grants
 the attachment asset scope, and opens the search index, and it refuses to run
 twice — so `vault_switch` discards the derived search index, writes the new
-path, and restarts rather than rebuilding that state in process. Neither the
-outgoing nor the incoming folder is modified beyond scaffolding missing
-canonical subdirectories.
+path, and restarts rather than rebuilding that state in process.
+
+Adopting a folder writes to it. `ensure_dirs` scaffolds every entry in
+`VAULT_SUBDIRS`, and the migration on the next boot renames the contents of
+`calendar/` and `daily/` into `cadence/` and rewrites frontmatter under
+`resources/`. `vault_switch` therefore accepts only a folder that is empty
+apart from dotfiles, or that already reads as a vault — it has `.woodshed/`, or
+at least three canonical subdirectories. The folder being left behind is never
+touched.
 
 ```text
 <vault_root>/

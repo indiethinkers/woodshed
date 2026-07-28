@@ -39,6 +39,14 @@ pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let current = config::vault_path_get(app.clone())?;
     let target = resolve_switch_target(&path, current.as_deref())?;
 
+    // Refuse arbitrary folders before touching anything. Adopting a folder is
+    // not read-only: `ensure_dirs` scaffolds sixteen subdirectories into it,
+    // and the boot migration after the restart renames `calendar/` and
+    // `daily/` contents into `cadence/` and rewrites every `.md` under
+    // `resources/`. A mis-click in the folder picker must not be able to
+    // rearrange someone's files.
+    ensure_safe_to_adopt(&target)?;
+
     // Scaffold any missing canonical subdirs. Non-destructive: `ensure_dirs`
     // creates what is absent and leaves existing data alone, so pointing at a
     // folder that is already a vault is safe.
@@ -89,6 +97,63 @@ fn resolve_switch_target(requested: &str, current: Option<&str>) -> Result<PathB
     }
 
     Ok(target)
+}
+
+/// How many canonical subdirectories a non-empty folder must already have
+/// before it is treated as an existing vault rather than someone's documents.
+/// Three is enough that an incidental `resources/` or `tables/` does not
+/// qualify, and low enough that a partially-populated vault still does.
+const VAULT_RECOGNITION_THRESHOLD: usize = 3;
+
+/// Reject folders that are neither empty nor already a vault.
+///
+/// Adopting a folder mutates it. `ensure_dirs` scaffolds every entry in
+/// `VAULT_SUBDIRS`, and the migration that runs on the next boot
+/// (`vault::migration::migrate_legacy_folders`) renames the contents of
+/// `calendar/` and `daily/` into `cadence/` and rewrites the frontmatter of
+/// every `.md` under `resources/`. Those are the right behaviours for a vault
+/// and the wrong ones for a folder the user picked by accident.
+///
+/// Dotfiles do not count as content: a `.git` directory is expected on a
+/// git-synced vault, and `.DS_Store` should never make a folder look occupied.
+fn ensure_safe_to_adopt(target: &Path) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+
+    let mut visible = 0usize;
+    let mut canonical = 0usize;
+    let mut has_woodshed_dir = false;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+        let raw_name = entry.file_name();
+        let name = raw_name.to_string_lossy();
+
+        if name == ".woodshed" {
+            has_woodshed_dir = true;
+            continue;
+        }
+        if name.starts_with('.') {
+            continue;
+        }
+        visible += 1;
+        if vault_lib::VAULT_SUBDIRS.contains(&name.as_ref()) && entry.path().is_dir() {
+            canonical += 1;
+        }
+    }
+
+    let empty = visible == 0;
+    let looks_like_vault = has_woodshed_dir || canonical >= VAULT_RECOGNITION_THRESHOLD;
+    if empty || looks_like_vault {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{} has files in it but is not a Woodshed vault. Choose an empty folder \
+         or an existing vault — Woodshed creates its own folders here and may \
+         move files that match an older vault layout.",
+        target.display()
+    ))
 }
 
 /// Remove the derived search index so the next boot rebuilds from the new
@@ -542,6 +607,75 @@ mod tests {
         assert!(resolve_switch_target(file.to_str().unwrap(), None)
             .unwrap_err()
             .contains("is not a folder"));
+    }
+
+    #[test]
+    fn adopting_accepts_an_empty_folder() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("fresh");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_ignores_dotfiles_when_judging_emptiness() {
+        // A git-synced vault has `.git`; macOS scatters `.DS_Store`. Neither
+        // makes a folder "occupied" for this purpose.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("dotfiles-only");
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        fs::write(dir.join(".DS_Store"), "").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_accepts_a_populated_vault() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("vault");
+        vault_lib::ensure_dirs(&dir).unwrap();
+        fs::write(dir.join("notebook").join("n.md"), "---\ntype: note\n---\n").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_accepts_a_vault_identified_only_by_its_woodshed_dir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("sparse-vault");
+        fs::create_dir_all(dir.join(".woodshed")).unwrap();
+        fs::write(dir.join("stray.md"), "notes\n").unwrap();
+        assert!(ensure_safe_to_adopt(&dir).is_ok());
+    }
+
+    #[test]
+    fn adopting_rejects_someone_elses_documents() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("documents");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("taxes.pdf"), "x").unwrap();
+        fs::write(dir.join("notes.md"), "x").unwrap();
+
+        let err = ensure_safe_to_adopt(&dir).unwrap_err();
+        assert!(err.contains("not a Woodshed vault"), "got: {err}");
+    }
+
+    #[test]
+    fn adopting_rejects_a_folder_the_migration_would_rearrange() {
+        // The case this guard exists for. `calendar/` and `daily/` contents are
+        // renamed into `cadence/` by the boot migration, and every `.md` under
+        // `resources/` is rewritten. One incidental match must not be enough to
+        // pass for a vault.
+        for incidental in ["calendar", "daily", "resources"] {
+            let tmp = TempDir::new().unwrap();
+            let dir = tmp.path().join("not-a-vault");
+            fs::create_dir_all(dir.join(incidental)).unwrap();
+            fs::write(dir.join(incidental).join("mine.md"), "important\n").unwrap();
+            fs::write(dir.join("readme.txt"), "x").unwrap();
+
+            assert!(
+                ensure_safe_to_adopt(&dir).is_err(),
+                "folder containing only {incidental}/ was accepted as a vault"
+            );
+        }
     }
 
     #[test]
