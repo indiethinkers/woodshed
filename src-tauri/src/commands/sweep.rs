@@ -76,7 +76,7 @@ pub async fn sweep_triage_email(
         .ok_or_else(|| format!("email not found: {email_id}"))?;
 
     let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&meta).map_err(|e| e.to_string())?;
+    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
     let voice_samples = sweep::notebook_voice_samples(&vault);
     let prompt = sweep::build_triage_prompt(&TriagePromptInput {
         from: &email.from,
@@ -134,7 +134,7 @@ pub async fn sweep_card_refine(
     };
 
     let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&meta).map_err(|e| e.to_string())?;
+    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
     let voice_samples = sweep::notebook_voice_samples(&vault);
     let prompt = sweep::build_refine_prompt(&sweep::RefinePromptInput {
         from,
@@ -192,7 +192,7 @@ pub async fn sweep_card_plan_actions(
 
     let today = chrono::Local::now().date_naive().to_string();
     let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&meta).map_err(|e| e.to_string())?;
+    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
     let prompt = sweep::build_command_plan_prompt(&sweep::CommandPlanPromptInput {
         from,
         subject,

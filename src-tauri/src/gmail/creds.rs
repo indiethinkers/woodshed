@@ -4,14 +4,14 @@
 // 16-char Google-issued secret).
 //
 // Where the App Password lives:
-//   - Release: the operating-system credential store under the service
-//     "Woodshed Gmail". The config store carries only non-secret metadata.
+//   - Release: `<app_data_dir>/secrets.json`, behind `CredentialBroker`.
+//     The config store carries only non-secret metadata.
 //   - Dev: `GMAIL_EMAIL` + `GMAIL_APP_PASSWORD` from the environment or
 //     `.env.local` (see `env_or_local_for`).
 //
-// Legacy plaintext config entries are migrated into the keychain on
-// first use and removed from subsequent config writes.
+// Legacy keychain and plaintext-config entries are one-time migration inputs.
 
+use crate::credentials::{CredentialBroker, CredentialId};
 use crate::sync_ext::MutexRecover;
 use keyring::Entry;
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub enum CredsError {
 ///   1. `GMAIL_EMAIL` + `GMAIL_APP_PASSWORD` env vars (if email matches).
 ///   2. `.env.local` walked up from cwd (if email matches).
 ///
-/// Keychain-backed resolution + cache priming lives in
+/// Store-backed resolution + cache priming lives in
 /// `commands::gmail::resolve_credentials`.
 pub fn env_or_local_for(email: &str) -> Option<Credentials> {
     let email = email.trim();
@@ -65,23 +65,18 @@ pub fn env_or_local_for(email: &str) -> Option<Credentials> {
     None
 }
 
-/// Read an App Password from the OS keychain. The process-level `CredsCache`
-/// ensures this runs at most once per account per launch. macOS tracks access
-/// using the binary's designated signing requirement: signed release updates
-/// retain a stable identity, while an ad-hoc-signed development binary can
-/// prompt again after a Rust rebuild changes its code hash.
-pub fn keychain_password(email: &str) -> Option<String> {
+/// Read a legacy App Password out of the OS keychain, if one exists. Used once
+/// per account to migrate pre-existing secrets into the credential broker;
+/// after migration the keychain is never read again. Reading a
+/// keychain item from an unsigned/ad-hoc-signed binary triggers the
+/// macOS access prompt — which is exactly what moving the secret into the
+/// local credential store eliminates going forward.
+pub fn legacy_keychain_password(email: &str) -> Option<String> {
     let entry = Entry::new(KEYCHAIN_SERVICE, email).ok()?;
     match entry.get_password() {
         Ok(pw) if !pw.trim().is_empty() => Some(pw),
         _ => None,
     }
-}
-
-pub fn store(email: &str, app_password: &str) -> Result<(), CredsError> {
-    let entry = Entry::new(KEYCHAIN_SERVICE, email)?;
-    entry.set_password(app_password)?;
-    Ok(())
 }
 
 /// Email of the env-vars account, if one is configured. Used to merge
@@ -154,8 +149,25 @@ impl Default for CredsCache {
     }
 }
 
-/// Forget an account's keychain App Password. Idempotent.
-pub fn forget(email: &str) -> Result<(), CredsError> {
+/// Resolve a prompt-free persisted credential and prime the session cache.
+pub fn persisted_for(
+    cache: &CredsCache,
+    broker: &CredentialBroker,
+    email: &str,
+) -> Result<Option<Credentials>, String> {
+    let Some(app_password) = broker.resolve(&CredentialId::gmail(email))? else {
+        return Ok(None);
+    };
+    let credentials = Credentials {
+        email: email.trim().to_string(),
+        app_password,
+    };
+    cache.set(credentials.clone());
+    Ok(Some(credentials))
+}
+
+/// Forget an account's legacy keychain App Password. Idempotent.
+pub fn forget_legacy_keychain(email: &str) -> Result<(), CredsError> {
     let pw_entry = Entry::new(KEYCHAIN_SERVICE, email)?;
     match pw_entry.delete_password() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -222,6 +234,7 @@ fn parse_env_var(path: &Path, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::{CredentialBroker, CredentialId};
     use std::io::Write;
 
     #[test]
@@ -250,5 +263,22 @@ mod tests {
             parse_env_var(tmp.path(), ENV_EMAIL),
             Some("real@gmail.com".into())
         );
+    }
+
+    #[test]
+    fn stored_credential_primes_the_session_cache() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let broker = CredentialBroker::new(temp.path());
+        let cache = CredsCache::new();
+        let email = "owner@example.com";
+        broker
+            .save(&CredentialId::gmail(email), "stored-secret")
+            .unwrap();
+
+        let resolved = persisted_for(&cache, &broker, email).unwrap().unwrap();
+        broker.forget(&CredentialId::gmail(email)).unwrap();
+
+        assert_eq!(resolved.app_password, "stored-secret");
+        assert_eq!(cache.peek(email).unwrap().app_password, "stored-secret");
     }
 }

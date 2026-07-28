@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, PlugZap, Save, Trash2 } from "lucide-react";
 import { SettingsGroup } from "@/components/settings/settings-page";
+import { isLoopbackAgentUrl } from "@/lib/agent/connection";
 import { tauriInvoke } from "@/lib/tauri";
 
 interface AgentConfig {
@@ -9,6 +10,7 @@ interface AgentConfig {
   model: string;
   sessionKey: string;
   hasApiKey: boolean;
+  credentialSource: "environment" | "hermes" | "stored" | "missing";
 }
 
 interface AgentConnectionTestResult {
@@ -25,6 +27,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   model: "cadence",
   sessionKey: "woodshed",
   hasApiKey: false,
+  credentialSource: "missing",
 };
 const MASKED_KEY_VALUE = "configured-password";
 
@@ -131,11 +134,17 @@ export function AgentSettingsSection() {
   }
 
   const hasKey = config?.hasApiKey ?? false;
+  const credentialSource = config?.credentialSource ?? "missing";
+  const isLocalHermes = isLoopbackAgentUrl(baseUrl);
   const disabled = busy !== "idle" || config === null;
   const showingStoredKey = hasKey && !isReplacingKey;
   const keyInputValue = showingStoredKey ? MASKED_KEY_VALUE : apiKey;
   const testButtonLabel =
-    busy === "testing" ? "Testing..." : showingStoredKey ? "Test" : "Save & test";
+    busy === "testing"
+      ? "Testing..."
+      : showingStoredKey
+        ? "Test"
+        : "Save & test";
 
   function beginReplacingKey(nextValue = "") {
     setIsReplacingKey(true);
@@ -146,9 +155,25 @@ export function AgentSettingsSection() {
   return (
     <SettingsGroup
       label="Hermes"
-      description="Connect Woodshed to the Hermes OpenAI-compatible endpoint running on this machine."
+      description={
+        isLocalHermes
+          ? "Use an existing Hermes HTTP endpoint on this machine. Woodshed discovers its local profile key."
+          : "Connect to a remote Hermes-compatible HTTP endpoint with an explicit bearer key."
+      }
     >
       <form onSubmit={handleSave} className="flex max-w-[680px] flex-col gap-4">
+        <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2">
+          <p className="text-[12px] text-foreground">
+            Connection mode:{" "}
+            {isLocalHermes ? "Existing local HTTP" : "Remote HTTP"}
+          </p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground/70">
+            {isLocalHermes
+              ? "Authentication comes from the Hermes profile that owns this local API port."
+              : "Remote endpoints require a bearer key stored privately by Woodshed."}
+          </p>
+        </div>
+
         <label className="text-[12px] text-muted-foreground">
           Display name
           <input
@@ -183,62 +208,93 @@ export function AgentSettingsSection() {
           </label>
         </div>
 
-        <div className="text-[13px] text-foreground">
-          <label htmlFor="hermes-token" className="block">
-            Bearer token
-          </label>
-          <div className="relative mt-1">
-            <input
-              id="hermes-token"
-              aria-describedby="hermes-token-help"
-              ref={keyInputRef}
-              type="password"
-              value={keyInputValue}
-              onFocus={() => {
-                if (showingStoredKey) {
-                  requestAnimationFrame(() => keyInputRef.current?.select());
-                }
-              }}
-              onChange={(e) => {
-                if (showingStoredKey) {
-                  beginReplacingKey("");
-                  return;
-                }
-                setApiKey(e.target.value);
-              }}
-              onKeyDown={(e) => {
-                if (!showingStoredKey) return;
-                if (e.metaKey || e.ctrlKey || e.altKey) return;
-                if (e.key === "Backspace" || e.key === "Delete") {
-                  e.preventDefault();
-                  beginReplacingKey("");
-                  return;
-                }
-                if (e.key.length === 1) {
-                  e.preventDefault();
-                  beginReplacingKey(e.key);
-                }
-              }}
-              onPaste={(e) => {
-                if (!showingStoredKey) return;
-                e.preventDefault();
-                beginReplacingKey(e.clipboardData.getData("text"));
-              }}
-              placeholder={hasKey ? "Paste replacement token" : "Paste Hermes token"}
-              className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
-            />
+        {isLocalHermes && !isReplacingKey ? (
+          <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2 text-[13px] text-foreground">
+            <p>Local authentication</p>
+            <p className="mt-1 leading-5 text-muted-foreground">
+              {credentialSource === "hermes"
+                ? "Using API_SERVER_KEY from the matching local Hermes profile. Nothing to paste into Woodshed."
+                : credentialSource === "environment"
+                  ? "Using the key from Woodshed's development environment."
+                  : credentialSource === "stored"
+                    ? "Using the key already stored by Woodshed."
+                    : "No matching local Hermes key was found. Configure API_SERVER_KEY in the Hermes profile for this port."}
+            </p>
+            {(credentialSource === "stored" ||
+              credentialSource === "missing") && (
+              <button
+                type="button"
+                onClick={() => beginReplacingKey("")}
+                disabled={disabled}
+                className="mt-2 text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+              >
+                {credentialSource === "stored"
+                  ? "Replace custom key"
+                  : "Enter a custom key"}
+              </button>
+            )}
           </div>
-          <p
-            id="hermes-token-help"
-            className="mt-2 text-[13px] leading-5 text-muted-foreground"
-          >
-            This is the value you set as <code>API_SERVER_KEY</code> when
-            configuring the Hermes API server; Woodshed does not issue it.
-            Paste only the value—without “Bearer” or “Authorization:”—and
-            Woodshed stores it in your operating system keychain and adds the
-            authorization header when connecting.
-          </p>
-        </div>
+        ) : (
+          <div className="text-[13px] text-foreground">
+            <label htmlFor="hermes-token" className="block">
+              {isLocalHermes ? "Custom bearer token" : "Bearer token"}
+            </label>
+            <div className="relative mt-1">
+              <input
+                id="hermes-token"
+                aria-describedby="hermes-token-help"
+                ref={keyInputRef}
+                type="password"
+                value={keyInputValue}
+                onFocus={() => {
+                  if (showingStoredKey) {
+                    requestAnimationFrame(() => keyInputRef.current?.select());
+                  }
+                }}
+                onChange={(e) => {
+                  if (showingStoredKey) {
+                    beginReplacingKey("");
+                    return;
+                  }
+                  setApiKey(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (!showingStoredKey) return;
+                  if (e.metaKey || e.ctrlKey || e.altKey) return;
+                  if (e.key === "Backspace" || e.key === "Delete") {
+                    e.preventDefault();
+                    beginReplacingKey("");
+                    return;
+                  }
+                  if (e.key.length === 1) {
+                    e.preventDefault();
+                    beginReplacingKey(e.key);
+                  }
+                }}
+                onPaste={(e) => {
+                  if (!showingStoredKey) return;
+                  e.preventDefault();
+                  beginReplacingKey(e.clipboardData.getData("text"));
+                }}
+                placeholder={
+                  hasKey ? "Paste replacement token" : "Paste Hermes token"
+                }
+                className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
+              />
+            </div>
+            <p
+              id="hermes-token-help"
+              className="mt-2 text-[13px] leading-5 text-muted-foreground"
+            >
+              This is the value you set as <code>API_SERVER_KEY</code> when
+              configuring the Hermes API server; Woodshed does not issue it.
+              Paste only the value—without “Bearer” or “Authorization:”—and
+              Woodshed stores it in an owner-only file inside its
+              application-data directory, then adds the authorization header
+              when connecting.
+            </p>
+          </div>
+        )}
 
         <label className="text-[12px] text-muted-foreground">
           Session key

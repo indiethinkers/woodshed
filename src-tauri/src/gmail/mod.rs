@@ -3,10 +3,9 @@
 // the Mail surface.
 //
 // Layering:
-//   creds.rs       — App Password + email address resolution: keychain
-//                    first (production source of truth), env var second
-//                    (dev override), .env.local last (cargo tauri dev where
-//                    the GUI subprocess didn't inherit `export`-ed vars).
+//   creds.rs       — App Password + email address resolution helpers for the
+//                    prompt-free credential broker, process cache, legacy
+//                    Keychain migration, and development environment fallbacks.
 //   imap_client.rs — Connect, login, SELECT INBOX, fetch the most recent
 //                    N messages as RFC822 bytes. Sync `imap` 2.4 wrapped
 //                    in tokio::task::spawn_blocking at the command layer.

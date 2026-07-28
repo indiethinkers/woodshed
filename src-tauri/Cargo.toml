@@ -44,8 +44,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # Async runtime for Gmail/HTTP commands and app background work.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 
-# OS keychain custody (Gmail App Passwords and integration secrets) + HTTP client
-# (Gmail has no HTTP dep, but gcal/resources/agent/image-cache do).
+# Legacy OS keychain migration plus current calendar-secret custody, and the
+# HTTP client (Gmail has no HTTP dep, but gcal/resources/agent/image-cache do).
 keyring = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
@@ -62,7 +62,7 @@ lol_html = "1"
 imagesize = "0.13"
 
 # Gmail (IMAP + SMTP) — direct from desktop, no sync server. App Passwords
-# live in the operating-system credential store. See src/gmail/.
+# live in the private app-data credential store. See src/gmail/.
 imap = "2.4"
 native-tls = "0.2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }

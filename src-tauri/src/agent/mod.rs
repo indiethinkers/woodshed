@@ -66,6 +66,16 @@ pub struct AgentConfig {
     pub model: String,
     pub session_key: String,
     pub has_api_key: bool,
+    pub credential_source: CredentialSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CredentialSource {
+    Environment,
+    Hermes,
+    Stored,
+    Missing,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -431,7 +441,7 @@ pub fn normalize_meta(
     })
 }
 
-pub fn public_config(meta: HermesConfigMeta, has_env_key: bool) -> AgentConfig {
+pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource) -> AgentConfig {
     AgentConfig {
         display_name: if meta.display_name.trim().is_empty() {
             default_display_name()
@@ -447,7 +457,8 @@ pub fn public_config(meta: HermesConfigMeta, has_env_key: bool) -> AgentConfig {
                 .as_deref()
                 .and_then(normalize_api_key)
                 .is_some()
-            || has_env_key,
+            || credential_source != CredentialSource::Missing,
+        credential_source,
     }
 }
 
@@ -1634,8 +1645,9 @@ mod tests {
         let parsed: HermesConfigMeta = serde_json::from_str(&raw).unwrap();
         assert!(parsed.api_key.is_none());
 
-        let public = public_config(parsed, false);
+        let public = public_config(parsed, CredentialSource::Missing);
         assert!(public.has_api_key);
+        assert_eq!(public.credential_source, CredentialSource::Missing);
         let public_raw = serde_json::to_string(&public).unwrap();
         let public_serialized: serde_json::Value = serde_json::from_str(&public_raw).unwrap();
         assert!(public_serialized.get("apiKey").is_none());

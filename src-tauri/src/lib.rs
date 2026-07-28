@@ -13,6 +13,7 @@
 
 pub mod agent;
 pub mod commands;
+pub mod credentials;
 pub mod email_render;
 pub mod gcal;
 pub mod gmail;
@@ -69,8 +70,8 @@ pub struct AppState {
     /// This keeps a mutation to one message from suppressing authoritative
     /// provider changes to unrelated messages in the same sync batch.
     pub mail_message_epochs: Mutex<std::collections::HashMap<String, u64>>,
-    /// In-memory Gmail credentials cache. Hits the OS keychain at most
-    /// once per app launch.
+    /// In-memory Gmail credentials cache. Avoids repeated app-data reads in a
+    /// running session.
     pub gmail_creds: Arc<gmail::CredsCache>,
     /// In-memory cache of parsed iCal events per calendar. Hydrated
     /// from `<app_data_dir>/gcal-cache/<id>.json` on startup; replaced

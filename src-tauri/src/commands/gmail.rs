@@ -13,6 +13,7 @@ use crate::commands::mail::{
     sanitize_attachment_filename, save_attachment_bytes, strip_brackets, vault_root, Attachment,
     EmailSummary,
 };
+use crate::credentials::{CredentialBroker, CredentialId};
 use crate::gmail::{creds, imap_client, parse, smtp_client, CredsError};
 use crate::AppState;
 use base64::Engine;
@@ -24,8 +25,8 @@ use tauri_plugin_store::StoreExt;
 
 /// Tauri store file (shared with config — same single source for all
 /// app-level metadata). Gmail account metadata (display name, created-at)
-/// lives under the `gmail_accounts` key keyed by email. Secrets stay in
-/// the OS keychain.
+/// lives under the `gmail_accounts` key keyed by email. Secrets stay behind
+/// `CredentialBroker`.
 const STORE_FILE: &str = "config.json";
 const STORE_KEY: &str = "gmail_accounts";
 const MAX_OUTGOING_ATTACHMENT_COUNT: usize = 10;
@@ -47,7 +48,7 @@ struct GmailAccountMeta {
     sender_name: String,
     /// RFC 3339.
     created_at: String,
-    /// Pre-keychain builds wrote the secret here. Deserialize it once for
+    /// Older builds wrote the secret here. Deserialize it once for
     /// migration, but never serialize it back to config.json.
     #[serde(default, skip_serializing)]
     app_password: String,
@@ -127,10 +128,9 @@ pub struct GmailSyncResult {
 
 // ─── Credential commands ────────────────────────────────────────────────────
 
-/// Add (or update) a Gmail account: persist the App Password to the OS
-/// keychain, the metadata (display name, created-at) to the Tauri store,
-/// and prime the in-memory creds cache so subsequent operations don't
-/// re-prompt for keychain access.
+/// Add (or update) a Gmail account: persist the App Password to the private
+/// app-data credential store, keep non-secret metadata in the Tauri store, and
+/// prime the in-memory cache.
 #[tauri::command]
 pub async fn gmail_account_set(
     app: AppHandle,
@@ -157,7 +157,8 @@ pub async fn gmail_account_set(
         .sender_name
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    creds::store(&email, &app_password).map_err(creds_err_to_string)?;
+    let broker = CredentialBroker::for_app(&app)?;
+    broker.save(&CredentialId::gmail(&email), &app_password)?;
     write_account_meta(
         &app,
         &email,
@@ -228,7 +229,7 @@ pub async fn gmail_accounts_list(app: AppHandle) -> Result<Vec<GmailAccountInfo>
 /// Update a Gmail account's metadata by email. Both `display_name` and
 /// `sender_name` are independently optional — `None` leaves the
 /// existing value alone, an empty string clears it, a non-empty string
-/// sets it. The keychain App Password is untouched.
+/// sets it. The brokered App Password is untouched.
 #[tauri::command]
 pub async fn gmail_account_update(
     app: AppHandle,
@@ -293,7 +294,8 @@ pub async fn gmail_account_update(
     })
 }
 
-/// Remove a Gmail account by email. Drops the keychain secret, the
+/// Remove a Gmail account by email. Drops the local secret, any legacy
+/// keychain secret, the
 /// Tauri-store metadata, the live IMAP session, and the cached creds.
 /// Idempotent — succeeds even when the account isn't configured.
 #[tauri::command]
@@ -306,7 +308,11 @@ pub async fn gmail_account_remove(
     if email.is_empty() {
         return Err("email is required".into());
     }
-    creds::forget(&email).map_err(creds_err_to_string)?;
+    let broker = CredentialBroker::for_app(&app)?;
+    broker.forget(&CredentialId::gmail(&email))?;
+    if let Err(error) = creds::forget_legacy_keychain(&email) {
+        eprintln!("forget legacy Gmail keychain entry for {email}: {error}");
+    }
     state.gmail_creds.invalidate(&email);
     let _ = clear_account_meta(&app, &email);
     let pool = state.gmail_pool.clone();
@@ -769,7 +775,7 @@ pub async fn gmail_reply(
     })
 }
 
-// ─── Tauri-store helpers (metadata; secrets stay in keychain) ───────────────
+// ─── Tauri-store helpers (metadata only) ────────────────────────────────────
 
 fn write_account_meta(app: &AppHandle, email: &str, meta: GmailAccountMeta) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
@@ -824,8 +830,9 @@ fn read_all_accounts_from_app(
 /// Order:
 ///   1. In-memory cache (`CredsCache`) — set on add and on first resolve.
 ///   2. Dev env (`GMAIL_EMAIL`/`GMAIL_APP_PASSWORD`, `.env.local`).
-///   3. OS credential store.
+///   3. Private app-data credential store.
 ///   4. Legacy plaintext config value, migrated into the credential store.
+///   5. Legacy OS keychain, imported once as the final keychain read.
 pub(crate) fn resolve_credentials(
     app: &AppHandle,
     state: &AppState,
@@ -839,18 +846,14 @@ pub(crate) fn resolve_credentials(
         state.gmail_creds.set(c.clone());
         return Ok(c);
     }
-    if let Some(app_password) = creds::keychain_password(email) {
-        let c = creds::Credentials {
-            email: email.to_string(),
-            app_password,
-        };
-        state.gmail_creds.set(c.clone());
+    let broker = CredentialBroker::for_app(app)?;
+    if let Some(c) = creds::persisted_for(&state.gmail_creds, &broker, email)? {
         return Ok(c);
     }
     if let Some(meta) = read_account_meta(app, email)? {
         if !meta.app_password.trim().is_empty() {
             let app_password = meta.app_password.trim().to_string();
-            creds::store(email, &app_password).map_err(creds_err_to_string)?;
+            broker.save(&CredentialId::gmail(email), &app_password)?;
             scrub_plaintext_password(app, email, meta)?;
             let c = creds::Credentials {
                 email: email.to_string(),
@@ -860,13 +863,25 @@ pub(crate) fn resolve_credentials(
             return Ok(c);
         }
     }
+    if let Some(app_password) = creds::legacy_keychain_password(email) {
+        broker.save(&CredentialId::gmail(email), &app_password)?;
+        if let Err(error) = creds::forget_legacy_keychain(email) {
+            eprintln!("forget migrated Gmail keychain entry for {email}: {error}");
+        }
+        let c = creds::Credentials {
+            email: email.to_string(),
+            app_password,
+        };
+        state.gmail_creds.set(c.clone());
+        return Ok(c);
+    }
     Err(CredsError::NotFound {
         email: email.to_string(),
     }
     .to_string())
 }
 
-/// Rewrite legacy metadata after moving its plaintext secret to keychain.
+/// Rewrite legacy metadata after moving its plaintext secret to the broker.
 fn scrub_plaintext_password(
     app: &AppHandle,
     email: &str,
@@ -878,10 +893,6 @@ fn scrub_plaintext_password(
 }
 
 // ─── Error mapping ──────────────────────────────────────────────────────────
-
-fn creds_err_to_string(e: CredsError) -> String {
-    e.to_string()
-}
 
 fn imap_err_to_string(e: imap_client::ImapError) -> String {
     match &e {

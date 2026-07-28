@@ -15,7 +15,8 @@ const STORE_FILE: &str = "config.json";
 #[tauri::command]
 pub fn agent_config_get(app: AppHandle) -> Result<AgentConfig, String> {
     let meta = read_meta(&app)?;
-    Ok(agent::public_config(meta, agent::key::has_env_key()))
+    let credential_source = agent::key::source(&app, &meta);
+    Ok(agent::public_config(meta, credential_source))
 }
 
 #[tauri::command]
@@ -28,34 +29,36 @@ pub fn agent_config_set(app: AppHandle, input: AgentConfigInput) -> Result<Agent
     let mut meta = agent::normalize_meta(input, &existing)?;
 
     if let Some(api_key) = api_key {
-        agent::key::store(&api_key)?;
+        agent::key::store(&app, &api_key)?;
         meta.api_key = None;
         meta.api_key_configured = true;
     }
 
     write_meta(&app, &meta)?;
-    Ok(agent::public_config(meta, agent::key::has_env_key()))
+    let credential_source = agent::key::source(&app, &meta);
+    Ok(agent::public_config(meta, credential_source))
 }
 
 #[tauri::command]
 pub fn agent_config_clear(app: AppHandle) -> Result<AgentConfig, String> {
-    agent::key::forget()?;
+    agent::key::forget(&app)?;
     let meta = HermesConfigMeta::default();
     write_meta(&app, &meta)?;
-    Ok(agent::public_config(meta, agent::key::has_env_key()))
+    let credential_source = agent::key::source(&app, &meta);
+    Ok(agent::public_config(meta, credential_source))
 }
 
 #[tauri::command]
 pub async fn agent_connection_test(app: AppHandle) -> Result<AgentConnectionTestResult, String> {
     let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&meta).map_err(|e| e.to_string())?;
+    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
     agent::test_connection(&meta, &api_key).await
 }
 
 #[tauri::command]
 pub fn agent_chat_stream(app: AppHandle, input: AgentChatStreamInput) -> Result<(), String> {
     let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&meta).map_err(|e| e.to_string())?;
+    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
     let stream_id = input.stream_id.clone();
     let stream_id_for_event = stream_id.clone();
     let chat_input = AgentChatInput {
@@ -222,7 +225,7 @@ fn read_meta(app: &AppHandle) -> Result<HermesConfigMeta, String> {
         None => Ok(HermesConfigMeta::default()),
     }?;
     if let Some(legacy_key) = meta.api_key.as_deref().and_then(agent::normalize_api_key) {
-        agent::key::store(&legacy_key)?;
+        agent::key::store(app, &legacy_key)?;
         meta.api_key = None;
         meta.api_key_configured = true;
         write_meta(app, &meta)?;
