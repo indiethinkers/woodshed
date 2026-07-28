@@ -792,11 +792,9 @@ pub async fn tags_with_counts(
             continue;
         }
         if seen_uids.insert(ev.uid.clone()) {
-            bump(
-                "event",
-                crate::index::parse_record_time_ms(&ev.dtstart_rfc3339),
-                &mut counts,
-            );
+            // Calendar DTSTART is the event schedule, not the moment the
+            // generated #event table was created.
+            bump("event", None, &mut counts);
         }
     }
 
@@ -991,6 +989,24 @@ mod tests {
             let (cached_gen, _) = guard.as_ref().unwrap();
             assert_ne!(*cached_gen, state.vault_generation());
         }
+    }
+
+    #[test]
+    fn index_rebuild_invalidates_both_tag_caches() {
+        let state = bare_state();
+        let generation = state.vault_generation();
+        state
+            .tag_table_cache
+            .lock()
+            .unwrap()
+            .insert("roadmap".to_string(), (generation, Vec::new()));
+        *state.tags_counts_cache.lock().unwrap() = Some((generation, Vec::new()));
+
+        state.invalidate_tag_caches();
+
+        assert!(state.tag_table_cache.lock().unwrap().is_empty());
+        assert!(state.tags_counts_cache.lock().unwrap().is_none());
+        assert_eq!(state.vault_generation(), generation + 1);
     }
 
     #[test]

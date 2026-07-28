@@ -206,6 +206,7 @@ pub fn watcher_start(
             match index_for_rebuild.rebuild_from_vault(&vault_for_rebuild) {
                 Ok(count) => {
                     crate::log_info!("index", "rebuild complete: {count} documents");
+                    app_for_rebuild.state::<AppState>().invalidate_tag_caches();
                     let _ = app_for_rebuild.emit("index:rebuild:done", count);
                 }
                 Err(e) => {

@@ -100,6 +100,15 @@ impl AppState {
         self.vault_generation.load(Ordering::Relaxed)
     }
 
+    /// Invalidate tag-derived memos after a whole-index rebuild. A rebuild
+    /// changes the index without a vault write, so the normal watcher-backed
+    /// generation bump does not run.
+    pub fn invalidate_tag_caches(&self) {
+        self.vault_generation.fetch_add(1, Ordering::Relaxed);
+        self.tag_table_cache.lock_recover().clear();
+        *self.tags_counts_cache.lock_recover() = None;
+    }
+
     /// Open the index DB if not yet opened, returning a clone of the handle.
     /// Tauri AppHandle is required because the DB lives under app_data_dir.
     pub fn ensure_index(&self, app: &tauri::AppHandle) -> Result<Arc<index::IndexHandle>, String> {

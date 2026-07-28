@@ -21,6 +21,7 @@ use crate::parsers;
 use crate::sync_ext::MutexRecover;
 use crate::wikilinks::{labels_match, split_wikilink_inner};
 use anyhow::{Context, Result};
+use chrono::TimeZone;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -830,7 +831,11 @@ fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
              hint = excluded.hint, \
              href = excluded.href, \
              area = excluded.area, \
-             created_at = excluded.created_at, \
+             created_at = CASE \
+                 WHEN documents.created_at = 0 THEN excluded.created_at \
+                 WHEN excluded.created_at = 0 THEN documents.created_at \
+                 ELSE MIN(documents.created_at, excluded.created_at) \
+             END, \
              updated_at = excluded.updated_at",
         params![
             doc.kind,
@@ -1198,52 +1203,75 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
         Some(k) => k,
         None => return Ok(None),
     };
-    let updated_at = file_mtime_ms(abs_path);
+    let times = file_times_ms(abs_path);
     if matches!(kind, Kind::Mail) {
         return Ok(mail::load_email_from_path(abs_path)
-            .map(|email| project_email(&email, &rel_str, updated_at)));
+            .map(|email| project_email(&email, &rel_str, times)));
     }
     let content = crate::vault::read_record(abs_path)?;
     let doc = match kind {
         Kind::Task => parsers::parse_task(&content)
             .ok()
-            .map(|t| project_task(&t, &rel_str, updated_at)),
+            .map(|t| project_task(&t, &rel_str, times)),
         Kind::Event => parsers::parse_event(&content)
             .ok()
-            .map(|e| project_event(&e, &rel_str, updated_at)),
+            .map(|e| project_event(&e, &rel_str, times)),
         Kind::Daily => parsers::parse_daily(&content)
             .ok()
-            .map(|d| project_daily(&d, &rel_str, updated_at)),
+            .map(|d| project_daily(&d, &rel_str, times)),
         Kind::Note => parsers::parse_note(&content)
             .ok()
-            .map(|n| project_note(&n, &rel_str, updated_at)),
+            .map(|n| project_note(&n, &rel_str, times)),
         Kind::Person => parsers::parse_person(&content)
             .ok()
-            .map(|p| project_person(&p, &rel_str, updated_at)),
+            .map(|p| project_person(&p, &rel_str, times)),
         Kind::Resource => parsers::parse_resource(&content)
             .ok()
-            .map(|b| project_resource(&b, &rel_str, updated_at)),
+            .map(|b| project_resource(&b, &rel_str, times)),
         Kind::Area => parsers::parse_area(&content)
             .ok()
-            .map(|a| project_area(&a, &rel_str, updated_at)),
+            .map(|a| project_area(&a, &rel_str, times)),
         Kind::AgentChat => agent::parse_chat(&content, &rel_str)
             .ok()
-            .map(|c| project_agent_chat(&c, &rel_str, updated_at)),
+            .map(|c| project_agent_chat(&c, &rel_str, times)),
         Kind::Mail => unreachable!("mail handled before opening generic record content"),
         Kind::TableRow => parsers::parse_row(&content)
             .ok()
-            .map(|r| project_row(&r, &rel_str, updated_at)),
+            .map(|r| project_row(&r, &rel_str, times)),
     };
     Ok(doc)
 }
 
-fn file_mtime_ms(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
+#[derive(Clone, Copy)]
+struct IndexTimes {
+    created: i64,
+    updated: i64,
+}
+
+fn file_times_ms(path: &Path) -> IndexTimes {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return IndexTimes {
+            created: 0,
+            updated: 0,
+        };
+    };
+    let updated = metadata
+        .modified()
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .and_then(system_time_ms)
+        .unwrap_or(0);
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(system_time_ms)
+        .unwrap_or(updated);
+    IndexTimes { created, updated }
+}
+
+fn system_time_ms(time: std::time::SystemTime) -> Option<i64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis() as i64)
 }
 
 fn created_at_ms(value: Option<&str>, fallback: i64) -> i64 {
@@ -1256,18 +1284,26 @@ pub(crate) fn parse_record_time_ms(raw: &str) -> Option<i64> {
         .ok()
         .or_else(|| {
             chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
-                .map(|date| date.and_utc().timestamp_millis())
                 .ok()
+                .and_then(local_time_ms)
         })
         .or_else(|| {
             chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
                 .ok()?
                 .and_hms_opt(0, 0, 0)
-                .map(|date| date.and_utc().timestamp_millis())
+                .and_then(local_time_ms)
         })
 }
 
-fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
+fn local_time_ms(date: chrono::NaiveDateTime) -> Option<i64> {
+    match chrono::Local.from_local_datetime(&date) {
+        chrono::LocalResult::Single(value) => Some(value.timestamp_millis()),
+        chrono::LocalResult::Ambiguous(earlier, _) => Some(earlier.timestamp_millis()),
+        chrono::LocalResult::None => None,
+    }
+}
+
+fn project_task(t: &parsers::Task, path: &str, times: IndexTimes) -> IndexedDoc {
     let hint_parts: Vec<String> = [match t.status {
         parsers::TaskStatus::Backlog => "backlog",
         parsers::TaskStatus::InProgress => "in-progress",
@@ -1290,13 +1326,13 @@ fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
         hint: Some(hint_parts.join(" · ")),
         href,
         area: Some(t.area.clone()),
-        created_at: created_at_ms(t.created.as_deref(), updated_at),
+        created_at: created_at_ms(t.created.as_deref(), times.created),
         tags: t.tags.clone(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_event(e: &parsers::Event, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_event(e: &parsers::Event, path: &str, times: IndexTimes) -> IndexedDoc {
     let tags = if e.provider == Some(parsers::EventProvider::Ical) {
         e.tags.clone()
     } else {
@@ -1313,13 +1349,13 @@ fn project_event(e: &parsers::Event, path: &str, updated_at: i64) -> IndexedDoc 
         hint: Some(format_event_date_hint(&e.date)),
         href: format!("/cadence/event/{}", e.id),
         area: Some(e.area.clone()),
-        created_at: created_at_ms(Some(&e.date), updated_at),
+        created_at: times.created,
         tags,
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_daily(d: &parsers::DailyJournal, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_daily(d: &parsers::DailyJournal, path: &str, times: IndexTimes) -> IndexedDoc {
     IndexedDoc {
         kind: "daily",
         doc_id: d.date.clone(),
@@ -1329,13 +1365,13 @@ fn project_daily(d: &parsers::DailyJournal, path: &str, updated_at: i64) -> Inde
         hint: Some(d.date.clone()),
         href: format!("/cadence/{}", d.date),
         area: None,
-        created_at: created_at_ms(Some(&d.date), updated_at),
+        created_at: times.created,
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_note(n: &parsers::Note, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_note(n: &parsers::Note, path: &str, times: IndexTimes) -> IndexedDoc {
     let hint = if n.tags.is_empty() {
         None
     } else {
@@ -1350,13 +1386,13 @@ fn project_note(n: &parsers::Note, path: &str, updated_at: i64) -> IndexedDoc {
         hint,
         href: format!("/notebook/{}", n.id),
         area: n.area.clone(),
-        created_at: created_at_ms(Some(&n.created), updated_at),
+        created_at: created_at_ms(Some(&n.created), times.created),
         tags: n.tags.clone(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_person(p: &parsers::Person, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_person(p: &parsers::Person, path: &str, times: IndexTimes) -> IndexedDoc {
     let hint = match (p.role.is_empty(), p.company.is_empty()) {
         (false, false) => Some(format!("{} · {}", p.role, p.company)),
         (false, true) => Some(p.role.clone()),
@@ -1380,13 +1416,13 @@ fn project_person(p: &parsers::Person, path: &str, updated_at: i64) -> IndexedDo
         hint,
         href: format!("/people/{}", p.id),
         area: p.area.clone(),
-        created_at: created_at_ms(p.created.as_deref(), updated_at),
+        created_at: created_at_ms(p.created.as_deref(), times.created),
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_resource(b: &parsers::Resource, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_resource(b: &parsers::Resource, path: &str, times: IndexTimes) -> IndexedDoc {
     IndexedDoc {
         kind: "resource",
         doc_id: b.id.clone(),
@@ -1396,13 +1432,13 @@ fn project_resource(b: &parsers::Resource, path: &str, updated_at: i64) -> Index
         hint: Some(b.source.clone()),
         href: format!("/resources/{}", b.id),
         area: None,
-        created_at: created_at_ms(Some(&b.saved), updated_at),
+        created_at: created_at_ms(Some(&b.saved), times.created),
         tags: b.tags.clone(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_area(area: &parsers::Area, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_area(area: &parsers::Area, path: &str, times: IndexTimes) -> IndexedDoc {
     IndexedDoc {
         kind: "area",
         doc_id: area.id.clone(),
@@ -1413,13 +1449,13 @@ fn project_area(area: &parsers::Area, path: &str, updated_at: i64) -> IndexedDoc
         href: format!("/areas/{}", area.id),
         // Areas don't have an `area:` field themselves — they ARE the area.
         area: Some(area.id.clone()),
-        created_at: created_at_ms(area.created.as_deref(), updated_at),
+        created_at: created_at_ms(area.created.as_deref(), times.created),
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_agent_chat(chat: &agent::AgentChatRecord, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_agent_chat(chat: &agent::AgentChatRecord, path: &str, times: IndexTimes) -> IndexedDoc {
     let body = chat
         .messages
         .iter()
@@ -1435,13 +1471,13 @@ fn project_agent_chat(chat: &agent::AgentChatRecord, path: &str, updated_at: i64
         hint: Some(format!("{} · {}", chat.agent, chat.model)),
         href: format!("/agent?chat={}", chat.id),
         area: None,
-        created_at: created_at_ms(Some(&chat.created), updated_at),
+        created_at: created_at_ms(Some(&chat.created), times.created),
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_email(email: &mail::EmailSummary, path: &str, times: IndexTimes) -> IndexedDoc {
     let hint = if email.from_email.is_empty() {
         Some(email.from.clone())
     } else {
@@ -1468,13 +1504,13 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
         hint,
         href: format!("/mail/{}", email.id),
         area: None,
-        created_at: created_at_ms(Some(&email.date), updated_at),
+        created_at: created_at_ms(Some(&email.date), times.created),
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
-fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
+fn project_row(row: &parsers::Row, path: &str, times: IndexTimes) -> IndexedDoc {
     let cells_text = row_cells_text(row);
     let title = row_title(row);
     let body = [cells_text, row.body.clone()]
@@ -1491,9 +1527,9 @@ fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
         hint: Some(row.table.clone()),
         href: format!("/tables/{}/{}", row.table, row.id),
         area: None,
-        created_at: created_at_ms(Some(&row.created), updated_at),
+        created_at: created_at_ms(Some(&row.created), times.created),
         tags: Vec::new(),
-        updated_at,
+        updated_at: times.updated,
     }
 }
 
@@ -1598,39 +1634,47 @@ pub fn default_db_path(app_data_dir: &Path) -> PathBuf {
 /// already have the parsed struct in hand and don't want to round-trip
 /// through the filesystem.
 pub fn doc_from_task(task: &parsers::Task, vault_rel_path: &str) -> IndexedDoc {
-    project_task(task, vault_rel_path, now_ms())
+    project_task(task, vault_rel_path, current_times())
 }
 
 pub fn doc_from_event(event: &parsers::Event, vault_rel_path: &str) -> IndexedDoc {
-    project_event(event, vault_rel_path, now_ms())
+    project_event(event, vault_rel_path, current_times())
 }
 
 pub fn doc_from_daily(daily: &parsers::DailyJournal, vault_rel_path: &str) -> IndexedDoc {
-    project_daily(daily, vault_rel_path, now_ms())
+    project_daily(daily, vault_rel_path, current_times())
 }
 
 pub fn doc_from_note(note: &parsers::Note, vault_rel_path: &str) -> IndexedDoc {
-    project_note(note, vault_rel_path, now_ms())
+    project_note(note, vault_rel_path, current_times())
 }
 
 pub fn doc_from_person(person: &parsers::Person, vault_rel_path: &str) -> IndexedDoc {
-    project_person(person, vault_rel_path, now_ms())
+    project_person(person, vault_rel_path, current_times())
 }
 
 pub fn doc_from_resource(resource: &parsers::Resource, vault_rel_path: &str) -> IndexedDoc {
-    project_resource(resource, vault_rel_path, now_ms())
+    project_resource(resource, vault_rel_path, current_times())
 }
 
 pub fn doc_from_agent_chat(chat: &agent::AgentChatRecord, vault_rel_path: &str) -> IndexedDoc {
-    project_agent_chat(chat, vault_rel_path, now_ms())
+    project_agent_chat(chat, vault_rel_path, current_times())
 }
 
 pub fn doc_from_email(email: &mail::EmailSummary, vault_rel_path: &str) -> IndexedDoc {
-    project_email(email, vault_rel_path, now_ms())
+    project_email(email, vault_rel_path, current_times())
 }
 
 pub fn doc_from_row(row: &parsers::Row, vault_rel_path: &str) -> IndexedDoc {
-    project_row(row, vault_rel_path, now_ms())
+    project_row(row, vault_rel_path, current_times())
+}
+
+fn current_times() -> IndexTimes {
+    let now = now_ms();
+    IndexTimes {
+        created: now,
+        updated: now,
+    }
 }
 
 fn now_ms() -> i64 {
@@ -1763,6 +1807,33 @@ mod tests {
             idx.tag_counts().unwrap(),
             vec![("roadmap".to_string(), 2, Some(100))]
         );
+
+        older.created_at = 300;
+        idx.upsert(&older).unwrap();
+        assert_eq!(
+            idx.tag_counts().unwrap(),
+            vec![("roadmap".to_string(), 2, Some(100))],
+            "editing a legacy record must not move the tag's creation date"
+        );
+    }
+
+    #[test]
+    fn offsetless_record_times_preserve_the_local_calendar_date() {
+        let millis = parse_record_time_ms("2026-01-02T00:30:00").unwrap();
+        let local = chrono::DateTime::from_timestamp_millis(millis)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        assert_eq!(local.date_naive().to_string(), "2026-01-02");
+    }
+
+    #[test]
+    fn event_schedule_time_is_not_used_as_record_creation_time() {
+        let event = parsers::parse_event(
+            "---\ntype: event\nid: e_001\ntitle: Future event\ndate: 2099-04-25T09:00:00-04:00\nduration: 15\narea: example\nattendees: []\n---\n",
+        )
+        .unwrap();
+        let indexed = doc_from_event(&event, "events/e_001.md");
+        assert!(indexed.created_at < parse_record_time_ms(&event.date).unwrap());
     }
 
     #[test]
