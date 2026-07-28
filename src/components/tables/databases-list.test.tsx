@@ -2,10 +2,19 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, to, params: _params, ...props }: React.ComponentProps<"a"> & {
+  Link: ({
+    children,
+    to,
+    params: _params,
+    ...props
+  }: React.ComponentProps<"a"> & {
     to?: string;
     params?: unknown;
-  }) => <a {...props} href={to}>{children}</a>,
+  }) => (
+    <a {...props} href={to}>
+      {children}
+    </a>
+  ),
   useNavigate: () => vi.fn(),
 }));
 vi.mock("@/lib/hooks/use-tables", () => ({
@@ -26,7 +35,9 @@ vi.mock("@/lib/hooks/use-tables", () => ({
     setTagFavorite: { mutate: vi.fn() },
   }),
   useDatabaseTagFavorites: () => ({ data: [] }),
-  useTableMutations: () => ({ create: { isPending: false, mutateAsync: vi.fn() } }),
+  useTableMutations: () => ({
+    create: { isPending: false, mutateAsync: vi.fn() },
+  }),
 }));
 vi.mock("@/lib/hooks/use-tag-table", () => ({
   useTagsWithCounts: () => ({
@@ -38,33 +49,39 @@ vi.mock("@/lib/hooks/use-tag-table", () => ({
 import { DatabasesList } from "./databases-list";
 
 describe("DatabasesList", () => {
-  it("renders visible Custom and Generated groups and omits row page icons", () => {
+  it("renders Custom and Generated as separate inline databases", () => {
     render(<DatabasesList />);
 
-    const customGroup = screen
+    const customTable = screen
       .getByRole("heading", { name: "Custom" })
-      .closest<HTMLElement>("[data-record-group]")!;
-    const generatedGroup = screen
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
+    const generatedTable = screen
       .getByRole("heading", { name: "Generated" })
-      .closest<HTMLElement>("[data-record-group]")!;
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
     const custom = screen.getByRole("link", { name: "Custom database" });
     const generated = screen.getByRole("link", { name: "#generated" });
     expect(
-      customGroup.compareDocumentPosition(generatedGroup) &
+      customTable.compareDocumentPosition(generatedTable) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(customGroup).toHaveTextContent("Custom");
-    expect(customGroup).toHaveTextContent("1 database");
-    expect(generatedGroup).toHaveTextContent("Generated");
-    expect(generatedGroup).toHaveTextContent("1 database");
-    expect(customGroup.compareDocumentPosition(custom)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(generatedGroup.compareDocumentPosition(generated)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(within(customGroup).getByRole("separator")).toBeInTheDocument();
-    expect(within(generatedGroup).getByRole("separator")).toBeInTheDocument();
+    expect(customTable).toContainElement(custom);
+    expect(customTable).not.toContainElement(generated);
+    expect(generatedTable).toContainElement(generated);
+    expect(generatedTable).not.toContainElement(custom);
+    expect(customTable).toHaveTextContent("1 database");
+    expect(generatedTable).toHaveTextContent("1 database");
+    expect(
+      within(customTable).getByRole("button", { name: "Created" }),
+    ).toBeInTheDocument();
+    expect(
+      within(generatedTable).queryByRole("button", { name: "Created" }),
+    ).toBeNull();
+    expect(
+      within(customTable).getByRole("button", { name: "New database" }),
+    ).toBeInTheDocument();
+    expect(
+      within(generatedTable).queryByRole("button", { name: "New database" }),
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: /^Kind$/ }),
     ).not.toBeInTheDocument();

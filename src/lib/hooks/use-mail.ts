@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   useInfiniteQuery,
   useQuery,
@@ -82,6 +82,24 @@ function updateCachedEmails(
       }),
     })),
   };
+}
+
+function asRead<T extends EmailSummary>(email: T): T {
+  const labels = email.labels.filter(
+    (label) => label.toLowerCase() !== "unread",
+  );
+  if (!labels.some((label) => label.toLowerCase() === "read")) {
+    labels.push("read");
+  }
+  return { ...email, read: true, labels };
+}
+
+function replaceEmail<T extends EmailSummary>(
+  emails: T[] | undefined,
+  id: string,
+  replacement: T,
+): T[] | undefined {
+  return emails?.map((email) => (email.id === id ? replacement : email));
 }
 
 function restoreCachedEmail(
@@ -256,60 +274,97 @@ export function useThread(threadId: string | null | undefined) {
  * mark-reads would otherwise thrash the list with mid-flight refetches.
  * On error we restore the previous cache.
  *
- * Short-circuits when no cached copy remains unread. This matters
- * because EmailDetail's auto-mark-read effect re-runs on every render
- * (markRead is a new function ref each time). Without the early return,
- * every call would produce new cache values, which re-render EmailDetail
- * and create an infinite loop that React caps with "Maximum update depth
- * exceeded."
+ * Short-circuits when no cached copy remains unread, so the inbox-open action
+ * and the detail-view fallback can safely overlap without duplicate remote
+ * calls or unnecessary cache writes.
  */
 export function useMarkRead() {
   const qc = useQueryClient();
-  return async (id: string) => {
-    const previousList = qc.getQueryData<MailCache>(["emails"]);
-    const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
-    const previousThreads = qc
-      .getQueriesData<EmailSummary[]>({ queryKey: ["thread"] })
-      .filter(([, messages]) =>
-        messages?.some((email) => email.id === id && !email.read),
-      );
-    const cachedEmail = findCachedEmail(previousList, id)?.email;
-    const listNeedsUpdate = cachedEmail ? !cachedEmail.read : false;
-    const oneNeedsUpdate = previousOne ? !previousOne.read : false;
-    if (!listNeedsUpdate && !oneNeedsUpdate && previousThreads.length === 0) {
-      return;
-    }
-
-    if (listNeedsUpdate) {
-      qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
-        updateCachedEmails(old, (email) =>
-          email.id === id ? { ...email, read: true } : email,
-        ),
-      );
-    }
-    if (oneNeedsUpdate) {
-      qc.setQueryData<EmailSummary | null | undefined>(["email", id], (old) =>
-        old ? { ...old, read: true } : old,
-      );
-    }
-    for (const [queryKey] of previousThreads) {
-      qc.setQueryData<EmailSummary[] | undefined>(queryKey, (old) =>
-        old?.map((email) =>
-          email.id === id ? { ...email, read: true } : email,
-        ),
-      );
-    }
-    try {
-      await mailMarkRead(id);
-    } catch (e) {
-      if (previousList) qc.setQueryData(["emails"], previousList);
-      if (previousOne !== undefined) qc.setQueryData(["email", id], previousOne);
-      for (const [queryKey, previousThread] of previousThreads) {
-        qc.setQueryData(queryKey, previousThread);
+  return useCallback(
+    async (id: string) => {
+      const previousList = qc.getQueryData<MailCache>(["emails"]);
+      const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
+      const previousListEmail = findCachedEmail(previousList, id)?.email;
+      const previousThreads = qc
+        .getQueriesData<EmailSummary[]>({ queryKey: ["thread"] })
+        .flatMap(([queryKey, messages]) => {
+          const email = messages?.find(
+            (candidate) => candidate.id === id && !candidate.read,
+          );
+          return email ? [[queryKey, email] as const] : [];
+        });
+      const previousFullMessages = qc
+        .getQueriesData<EmailFull | null>({ queryKey: ["email-full", id] })
+        .flatMap(([queryKey, email]) =>
+          email?.id === id && !email.read ? [[queryKey, email] as const] : [],
+        );
+      const listNeedsUpdate = previousListEmail
+        ? !previousListEmail.read
+        : false;
+      const oneNeedsUpdate = previousOne ? !previousOne.read : false;
+      if (
+        !listNeedsUpdate &&
+        !oneNeedsUpdate &&
+        previousThreads.length === 0 &&
+        previousFullMessages.length === 0
+      ) {
+        return;
       }
-      throw e;
-    }
-  };
+
+      if (listNeedsUpdate) {
+        qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+          updateCachedEmails(old, (email) =>
+            email.id === id ? asRead(email) : email,
+          ),
+        );
+      }
+      if (oneNeedsUpdate) {
+        qc.setQueryData<EmailSummary | null | undefined>(
+          ["email", id],
+          (old) => (old ? asRead(old) : old),
+        );
+      }
+      for (const [queryKey] of previousThreads) {
+        qc.setQueryData<EmailSummary[] | undefined>(queryKey, (old) =>
+          old?.map((email) => (email.id === id ? asRead(email) : email)),
+        );
+      }
+      for (const [queryKey] of previousFullMessages) {
+        qc.setQueryData<EmailFull | null | undefined>(queryKey, (old) =>
+          old ? asRead(old) : old,
+        );
+      }
+      try {
+        await mailMarkRead(id);
+        // A full-message read may have started before the optimistic update.
+        // Refresh it from the now-updated local record instead of retaining a
+        // stale unread copy for its five-minute stale window.
+        void qc.invalidateQueries({ queryKey: ["email-full", id] });
+      } catch (e) {
+        if (previousListEmail) {
+          qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+            updateCachedEmails(old, (email) =>
+              email.id === id ? previousListEmail : email,
+            ),
+          );
+        }
+        if (previousOne !== undefined)
+          qc.setQueryData(["email", id], previousOne);
+        for (const [queryKey, previousThreadEmail] of previousThreads) {
+          qc.setQueryData<EmailSummary[] | undefined>(queryKey, (old) =>
+            replaceEmail(old, id, previousThreadEmail),
+          );
+        }
+        for (const [queryKey, previousFullMessage] of previousFullMessages) {
+          qc.setQueryData<EmailFull | null | undefined>(queryKey, (old) =>
+            old?.id === id ? previousFullMessage : old,
+          );
+        }
+        throw e;
+      }
+    },
+    [qc],
+  );
 }
 
 /**

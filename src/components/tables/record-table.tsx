@@ -70,11 +70,9 @@ interface RecordTableProps<T> {
   loading?: boolean;
   rowKey: (row: T) => string;
   rowHref: (row: T) => string;
-  /** Optional visual grouping applied after the current filters and sorts. */
-  groupBy?: (row: T) => string;
-  /** Preferred group order; unlisted groups follow alphabetically. */
-  groupOrder?: readonly string[];
-  /** Big page title — matches the `#tag` heading on the event table. */
+  /** Page tables own the page heading; inline tables sit inside a page. */
+  variant?: "page" | "inline";
+  /** Page or inline-table title. */
   title: string;
   /** Noun used in the "visible / total" count, e.g. "notes". */
   unit?: string;
@@ -138,8 +136,7 @@ export function RecordTable<T>({
   loading = false,
   rowKey,
   rowHref,
-  groupBy,
-  groupOrder,
+  variant = "page",
   title,
   unit = "rows",
   action,
@@ -177,7 +174,10 @@ export function RecordTable<T>({
   // Selection only tracks rows the user can currently see — filtering a row
   // out drops it from the active selection by construction.
   const selectedRows = useMemo(
-    () => (selectable ? visibleRows.filter((row) => selectedKeys.has(rowKey(row))) : []),
+    () =>
+      selectable
+        ? visibleRows.filter((row) => selectedKeys.has(rowKey(row)))
+        : [],
     [selectable, visibleRows, selectedKeys, rowKey],
   );
 
@@ -193,7 +193,8 @@ export function RecordTable<T>({
   function toggleAll() {
     const visibleKeys = visibleRows.map(rowKey);
     const allSelected =
-      visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
+      visibleKeys.length > 0 &&
+      visibleKeys.every((key) => selectedKeys.has(key));
     setSelectedKeys(allSelected ? new Set() : new Set(visibleKeys));
   }
 
@@ -214,21 +215,33 @@ export function RecordTable<T>({
     !totalOnlyWhenUnfiltered ||
     query.trim().length > 0 ||
     filters.conditions.length > 0;
+  const countUnit = rows.length === 1 ? singularize(unit) : unit;
 
   return (
-    <div className="w-full pb-24">
-      <header className="mb-5 w-full">
+    <div
+      data-record-table-variant={variant}
+      className={variant === "page" ? "w-full pb-24" : "w-full"}
+    >
+      <header className={variant === "page" ? "mb-5 w-full" : "mb-2 w-full"}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <h1 className="min-w-0 text-[32px] font-bold leading-tight tracking-normal text-foreground">
-              {title}
-            </h1>
-            <FilePathLine className="mt-1.5" />
+            {variant === "page" ? (
+              <>
+                <h1 className="min-w-0 text-[32px] font-bold leading-tight tracking-normal text-foreground">
+                  {title}
+                </h1>
+                <FilePathLine className="mt-1.5" />
+              </>
+            ) : (
+              <h2 className="min-w-0 text-[17px] font-semibold leading-7 tracking-[-0.01em] text-foreground">
+                {title}
+              </h2>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
               {showCountFraction && `${visibleRows.length} / `}
-              {rows.length} {unit}
+              {rows.length} {countUnit}
             </span>
             {action}
           </div>
@@ -302,9 +315,7 @@ export function RecordTable<T>({
         rowHref={rowHref}
         rowKey={rowKey}
         rows={visibleRows}
-        groupBy={groupBy}
-        groupOrder={groupOrder}
-        unit={unit}
+        compact={variant === "inline"}
         sorts={sorts}
         onSort={onSortsChange}
         selectable={selectable}
@@ -331,7 +342,10 @@ export function RecordTable<T>({
             </AlertDialogHeader>
             <ul className="max-h-48 overflow-y-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-[13px]">
               {selectedRows.slice(0, 8).map((row) => (
-                <li key={rowKey(row)} className="truncate py-0.5 text-foreground">
+                <li
+                  key={rowKey(row)}
+                  className="truncate py-0.5 text-foreground"
+                >
                   {labelFor(row)}
                 </li>
               ))}
@@ -455,7 +469,8 @@ function useVisibleRowRange(
     observer.observe(scrollEl);
     // The viewport's content wrapper catches layout shifts above the grid
     // (e.g. the bulk bar or an inline create form appearing).
-    if (scrollEl.firstElementChild) observer.observe(scrollEl.firstElementChild);
+    if (scrollEl.firstElementChild)
+      observer.observe(scrollEl.firstElementChild);
     return () => {
       scrollEl.removeEventListener("scroll", update);
       observer.disconnect();
@@ -473,9 +488,7 @@ function RecordTableGrid<T>({
   rowHref,
   rowKey,
   rows,
-  groupBy,
-  groupOrder,
-  unit,
+  compact,
   sorts,
   onSort,
   selectable,
@@ -492,9 +505,7 @@ function RecordTableGrid<T>({
   rowHref: (row: T) => string;
   rowKey: (row: T) => string;
   rows: T[];
-  groupBy?: (row: T) => string;
-  groupOrder?: readonly string[];
-  unit: string;
+  compact: boolean;
   sorts: ViewSort[];
   onSort: (sorts: ViewSort[]) => void;
   selectable: boolean;
@@ -508,35 +519,7 @@ function RecordTableGrid<T>({
   quietEmptyCells: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const bodyEntries = useMemo<TableBodyEntry<T>[]>(() => {
-    if (!groupBy) {
-      return rows.map((row) => ({ type: "row", row }));
-    }
-
-    const groups = new Map<string, T[]>();
-    for (const row of rows) {
-      const key = groupBy(row);
-      const existing = groups.get(key);
-      if (existing) existing.push(row);
-      else groups.set(key, [row]);
-    }
-
-    const ranks = new Map(groupOrder?.map((key, index) => [key, index]));
-    const keys = [...groups.keys()].sort((a, b) => {
-      const aRank = ranks.get(a) ?? Number.MAX_SAFE_INTEGER;
-      const bRank = ranks.get(b) ?? Number.MAX_SAFE_INTEGER;
-      return aRank - bRank || a.localeCompare(b);
-    });
-
-    return keys.flatMap((key) => {
-      const groupRows = groups.get(key) ?? [];
-      return [
-        { type: "group" as const, key, count: groupRows.length },
-        ...groupRows.map((row) => ({ type: "row" as const, row })),
-      ];
-    });
-  }, [groupBy, groupOrder, rows]);
-  const [start, end] = useVisibleRowRange(bodyEntries.length, bodyRef);
+  const [start, end] = useVisibleRowRange(rows.length, bodyRef);
 
   if (loading) return <TableSkeleton />;
 
@@ -545,7 +528,7 @@ function RecordTableGrid<T>({
 
   return (
     <div
-      className="min-h-[240px] overflow-x-auto border-y border-border/60"
+      className={`${compact ? "" : "min-h-[240px]"} overflow-x-auto border-y border-border/60`}
       style={columnSizing(columns, selectable)}
     >
       <div className="min-w-full" style={{ width: "max-content" }}>
@@ -575,26 +558,17 @@ function RecordTableGrid<T>({
         </Row>
 
         <div ref={bodyRef}>
-          {start > 0 && <div aria-hidden style={{ height: start * ROW_HEIGHT }} />}
-          {bodyEntries.slice(start, end).map((entry) => {
-            if (entry.type === "group") {
-              return (
-                <DatabaseGroupHeader
-                  key={`group:${entry.key}`}
-                  count={entry.count}
-                  label={entry.key}
-                  unit={unit}
-                />
-              );
-            }
-
-            const key = rowKey(entry.row);
+          {start > 0 && (
+            <div aria-hidden style={{ height: start * ROW_HEIGHT }} />
+          )}
+          {rows.slice(start, end).map((row) => {
+            const key = rowKey(row);
             return (
               <DatabaseRow
                 key={key}
                 columns={columns}
-                href={rowHref(entry.row)}
-                row={entry.row}
+                href={rowHref(row)}
+                row={row}
                 selectable={selectable}
                 isSelected={selectedKeys.has(key)}
                 anySelected={anySelected}
@@ -604,10 +578,10 @@ function RecordTableGrid<T>({
               />
             );
           })}
-          {end < bodyEntries.length && (
+          {end < rows.length && (
             <div
               aria-hidden
-              style={{ height: (bodyEntries.length - end) * ROW_HEIGHT }}
+              style={{ height: (rows.length - end) * ROW_HEIGHT }}
             />
           )}
         </div>
@@ -629,46 +603,6 @@ function RecordTableGrid<T>({
             </div>
           ))}
       </div>
-    </div>
-  );
-}
-
-type TableBodyEntry<T> =
-  | { type: "group"; key: string; count: number }
-  | { type: "row"; row: T };
-
-function DatabaseGroupHeader({
-  count,
-  label,
-  unit,
-}: {
-  count: number;
-  label: string;
-  unit: string;
-}) {
-  const countLabel = count === 1 ? singularize(unit) : unit;
-  return (
-    <div
-      data-record-group={label}
-      className="flex h-9 items-center border-b border-border/30 bg-transparent"
-    >
-      <div className="sticky left-0 flex min-w-[240px] items-center gap-2.5 px-2.5 pr-3">
-        <span
-          aria-hidden
-          className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/35 ring-[3px] ring-foreground/[0.04]"
-        />
-        <h2 className="text-[12px] font-medium text-foreground/90">
-          {label}
-        </h2>
-        <span className="rounded-full bg-muted/70 px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground ring-1 ring-inset ring-border/50">
-          {count} {countLabel}
-        </span>
-      </div>
-      <span
-        role="separator"
-        aria-orientation="horizontal"
-        className="mr-3 h-px min-w-12 flex-1 bg-border/60"
-      />
     </div>
   );
 }
@@ -829,7 +763,9 @@ function RowCheckbox({
     // border→ring workaround on Checkbox below. Hidden-by-visibility nodes
     // are never painted, so there's no intermediate frame to strand.
     <span
-      className={visible ? "" : "invisible group-has-[[data-rowlead]:hover]:visible"}
+      className={
+        visible ? "" : "invisible group-has-[[data-rowlead]:hover]:visible"
+      }
     >
       <Checkbox checked={checked} onChange={onChange} />
     </span>
@@ -1099,7 +1035,10 @@ function TableSkeleton() {
         >
           <div
             className="h-3 rounded bg-muted"
-            style={{ width: `${[40, 56, 32, 48, 36, 52, 44, 28][i]}%`, maxWidth: 280 }}
+            style={{
+              width: `${[40, 56, 32, 48, 36, 52, 44, 28][i]}%`,
+              maxWidth: 280,
+            }}
           />
         </div>
       ))}
@@ -1243,7 +1182,9 @@ function applyView<T>({
       const results = filters.conditions.map((condition) =>
         evaluateCondition(columns, row, condition),
       );
-      return filters.op === "or" ? results.some(Boolean) : results.every(Boolean);
+      return filters.op === "or"
+        ? results.some(Boolean)
+        : results.every(Boolean);
     });
   }
 
@@ -1353,10 +1294,7 @@ function compareColumn<T>(
   return direction === "asc" ? cmp : -cmp;
 }
 
-function sortValue<T>(
-  column: RecordColumn<T>,
-  row: T,
-): string | number | null {
+function sortValue<T>(column: RecordColumn<T>, row: T): string | number | null {
   const value = column.value(row);
   if (column.type === "date") {
     if (typeof value !== "string" || !value) return null;
