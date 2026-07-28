@@ -404,7 +404,7 @@ pub async fn gmail_sync_recent(
         // legitimately exist in two configured inboxes.
         let id = canonical_uid.clone();
         let wire_message_id = parsed.message_id.clone();
-        let thread_id = if parsed.gm_thrid != 0 {
+        let raw_thread_id = if parsed.gm_thrid != 0 {
             format!("gmail-thread-{:x}", parsed.gm_thrid)
         } else {
             choose_thread_id(
@@ -413,6 +413,7 @@ pub async fn gmail_sync_recent(
                 parsed.thread_root_message_id.as_deref(),
             )
         };
+        let thread_id = account_scoped_thread_id(&email, &raw_thread_id);
 
         // Read state mirrors the IMAP \Seen flag. We translate to the
         // existing Woodshed convention: `read` label means seen,
@@ -634,7 +635,7 @@ pub async fn gmail_send(
     let summary = build_email_summary(
         outcome.message_id.clone(),
         outcome.message_id.clone(),
-        outcome.message_id.clone(), // thread_id = msgid for new compose
+        account_scoped_thread_id(&credentials.email, &outcome.message_id),
         active_inbox.clone(),
         persisted_from,
         credentials.email.clone(),
@@ -737,9 +738,10 @@ pub async fn gmail_reply(
     let persisted_attachments =
         persist_outgoing_attachments(&state, &vault, &outcome.message_id, &outbound.attachments);
 
-    let thread_id = input
+    let inherited_thread_id = input
         .thread_id
         .unwrap_or_else(|| original.thread_id.clone());
+    let thread_id = account_scoped_thread_id(&credentials.email, &inherited_thread_id);
 
     let summary = build_email_summary(
         outcome.message_id.clone(),
@@ -914,6 +916,21 @@ fn choose_thread_id(
         .unwrap_or_else(|| local_id.to_string())
 }
 
+/// Thread identifiers are local UI grouping keys, so they must include the
+/// receiving/sending account. The same RFC Message-ID can legitimately be
+/// delivered to two configured accounts; treating it as global would make
+/// thread actions cross account boundaries.
+pub(crate) fn account_scoped_thread_id(account_email: &str, thread_id: &str) -> String {
+    let prefix = format!(
+        "gmail-thread-{}:",
+        imap_client::account_fingerprint(account_email)
+    );
+    if thread_id.starts_with(&prefix) {
+        return thread_id.to_string();
+    }
+    format!("{prefix}{}", strip_brackets(thread_id))
+}
+
 fn wire_message_id(email: &EmailSummary) -> &str {
     if email.message_id.trim().is_empty() {
         &email.id
@@ -953,9 +970,6 @@ fn decode_outgoing_attachments(
 
         let filename =
             sanitize_attachment_filename(&attachment.filename, &format!("outgoing-{index}"));
-        if filename.len() > 255 {
-            return Err("attachment filename is too long".into());
-        }
         let content_type = attachment.content_type.trim();
         if content_type.len() > 127 {
             return Err("attachment content type is too long".into());
@@ -1064,5 +1078,76 @@ mod credential_metadata_tests {
             ]),
         };
         assert!(decode_outgoing_attachments(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn outgoing_attachment_ingress_rejects_malformed_and_excess_inputs() {
+        let malformed = GmailOutgoingAttachment {
+            filename: "brief.txt".into(),
+            content_type: "text/plain".into(),
+            data_base64: "not base64!".into(),
+        };
+        assert!(decode_outgoing_attachments(vec![malformed])
+            .unwrap_err()
+            .contains("valid base64"));
+
+        let too_many = (0..=MAX_OUTGOING_ATTACHMENT_COUNT)
+            .map(|index| GmailOutgoingAttachment {
+                filename: format!("file-{index}.txt"),
+                content_type: "text/plain".into(),
+                data_base64: String::new(),
+            })
+            .collect();
+        assert!(decode_outgoing_attachments(too_many)
+            .unwrap_err()
+            .contains("too many attachments"));
+
+        let invalid_content_type = GmailOutgoingAttachment {
+            filename: "brief.txt".into(),
+            content_type: "x".repeat(128),
+            data_base64: String::new(),
+        };
+        assert!(decode_outgoing_attachments(vec![invalid_content_type])
+            .unwrap_err()
+            .contains("content type is too long"));
+    }
+
+    #[test]
+    fn outgoing_attachment_ingress_enforces_aggregate_budget_and_sanitizes_names() {
+        let first = GmailOutgoingAttachment {
+            filename: "a".repeat(400),
+            content_type: "application/octet-stream".into(),
+            data_base64: base64::engine::general_purpose::STANDARD
+                .encode(vec![0_u8; MAX_OUTGOING_ATTACHMENT_BYTES]),
+        };
+        let second = GmailOutgoingAttachment {
+            filename: "second.bin".into(),
+            content_type: "application/octet-stream".into(),
+            data_base64: base64::engine::general_purpose::STANDARD
+                .encode(vec![0_u8; MAX_OUTGOING_ATTACHMENT_BYTES]),
+        };
+        let final_byte = GmailOutgoingAttachment {
+            filename: "final.bin".into(),
+            content_type: "application/octet-stream".into(),
+            data_base64: "AA==".into(),
+        };
+
+        let decoded = decode_outgoing_attachments(vec![first.clone()]).expect("within budget");
+        assert!(decoded[0].filename.len() <= 160);
+        assert!(decode_outgoing_attachments(vec![first, second, final_byte])
+            .unwrap_err()
+            .contains("20 MB total limit"));
+    }
+
+    #[test]
+    fn account_scoped_threads_do_not_collide_and_are_idempotent() {
+        let first = account_scoped_thread_id("first@example.test", "root@example.test");
+        let second = account_scoped_thread_id("second@example.test", "root@example.test");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            account_scoped_thread_id("first@example.test", &first),
+            first
+        );
     }
 }

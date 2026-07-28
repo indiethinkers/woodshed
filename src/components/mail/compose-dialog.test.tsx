@@ -73,4 +73,37 @@ describe("ComposeDialog", () => {
       }),
     );
   });
+
+  it("includes a newly selected attachment when sending with the keyboard shortcut", async () => {
+    render(
+      <ComposeDialog open mode={{ kind: "new" }} onClose={vi.fn()} />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("someone@example.com"), {
+      target: { value: "recipient@example.test" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Subject"), {
+      target: { value: "Synthetic subject" },
+    });
+    fireEvent.change(screen.getByLabelText("Add attachments"), {
+      target: {
+        files: [new File(["latest"], "latest.txt", { type: "text/plain" })],
+      },
+    });
+
+    expect(await screen.findByText("latest.txt")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    await waitFor(() => expect(sendMail).toHaveBeenCalledOnce());
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            filename: "latest.txt",
+            dataBase64: "bGF0ZXN0",
+          }),
+        ],
+      }),
+    );
+  });
 });

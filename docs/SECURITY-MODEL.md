@@ -67,8 +67,10 @@ bodies are capped at 16 MiB, raw IMAP messages and calendar feed downloads at
 remote email images at 10 MiB each with a 256 MiB cache quota. Calendar caches
 are capped at 100,000 retained events and 128 MiB per account. Both uploaded
 and remote raster images enforce decoded-dimension and total-pixel limits.
-Agent request,
-response, attachment, and stream budgets are enforced independently.
+Outgoing mail accepts at most 10 attachments, 10 MiB per attachment and 20 MiB
+in total; base64, filenames, and content types are validated again inside the
+bounded send command. Agent request, response, attachment, and stream budgets
+are enforced independently.
 
 The Hermes endpoint is user-configured and may intentionally be local, so it is
 not subject to the public-host SSRF rule. Its URL syntax, requests, response

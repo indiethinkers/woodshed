@@ -313,6 +313,13 @@ pub fn run() {
                 logging::init(&app_data);
             }
 
+            if let Err(error) = config::cleanup_removed_integration(app.handle()) {
+                crate::log_warn!(
+                    "config::migration",
+                    "obsolete integration cleanup will retry next launch: {error}"
+                );
+            }
+
             // macOS application menu, built explicitly rather than left to
             // Tauri's default. The default Window→Close item binds ⌘W, and
             // AppKit consumes that key equivalent before it ever reaches the

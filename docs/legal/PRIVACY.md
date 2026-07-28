@@ -22,6 +22,8 @@ images through Woodshed's bounded cache by default.
 - Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys
   are stored in the operating-system credential store. Legacy
   plaintext configuration values are migrated there and scrubbed on first use.
+- Upgraded installations delete the obsolete transcription credential and
+  preference on the next launch.
 - Development builds may read explicitly configured values from `.env.local`.
 
 The app does not encrypt vault files or synced mail. Use operating-system disk
@@ -34,7 +36,8 @@ actions require a configured integration and an explicit command; remote image
 requests are the exception described below.
 
 - **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
-  sends mail and replies. Synced messages are written to the local vault.
+  sends mail, replies, and user-selected attachments. Synced messages and
+  attachment copies are written to the local vault.
 - **Google Calendar or another iCal host:** an explicit Sync downloads the
   configured read-only calendar feed and writes a derived local cache.
 - **Resource capture:** saving a URL downloads that public page and, for

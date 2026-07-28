@@ -14,13 +14,13 @@
 - **Vault folder path and profile.** Stored locally so the app can reopen your vault and present your chosen identity.
 - **Markdown files and attachments.** Notes, tasks, events, people, resources, tables, mail, and attachments are stored in the vault you choose.
 - **Derived data.** The app-data directory contains a rebuildable SQLite search index, a rebuildable iCal cache, preferences, and rotating local diagnostics logs.
-- **Credentials.** Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys are stored in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Development builds may read values you place in `.env.local`.
+- **Credentials.** Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys are stored in the operating system's credential store. Legacy plaintext configuration values are migrated and scrubbed on first use. Upgraded installations delete the obsolete transcription credential and preference on the next launch. Development builds may read values you place in `.env.local`.
 
 Vault files and synced mail are not encrypted by Woodshed. Use operating-system disk encryption and backups appropriate for your data.
 
 ## 3. Direct integrations
 
-- **Gmail (IMAP and SMTP).** Woodshed reads the inbox, synchronizes read/archive state, and sends messages or replies that you initiate. Gmail data is written to the local vault. Woodshed does not use Gmail OAuth scopes.
+- **Gmail (IMAP and SMTP).** Woodshed reads the inbox, synchronizes read/archive state, and sends messages, replies, and user-selected attachments that you initiate. Gmail data and attachment copies are written to the local vault. Woodshed does not use Gmail OAuth scopes.
 - **Google Calendar or another iCal host.** An explicit Sync downloads the configured read-only iCal feed. Woodshed does not currently request Calendar OAuth access or write to Google Calendar.
 - **Resource capture.** Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.
 - **Remote email images.** Sender images are removed by default. They are requested only after you choose **Load remote images**. Loading an image can reveal your IP address and time of access to its host.

@@ -358,12 +358,12 @@ function PersonReference({ id, href }: { id: string; href: string }) {
         )}
         {person.email && (
           <ReferenceField label="Email">
-            <a
+            <ExternalAnchor
               href={`mailto:${person.email}`}
               className="truncate text-foreground underline-offset-2 hover:underline"
             >
               {person.email}
-            </a>
+            </ExternalAnchor>
           </ReferenceField>
         )}
         {person.relationship && (

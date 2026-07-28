@@ -375,7 +375,7 @@ pub fn canonical_uid_id(email: &str, uid_validity: u32, uid: u32) -> String {
     )
 }
 
-fn account_fingerprint(email: &str) -> String {
+pub(crate) fn account_fingerprint(email: &str) -> String {
     let digest = Sha256::digest(email.trim().to_ascii_lowercase().as_bytes());
     digest[..8]
         .iter()

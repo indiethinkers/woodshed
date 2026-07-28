@@ -1049,43 +1049,6 @@
   }
 }
 
-/* ─────────── Recording indicator ─────────── */
-
-/* A steady red core with a soft expanding halo — a quiet "live" ping rather
-   than a hard blink. Red is the one chromatic accent in an otherwise
-   monochrome app, reserved exclusively for the act of recording. Size is set
-   by the element's own width/height; the halo scales from it. */
-.wd-rec-dot {
-  position: relative;
-  display: inline-block;
-  border-radius: 9999px;
-  background-color: #ef4444; /* red-500 */
-}
-.wd-rec-dot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 9999px;
-  background-color: #ef4444;
-  animation: wd-rec-pulse 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-@keyframes wd-rec-pulse {
-  0% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(2.6);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .wd-rec-dot::after {
-    animation: none;
-  }
-}
-
 /* ─────────── Agent canvas texture ─────────── */
 
 /* A quiet paper-like texture behind the agent conversation: a few very soft

@@ -1220,14 +1220,10 @@ export function TiptapEditor({
         if (href && isExternalHref(href)) {
           event.preventDefault();
           event.stopPropagation();
-          if (hasBackend()) {
-            void openExternalUrl(href).catch((err) => {
-              // eslint-disable-next-line no-console
-              console.error("[link] failed to open external url", href, err);
-            });
-          } else {
-            window.open(href, "_blank", "noopener,noreferrer");
-          }
+          void openExternalUrl(href).catch(() => {
+            // Keep user-authored URLs and native integration errors out of logs.
+            console.error("Woodshed could not open the external link.");
+          });
           return;
         }
       }

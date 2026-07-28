@@ -916,6 +916,57 @@ pub(crate) fn migrate_legacy_filenames(
     Ok(())
 }
 
+/// Account-scope thread ids written by older builds. The migration edits only
+/// the `thread:` frontmatter line, preserving bodies and any unknown fields.
+/// It is idempotent and runs before the startup index decision so changed
+/// grouping keys are re-indexed as one unit.
+pub(crate) fn migrate_gmail_thread_ids(vault: &Path) -> Result<usize, String> {
+    let mut changed = 0;
+    for sub in ["inbox", "sent", "archive"] {
+        let dir = vault.join(sub);
+        if !vault_lib::is_real_directory(&dir) {
+            continue;
+        }
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|error| format!("read {sub} for mail migration: {error}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("md")
+                || !vault_lib::is_real_file(&path)
+            {
+                continue;
+            }
+            let content = match vault_lib::read_record(&path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+            let Some(updated) = scope_gmail_thread_frontmatter(&content) else {
+                continue;
+            };
+            vault_lib::write_atomic(&path, &updated)
+                .map_err(|error| format!("write account-scoped mail thread metadata: {error}"))?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+fn scope_gmail_thread_frontmatter(content: &str) -> Option<String> {
+    let frontmatter = content.find("\n---\n").map(|end| &content[..end + 5])?;
+    let summary = parse_email_md(frontmatter)?;
+    let account_email = crate::commands::gmail::email_from_inbox_id(&summary.inbox)?;
+    let scoped =
+        crate::commands::gmail::account_scoped_thread_id(account_email, &summary.thread_id);
+    if scoped == summary.thread_id {
+        return None;
+    }
+    let old_line = frontmatter
+        .lines()
+        .find(|line| line.starts_with("thread: "))?;
+    let new_line = format!("thread: {}", json_string(&scoped));
+    Some(content.replacen(old_line, &new_line, 1))
+}
+
 #[tauri::command]
 pub fn mail_inbox_page(
     app: AppHandle,
@@ -1802,6 +1853,63 @@ mod tests {
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[test]
+    fn gmail_thread_migration_is_account_scoped_idempotent_and_preserving() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for directory in ["inbox", "sent", "archive"] {
+            std::fs::create_dir_all(tmp.path().join(directory)).unwrap();
+        }
+
+        let mut first = sample_email();
+        first.id = "first-local-id".into();
+        first.message_id = "shared-wire-id@example.test".into();
+        first.thread_id = "shared-wire-id@example.test".into();
+        first.inbox = "gmail:first@example.test".into();
+        let first_content =
+            render_email_md(&first).replacen("subject:", "custom_marker: keep-me\nsubject:", 1);
+        vault_lib::write_atomic(&tmp.path().join("inbox/first.md"), &first_content).unwrap();
+
+        let mut reply = first.clone();
+        reply.id = "reply-local-id".into();
+        reply.message_id = "reply-wire-id@example.test".into();
+        vault_lib::write_atomic(&tmp.path().join("sent/reply.md"), &render_email_md(&reply))
+            .unwrap();
+
+        let mut second_account = first.clone();
+        second_account.id = "second-local-id".into();
+        second_account.inbox = "gmail:second@example.test".into();
+        vault_lib::write_atomic(
+            &tmp.path().join("archive/second.md"),
+            &render_email_md(&second_account),
+        )
+        .unwrap();
+
+        let mut local = first.clone();
+        local.id = "local-only-id".into();
+        local.inbox = "local:mail".into();
+        let local_content = render_email_md(&local);
+        vault_lib::write_atomic(&tmp.path().join("archive/local.md"), &local_content).unwrap();
+
+        assert_eq!(migrate_gmail_thread_ids(tmp.path()).unwrap(), 3);
+        assert_eq!(migrate_gmail_thread_ids(tmp.path()).unwrap(), 0);
+
+        let migrated_first = vault_lib::read_record(&tmp.path().join("inbox/first.md")).unwrap();
+        let migrated_reply = vault_lib::read_record(&tmp.path().join("sent/reply.md")).unwrap();
+        let migrated_second =
+            vault_lib::read_record(&tmp.path().join("archive/second.md")).unwrap();
+        let first_summary = parse_email_md(&migrated_first).unwrap();
+        let reply_summary = parse_email_md(&migrated_reply).unwrap();
+        let second_summary = parse_email_md(&migrated_second).unwrap();
+
+        assert_eq!(first_summary.thread_id, reply_summary.thread_id);
+        assert_ne!(first_summary.thread_id, second_summary.thread_id);
+        assert!(migrated_first.contains("custom_marker: keep-me"));
+        assert_eq!(
+            vault_lib::read_record(&tmp.path().join("archive/local.md")).unwrap(),
+            local_content
+        );
     }
 
     #[test]
