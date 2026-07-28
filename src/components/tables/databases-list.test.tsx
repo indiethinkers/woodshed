@@ -80,6 +80,16 @@ describe("DatabasesList", () => {
     expect(generatedTable).not.toContainElement(custom);
     expect(customTable).toHaveTextContent("1 database");
     expect(generatedTable).toHaveTextContent("1 database");
+    for (const table of [customTable, generatedTable]) {
+      const header = table.querySelector("[data-inline-table-header]");
+      expect(header).toBeInTheDocument();
+      expect(
+        header?.querySelector("[data-inline-table-marker]"),
+      ).toBeInTheDocument();
+      expect(
+        header?.querySelector("[data-inline-table-count]"),
+      ).toHaveTextContent("1 database");
+    }
     expect(
       within(customTable).getByRole("button", { name: "Created" }),
     ).toBeInTheDocument();

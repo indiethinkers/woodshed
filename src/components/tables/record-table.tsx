@@ -222,8 +222,11 @@ export function RecordTable<T>({
       data-record-table-variant={variant}
       className={variant === "page" ? "w-full pb-24" : "w-full"}
     >
-      <header className={variant === "page" ? "mb-5 w-full" : "mb-2 w-full"}>
-        <div className="flex items-start justify-between gap-4">
+      <header
+        data-inline-table-header={variant === "inline" ? "" : undefined}
+        className={variant === "page" ? "mb-5 w-full" : "mb-2 w-full"}
+      >
+        <div className="flex min-h-8 items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             {variant === "page" ? (
               <>
@@ -233,18 +236,36 @@ export function RecordTable<T>({
                 <FilePathLine className="mt-1.5" />
               </>
             ) : (
-              <h2 className="min-w-0 text-[17px] font-semibold leading-7 tracking-[-0.01em] text-foreground">
-                {title}
-              </h2>
+              <div className="flex h-7 min-w-0 items-center gap-2.5">
+                <span
+                  data-inline-table-marker
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/35 ring-[3px] ring-foreground/[0.04]"
+                />
+                <h2 className="min-w-0 text-[12px] font-medium text-foreground/90">
+                  {title}
+                </h2>
+                <span
+                  data-inline-table-count
+                  className="rounded-full bg-muted/70 px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground ring-1 ring-inset ring-border/50"
+                >
+                  {showCountFraction && `${visibleRows.length} / `}
+                  {rows.length} {countUnit}
+                </span>
+              </div>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
-              {showCountFraction && `${visibleRows.length} / `}
-              {rows.length} {countUnit}
-            </span>
-            {action}
-          </div>
+          {(variant === "page" || action) && (
+            <div className="flex shrink-0 items-center gap-3">
+              {variant === "page" && (
+                <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
+                  {showCountFraction && `${visibleRows.length} / `}
+                  {rows.length} {countUnit}
+                </span>
+              )}
+              {action}
+            </div>
+          )}
         </div>
       </header>
 
