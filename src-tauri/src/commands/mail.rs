@@ -877,6 +877,48 @@ fn trash_html_sibling(state: &State<AppState>, vault: &Path, md_path: &Path) {
     }
 }
 
+/// `.html` files in `dir` with no matching `.md`. An HTML body only ever
+/// exists as the sibling of a mail record, so once the record is gone nothing
+/// reads the sibling again — it just accumulates in the folder.
+fn orphaned_html_siblings(dir: &Path) -> Vec<PathBuf> {
+    if !vault_lib::is_real_directory(dir) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().and_then(|s| s.to_str()) == Some("html")
+                && vault_lib::is_real_file(path)
+                && !path.with_extension("md").exists()
+        })
+        .collect()
+}
+
+/// Sweep orphaned `.html` siblings out of the mail folders.
+///
+/// A record whose markdown moved without its sibling following — an archive
+/// or rename that missed it — leaves dead HTML behind forever. Runs beside
+/// the filename migration at sync time for the same reason: it's cosmetic,
+/// potentially O(n), and self-healing. Siblings go to `.woodshed/trash/`
+/// rather than straight to unlink, so a wrong verdict stays recoverable.
+pub(crate) fn trash_orphaned_html_siblings(vault: &Path, state: &State<AppState>) {
+    // Held for the whole sweep so a concurrent persist can't be caught
+    // between writing its markdown and writing its sibling.
+    let _guard = state.mail_mutations.lock_recover();
+    for sub in &["inbox", "sent", "archive"] {
+        for path in orphaned_html_siblings(&vault.join(sub)) {
+            record_self_write(state, &path);
+            if let Err(e) = vault_lib::move_to_trash(vault, &path) {
+                eprintln!("mail: could not trash an orphaned html sibling in {sub}/: {e}");
+            }
+        }
+    }
+}
+
 /// Load an `EmailSummary` from a markdown file path, attaching the sibling
 /// `.html` body when one is present. This is the canonical loader; every
 /// call site that reads an email from disk should go through here so HTML
@@ -976,8 +1018,13 @@ pub(crate) fn migrate_legacy_filenames(
             if std::fs::rename(&path, &new_path).is_err() {
                 continue;
             }
-            // Best-effort: keep the html sibling next to the markdown.
-            let _ = move_html_sibling(state, &path, &new_path);
+            // Best-effort: keep the html sibling next to the markdown. A
+            // failure here is what strands a sibling, so say so rather than
+            // swallowing it — the sweep will collect the orphan, but a
+            // recurring failure is worth seeing in the log.
+            if let Err(e) = move_html_sibling(state, &path, &new_path) {
+                eprintln!("mail: html sibling did not follow its record rename: {e}");
+            }
         }
     }
     Ok(())
@@ -1452,26 +1499,22 @@ fn archive_local_email(
 /// to `archive/`) any local inbox file for this account that's no longer
 /// among them. Gmail is the source of truth for inbox membership.
 ///
-/// Returns the count archived. The id set is the *full* inbox (not the
-/// recent-N sync window), so messages outside the sync window aren't
-/// wrongly evicted. Both sides are normalized through `strip_brackets`.
-pub(crate) async fn reconcile_gmail_inbox(
+/// Returns the count archived. `live_raw` is the *full* inbox id set (not the
+/// recent-N sync window), so messages outside the sync window aren't wrongly
+/// evicted. Both sides are normalized through `strip_brackets`.
+///
+/// The caller owns the IMAP fetch: the same ENVELOPE pass also feeds the
+/// stranded-identity backfill, which has to run before new mail derives thread
+/// ids from local records. Callers must skip reconciliation entirely when that
+/// fetch fails — an empty set here means "the Gmail inbox is empty".
+pub(crate) fn reconcile_gmail_inbox(
     app: &AppHandle,
     state: &State<'_, AppState>,
     vault: &Path,
     inbox_id: &str,
-    creds: &crate::gmail::creds::Credentials,
+    live_raw: &std::collections::HashSet<String>,
     just_synced: &[String],
-) -> Result<usize, String> {
-    let pool = state.gmail_pool.clone();
-    let creds = creds.clone();
-    let live_raw = tokio::task::spawn_blocking(move || {
-        crate::gmail::imap_client::fetch_inbox_ids(&pool, &creds)
-    })
-    .await
-    .map_err(|e| format!("reconcile thread panicked: {e}"))?
-    .map_err(|e| e.to_string())?;
-
+) -> usize {
     // Normalize the live set the same way we normalize each local id, so
     // bracket form / whitespace can't cause a false "not present" verdict
     // (which would wrongly archive a message that's actually still there).
@@ -1495,7 +1538,7 @@ pub(crate) async fn reconcile_gmail_inbox(
             Err(e) => eprintln!("gmail reconcile: archive {} failed: {e}", summary.id),
         }
     }
-    Ok(archived)
+    archived
 }
 
 /// Delete one message's local file. Searches inbox/, sent/, and archive/.
@@ -2212,6 +2255,42 @@ mod tests {
         assert_eq!(summary.preview, email.preview);
         assert!(summary.body.is_empty());
         assert!(summary.html.is_none());
+    }
+
+    // An archive or rename that leaves its `.html` behind strands a body
+    // nothing will ever read again. The sweep has to collect exactly those
+    // and never touch a sibling whose record is still present.
+    #[test]
+    fn orphaned_html_siblings_are_found_without_touching_live_pairs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("inbox");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let live = dir.join("live-record-a1b2c3d4.md");
+        std::fs::write(&live, render_email_md(&sample_email())).unwrap();
+        std::fs::write(live.with_extension("html"), "<p>live</p>").unwrap();
+        std::fs::write(dir.join("stranded-e5f6a7b8.html"), "<p>stranded</p>").unwrap();
+        // A record with no HTML alternative is normal, not an orphan.
+        std::fs::write(
+            dir.join("plaintext-only-c9d0e1f2.md"),
+            render_email_md(&sample_email()),
+        )
+        .unwrap();
+
+        let orphans = orphaned_html_siblings(&dir);
+
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(
+            orphans[0].file_name().unwrap(),
+            "stranded-e5f6a7b8.html",
+            "only the sibling whose record is gone counts as an orphan"
+        );
+    }
+
+    #[test]
+    fn orphan_sweep_ignores_a_folder_that_does_not_exist() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(orphaned_html_siblings(&tmp.path().join("archive")).is_empty());
     }
 
     #[test]

@@ -241,8 +241,7 @@ function AreaRow({ summary, today }: { summary: AreaSummary; today: string }) {
         ) : (
           <span
             aria-hidden
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ background: area.color }}
+            className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/70"
           />
         )}
         <div className="min-w-0">

@@ -199,7 +199,7 @@ export function MailInbox() {
   );
 
   return (
-    <div className="flex-1 flex h-full min-w-0">
+    <div className="flex-1 flex h-full min-h-0 min-w-0">
       {!collapsed && (
         <aside
           data-woodshed-surface="mail-detail-list"
@@ -214,8 +214,13 @@ export function MailInbox() {
         </aside>
       )}
 
-      <div className="flex-1 flex flex-col bg-content min-w-0">
-        <ScrollArea className="flex-1">
+      <div className="flex-1 flex flex-col bg-content min-h-0 min-w-0">
+        {/* `min-h-0` on both the column and the ScrollArea is what makes the
+            inbox scroll at all. A flex item defaults to `min-height: auto`,
+            so without it the ScrollArea grows to the full height of the
+            message list, the viewport never overflows, and the rows past the
+            fold are simply clipped by the shell's `overflow-hidden`. */}
+        <ScrollArea className="flex-1 min-h-0">
           <div className="px-8 py-6">
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold flex items-baseline gap-2">
@@ -459,9 +464,10 @@ function EmailDetailPane({
   // Plain `overflow-y-auto` instead of <ScrollArea> — the summary pane
   // is purely informational, so it shouldn't appear in the tab order
   // (a plain div isn't keyboard-focusable, Base UI's ScrollArea Viewport
-  // is).
+  // is). `min-h-0` for the same reason as the message list: without it the
+  // pane grows to fit a long preview and `overflow-y-auto` never engages.
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="px-5 py-6 space-y-5">
         <div>
           <h2 className="text-lg font-semibold leading-snug">{senderName}</h2>

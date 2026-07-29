@@ -32,4 +32,16 @@ describe("AreasList", () => {
       screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent),
     ).toEqual(["Alpha", "Zulu", "Unassigned"]);
   });
+
+  // Area colour belongs to the attention graph, which reads as a single
+  // chart. Repeating it down the table turned every row into its own accent
+  // and made the page noisy, so the table stays monochrome.
+  it("renders the table without per-area colour", () => {
+    const { container } = render(<AreasList />);
+
+    const tinted = Array.from(container.querySelectorAll<HTMLElement>("[style]")).filter(
+      (element) => element.style.background || element.style.backgroundColor,
+    );
+    expect(tinted).toEqual([]);
+  });
 });
