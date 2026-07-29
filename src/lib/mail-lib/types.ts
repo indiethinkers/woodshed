@@ -37,7 +37,10 @@ export interface EmailSummary {
   preview: string;
   /** RFC 3339. */
   date: string;
+  /** Gmail's authoritative \Seen state. */
   read: boolean;
+  /** The message has been opened in Woodshed, even if Gmail sync failed. */
+  viewed?: boolean;
   labels: string[];
   /** Sender slug + locally-derived mentions. Drives wikilink resolution. */
   mentions: string[];
@@ -56,6 +59,24 @@ export interface EmailSummary {
    * Gmail sync.
    */
   attachments: Attachment[];
+}
+
+const PENDING_VIEWED_EMAIL_IDS = new Set<string>();
+
+export function setEmailViewPending(id: string, pending: boolean): void {
+  if (pending) PENDING_VIEWED_EMAIL_IDS.add(id);
+  else PENDING_VIEWED_EMAIL_IDS.delete(id);
+}
+
+/** Whether Woodshed should still present this message as needing attention. */
+export function shouldShowUnreadIndicator(
+  email: Pick<EmailSummary, "id" | "read" | "viewed">,
+): boolean {
+  return (
+    !email.read &&
+    email.viewed !== true &&
+    !PENDING_VIEWED_EMAIL_IDS.has(email.id)
+  );
 }
 
 export interface MailPage {

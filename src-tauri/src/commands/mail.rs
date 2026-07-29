@@ -20,6 +20,7 @@ use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -63,7 +64,12 @@ pub struct EmailSummary {
     pub preview: String,
     /// RFC 3339.
     pub date: String,
+    /// The provider's authoritative read state (Gmail `\\Seen`).
     pub read: bool,
+    /// Whether the user has opened the message in Woodshed. This remains
+    /// local and can be true while a provider read-state update is pending.
+    #[serde(default)]
+    pub viewed: bool,
     pub labels: Vec<String>,
     /// Sender slug (kebab-case) plus any other proper-name humans we
     /// could cheaply derive. Used to seed wikilink resolution against
@@ -513,17 +519,77 @@ pub(crate) fn persist_inbox_email(
     app: &AppHandle,
     state: &State<AppState>,
     email: &EmailSummary,
-) -> Result<PathBuf, String> {
+    snapshot_epoch: u64,
+) -> Result<Option<PathBuf>, String> {
     let vault = vault_root(app)?;
+    let _guard = state.mail_mutations.lock_recover();
+    let snapshot_stale = state.mail_message_mutated_after(&email.id, snapshot_epoch);
+    let existing_location = find_email_path_anywhere(&vault, &email.id);
+    if stale_snapshot_should_skip(
+        snapshot_stale,
+        existing_location.as_ref().map(|(_, folder)| *folder),
+    ) {
+        return Ok(None);
+    }
+
+    let mut merged = email.clone();
+    if let Some((existing_path, _)) = existing_location {
+        if let Some(existing) = load_email_from_path(&existing_path) {
+            if snapshot_stale {
+                preserve_existing_read_state(&mut merged, &existing);
+            } else {
+                merged.viewed = merged_viewed_state(&existing, email);
+            }
+        } else if snapshot_stale {
+            return Ok(None);
+        }
+    }
     let inbox = vault_lib::ensure_vault_directory(&vault, &["inbox"])?;
-    let path =
-        vault_lib::confined_file_path(&vault, &inbox, &email_filename(&email.subject, &email.id))?;
+    let path = vault_lib::confined_file_path(
+        &vault,
+        &inbox,
+        &email_filename(&merged.subject, &merged.id),
+    )?;
     record_self_write(state, &path);
-    let md = render_email_md(email);
+    let md = render_email_md(&merged);
     vault_lib::write_atomic(&path, &md).map_err(|e| e.to_string())?;
-    write_html_sibling(state, &path, email.html.as_deref())?;
-    upsert_email_index(app, state, &vault, &path, email);
-    Ok(path)
+    write_html_sibling(state, &path, merged.html.as_deref())?;
+    upsert_email_index(app, state, &vault, &path, &merged);
+    Ok(Some(path))
+}
+
+fn stale_snapshot_should_skip(snapshot_stale: bool, existing_folder: Option<&str>) -> bool {
+    snapshot_stale && existing_folder != Some("inbox")
+}
+
+fn preserve_existing_read_state(incoming: &mut EmailSummary, existing: &EmailSummary) {
+    incoming.read = existing.read;
+    incoming.viewed = existing.viewed;
+    incoming.labels.retain(|label| {
+        !label.eq_ignore_ascii_case(READ_LABEL) && !label.eq_ignore_ascii_case(UNREAD_LABEL)
+    });
+    incoming.labels.extend(
+        existing
+            .labels
+            .iter()
+            .filter(|label| {
+                label.eq_ignore_ascii_case(READ_LABEL) || label.eq_ignore_ascii_case(UNREAD_LABEL)
+            })
+            .cloned(),
+    );
+}
+
+/// Preserve a local "already viewed" override only while Gmail continues to
+/// report the same unread state. A provider read -> unread transition is an
+/// explicit new attention signal and must restore the dot.
+fn merged_viewed_state(existing: &EmailSummary, incoming: &EmailSummary) -> bool {
+    if incoming.read {
+        existing.viewed
+    } else if existing.read {
+        false
+    } else {
+        existing.viewed
+    }
 }
 
 /// Directory holding the cached binary bytes for a message's attachments.
@@ -680,6 +746,7 @@ pub(crate) fn build_email_summary(
         preview,
         date,
         read,
+        viewed: false,
         labels,
         mentions,
         links,
@@ -1168,9 +1235,73 @@ pub fn mail_draft_delete(
 // Per-message state changes (mark-read / archive / delete) + thread fetch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mark a single message as read (Gmail \Seen via IMAP STORE) and rewrite
-/// the local file with the updated labels. Idempotent: calling it on an
-/// already-read message is a no-op (skips the IMAP call entirely).
+fn persist_mark_read_state(
+    app: &AppHandle,
+    state: &State<AppState>,
+    vault: &Path,
+    updated: &EmailSummary,
+) -> Result<(), String> {
+    let _guard = state.mail_mutations.lock_recover();
+    let Some((path, _)) = find_email_path_anywhere(vault, &updated.id) else {
+        return Ok(());
+    };
+    let Some(mut current) = load_email_from_path(&path) else {
+        return Ok(());
+    };
+
+    current.viewed = updated.viewed;
+    if updated.read {
+        current.read = true;
+        current.labels = updated.labels.clone();
+    }
+
+    record_self_write(state, &path);
+    vault_lib::write_atomic(&path, &render_email_md(&current))
+        .map_err(|error| error.to_string())?;
+    upsert_email_index(app, state, vault, &path, &current);
+    Ok(())
+}
+
+/// Persist the local viewed state before asking the provider to mark the
+/// message read. A provider failure therefore remains visible to the caller
+/// without making an email the user already opened look unread again.
+async fn mark_read_with_provider<Persist, MarkSeen, MarkSeenFuture>(
+    summary: &mut EmailSummary,
+    mut persist: Persist,
+    mark_seen: MarkSeen,
+) -> Result<(), String>
+where
+    Persist: FnMut(&EmailSummary) -> Result<(), String>,
+    MarkSeen: FnOnce() -> MarkSeenFuture,
+    MarkSeenFuture: Future<Output = Result<(), String>>,
+{
+    summary.viewed = true;
+    persist(summary)?;
+
+    if labels_to_read(&summary.labels) {
+        return Ok(());
+    }
+
+    mark_seen()
+        .await
+        .map_err(|error| format!("provider_read_failed: {error}"))?;
+
+    summary
+        .labels
+        .retain(|label| !label.eq_ignore_ascii_case(UNREAD_LABEL));
+    if !summary
+        .labels
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case(READ_LABEL))
+    {
+        summary.labels.push(READ_LABEL.to_string());
+    }
+    summary.read = true;
+    persist(summary).map_err(|error| format!("viewed_persisted: {error}"))
+}
+
+/// Mark a single message viewed locally, then synchronize Gmail `\Seen` via
+/// IMAP STORE. Calling it on a provider-read message only persists `viewed`.
 #[tauri::command]
 pub async fn mail_mark_read(
     app: AppHandle,
@@ -1182,42 +1313,33 @@ pub async fn mail_mark_read(
     let Some(mut summary) = mail_get_local_inner(&vault, &id)? else {
         return Ok(()); // file isn't on disk; nothing to mark
     };
-    if labels_to_read(&summary.labels) {
-        return Ok(());
-    }
+    let gmail_email =
+        crate::commands::gmail::email_from_inbox_id(&summary.inbox).map(str::to_owned);
+    let message_id = summary.id.clone();
 
-    // Gmail messages flip \Seen via IMAP STORE (per-account creds). Records
-    // with no recognized provider (legacy/orphan) update local labels only.
-    if let Some(gmail_email) = crate::commands::gmail::email_from_inbox_id(&summary.inbox) {
-        let creds = crate::commands::gmail::resolve_credentials(&app, &state, gmail_email)?;
-        let pool = state.gmail_pool.clone();
-        let mid = summary.id.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::gmail::imap_client::mark_seen(&pool, &creds, &mid)
-        })
-        .await
-        .map_err(|e| format!("imap thread: {e}"))?
-        .map_err(|e| e.to_string())?;
-    }
-
-    summary
-        .labels
-        .retain(|l| !l.eq_ignore_ascii_case(UNREAD_LABEL));
-    if !summary
-        .labels
-        .iter()
-        .any(|l| l.eq_ignore_ascii_case(READ_LABEL))
-    {
-        summary.labels.push(READ_LABEL.to_string());
-    }
-    summary.read = true;
-
-    if let Some((path, _)) = find_email_path_anywhere(&vault, &summary.id) {
-        record_self_write(&state, &path);
-        vault_lib::write_atomic(&path, &render_email_md(&summary)).map_err(|e| e.to_string())?;
-        upsert_email_index(&app, &state, &vault, &path, &summary);
-    }
-    Ok(())
+    mark_read_with_provider(
+        &mut summary,
+        |updated| persist_mark_read_state(&app, &state, &vault, updated),
+        || async {
+            // Gmail messages flip `\Seen` via IMAP STORE (per-account
+            // credentials). Legacy/local records update their labels locally.
+            let Some(gmail_email) = gmail_email.as_deref() else {
+                return Ok(());
+            };
+            let creds = crate::commands::gmail::resolve_credentials(&app, &state, gmail_email)?;
+            let pool = state.gmail_pool.clone();
+            let seen_message_id = message_id.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::gmail::imap_client::mark_seen(&pool, &creds, &seen_message_id)
+            })
+            .await
+            .map_err(|error| format!("imap thread: {error}"))?
+            .map_err(|error| error.to_string())?;
+            state.record_mail_provider_mutation(&message_id);
+            Ok(())
+        },
+    )
+    .await
 }
 
 /// Archive one message: remove it from the Gmail INBOX (also marks read),
@@ -1263,12 +1385,14 @@ async fn archive_remote_email(
         let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)?;
         let pool = state.gmail_pool.clone();
         let mid = email.id.clone();
-        return tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             crate::gmail::imap_client::archive_message(&pool, &creds, &mid)
         })
         .await
         .map_err(|e| format!("imap thread: {e}"))?
-        .map_err(|e| e.to_string());
+        .map_err(|e| e.to_string())?;
+        state.record_mail_provider_mutation(&email.id);
+        return Ok(());
     }
     Ok(())
 }
@@ -1279,6 +1403,18 @@ fn archive_local_email(
     vault: &Path,
     email: &mut EmailSummary,
 ) -> Result<(), String> {
+    let _guard = state.mail_mutations.lock_recover();
+    let Some((src, folder)) = find_email_path_anywhere(vault, &email.id) else {
+        return Ok(());
+    };
+    if folder != "inbox" {
+        return Ok(());
+    }
+    let Some(current) = load_email_from_path(&src) else {
+        return Ok(());
+    };
+    *email = current;
+
     email
         .labels
         .retain(|l| !l.eq_ignore_ascii_case(UNREAD_LABEL));
@@ -1295,19 +1431,14 @@ fn archive_local_email(
         &archive_dir,
         &email_filename(&email.subject, &email.id),
     )?;
-    let src = find_email_path(vault, "inbox", &email.id);
-    if let Some(ref s) = src {
-        record_self_write(state, s);
-    }
+    record_self_write(state, &src);
     record_self_write(state, &dst);
     vault_lib::write_atomic(&dst, &render_email_md(email)).map_err(|e| e.to_string())?;
     upsert_email_index(app, state, vault, &dst, email);
-    if let Some(s) = src {
-        if s != dst {
-            move_html_sibling(state, &s, &dst)?;
-            delete_email_index(app, state, vault, &s);
-            let _ = std::fs::remove_file(&s);
-        }
+    if src != dst {
+        move_html_sibling(state, &src, &dst)?;
+        delete_email_index(app, state, vault, &src);
+        let _ = std::fs::remove_file(&src);
     }
     Ok(())
 }
@@ -1404,10 +1535,15 @@ pub async fn mail_delete_one(
                 .await
                 .map_err(|e| format!("imap thread: {e}"))?
                 .map_err(|e| e.to_string())?;
+                state.record_mail_provider_mutation(&summary.id);
             }
         }
     }
 
+    let _guard = state.mail_mutations.lock_recover();
+    let Some((path, _)) = find_email_path_anywhere(&vault, &id) else {
+        return Ok(());
+    };
     record_self_write(&state, &path);
     delete_email_index(&app, &state, &vault, &path);
     vault_lib::move_to_trash(&vault, &path)?;
@@ -1487,6 +1623,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
          preview: {preview}\n\
          date: {date}\n\
          read: {read}\n\
+         viewed: {viewed}\n\
          labels: [{labels}]\n\
          mentions: [{mentions}]\n\
          links: [{links}]\n\
@@ -1502,6 +1639,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
         preview = yaml_string(&email.preview),
         date = email.date,
         read = email.read,
+        viewed = email.viewed,
         labels = labels,
         mentions = mentions,
         links = links,
@@ -1599,6 +1737,10 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         .get("read")
         .and_then(|v| v.as_bool().ok())
         .unwrap_or(false);
+    let viewed = map
+        .get("viewed")
+        .and_then(|value| value.as_bool().ok())
+        .unwrap_or(false);
     let labels = pod_string_array(map.get("labels"));
     let mentions = pod_string_array(map.get("mentions"));
     let links = pod_string_array(map.get("links"));
@@ -1622,6 +1764,7 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         preview,
         date,
         read,
+        viewed,
         labels,
         mentions,
         links,
@@ -1844,6 +1987,7 @@ mod tests {
             preview,
             date: "2026-04-25T10:30:00-04:00".into(),
             read: false,
+            viewed: false,
             labels: vec!["inbox".into(), "unread".into()],
             mentions: vec!["alex-rivera".into()],
             links: vec!["https://joes.example.com".into()],
@@ -1869,9 +2013,107 @@ mod tests {
         assert_eq!(parsed.preview, original.preview);
         assert_eq!(parsed.date, original.date);
         assert_eq!(parsed.read, original.read);
+        assert_eq!(parsed.viewed, original.viewed);
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[tokio::test]
+    async fn remote_read_failure_keeps_local_viewed_without_claiming_provider_seen() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("synthetic-message.md");
+        let mut email = sample_email();
+        vault_lib::write_atomic(&path, &render_email_md(&email)).unwrap();
+
+        let result = mark_read_with_provider(
+            &mut email,
+            |updated| {
+                vault_lib::write_atomic(&path, &render_email_md(updated))
+                    .map_err(|error| error.to_string())
+            },
+            || async { Err("synthetic provider failure".to_string()) },
+        )
+        .await;
+
+        assert!(result
+            .unwrap_err()
+            .contains("provider_read_failed: synthetic provider failure"));
+        let reloaded = load_email_from_path(&path).expect("reload locally viewed message");
+        assert!(reloaded.viewed);
+        assert!(!reloaded.read);
+        assert!(reloaded
+            .labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(UNREAD_LABEL)));
+    }
+
+    #[tokio::test]
+    async fn local_view_failure_stops_before_provider_sync() {
+        let provider_called = std::cell::Cell::new(false);
+        let mut email = sample_email();
+
+        let result = mark_read_with_provider(
+            &mut email,
+            |_| Err("synthetic local persistence failure".to_string()),
+            || async {
+                provider_called.set(true);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "synthetic local persistence failure");
+        assert!(!provider_called.get());
+    }
+
+    #[test]
+    fn provider_sync_preserves_viewed_only_while_message_stays_unread() {
+        let mut existing = sample_email();
+        existing.viewed = true;
+
+        let still_unread = sample_email();
+        assert!(merged_viewed_state(&existing, &still_unread));
+
+        existing.read = true;
+        existing.labels = vec!["inbox".into(), "read".into()];
+        let marked_unread_again = sample_email();
+        assert!(!merged_viewed_state(&existing, &marked_unread_again));
+
+        let mut still_read = sample_email();
+        still_read.read = true;
+        still_read.labels = vec!["inbox".into(), "read".into()];
+        assert!(merged_viewed_state(&existing, &still_read));
+    }
+
+    #[test]
+    fn stale_provider_snapshot_keeps_newer_local_read_state() {
+        let mut existing = sample_email();
+        existing.read = true;
+        existing.viewed = true;
+        existing.labels = vec!["inbox".into(), "read".into()];
+        let mut stale_unread = sample_email();
+
+        preserve_existing_read_state(&mut stale_unread, &existing);
+
+        assert!(stale_unread.read);
+        assert!(stale_unread.viewed);
+        assert!(stale_unread
+            .labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(READ_LABEL)));
+        assert!(!stale_unread
+            .labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(UNREAD_LABEL)));
+    }
+
+    #[test]
+    fn stale_provider_snapshot_does_not_restore_removed_inbox_membership() {
+        assert!(stale_snapshot_should_skip(true, Some("archive")));
+        assert!(stale_snapshot_should_skip(true, None));
+        assert!(!stale_snapshot_should_skip(true, Some("inbox")));
+        assert!(!stale_snapshot_should_skip(false, None));
     }
 
     #[test]
@@ -2026,6 +2268,7 @@ mod tests {
             preview,
             date: "2026-04-30T10:00:00-04:00".into(),
             read: false,
+            viewed: false,
             labels: vec!["inbox".into(), "unread".into()],
             mentions: vec!["beehiiv".into()],
             links: vec![],
@@ -2059,6 +2302,7 @@ mod tests {
                   ---\n\nbody\n";
         let parsed = parse_email_md(md).expect("parses");
         assert_eq!(parsed.inbox, "personal");
+        assert!(!parsed.viewed);
     }
 
     #[test]

@@ -6,7 +6,12 @@ import {
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailFull, EmailSummary, MailPage } from "@/lib/mail-lib/types";
+import {
+  shouldShowUnreadIndicator,
+  type EmailFull,
+  type EmailSummary,
+  type MailPage,
+} from "@/lib/mail-lib/types";
 
 const invokeMock = vi.fn();
 vi.mock("@/lib/tauri", () => ({
@@ -103,7 +108,7 @@ describe("useMarkRead", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("restores only the failed message when a sibling read succeeds", async () => {
+  it("keeps a viewed message visually cleared when remote sync fails", async () => {
     const qc = new QueryClient({
       defaultOptions: {
         queries: { retry: false, staleTime: Infinity },
@@ -145,16 +150,17 @@ describe("useMarkRead", () => {
 
     await act(async () => {
       await secondPromise;
-      failFirst(new Error("remote read failed"));
+      failFirst(new Error("provider_read_failed: remote read failed"));
       await expect(firstPromise).rejects.toThrow("remote read failed");
     });
 
     expect(cachedEmails(qc)).toMatchObject([
-      { id: first.id, read: false },
+      { id: first.id, read: false, viewed: true },
       { id: second.id, read: true },
     ]);
     expect(qc.getQueryData<EmailSummary>(["email", first.id])).toMatchObject({
       read: false,
+      viewed: true,
     });
     expect(qc.getQueryData<EmailSummary>(["email", second.id])).toMatchObject({
       read: true,
@@ -162,12 +168,219 @@ describe("useMarkRead", () => {
     expect(
       qc.getQueryData<EmailSummary[]>(["thread", first.threadId]),
     ).toMatchObject([
-      { id: first.id, read: false },
+      { id: first.id, read: false, viewed: true },
       { id: second.id, read: true },
     ]);
     expect(
       qc.getQueryData<EmailFull>(["email-full", first.id, first.inbox]),
-    ).toMatchObject({ read: false });
+    ).toMatchObject({ read: false, viewed: true });
+  });
+
+  it("deduplicates overlapping provider sync attempts for one message", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+
+    let finishSync!: () => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSync = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current(email.id);
+      second = result.current(email.id);
+    });
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      finishSync();
+      await Promise.all([first, second]);
+    });
+  });
+
+  it("updates a thread cache that appears while provider sync is pending", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+
+    let failSync!: (error: Error) => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSync = reject;
+        }),
+    );
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current(email.id);
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    qc.setQueryData(["thread", "late-thread"], [email]);
+    expect(
+      shouldShowUnreadIndicator(
+        qc.getQueryData<EmailSummary[]>(["thread", "late-thread"])![0],
+      ),
+    ).toBe(false);
+
+    await act(async () => {
+      failSync(new Error("provider_read_failed: synthetic provider failure"));
+      await expect(request).rejects.toThrow("synthetic provider failure");
+    });
+
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", "late-thread"])?.[0],
+    ).toMatchObject({ read: false, viewed: true });
+  });
+
+  it("cancels an in-flight stale thread read before marking viewed", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+
+    let resolveStale!: (emails: EmailSummary[]) => void;
+    const staleFetch = qc.fetchQuery({
+      queryKey: ["thread", "deferred-thread"],
+      queryFn: () =>
+        new Promise<EmailSummary[]>((resolve) => {
+          resolveStale = resolve;
+        }),
+    });
+    void staleFetch.catch(() => undefined);
+
+    let failSync!: (error: Error) => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSync = reject;
+        }),
+    );
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current(email.id);
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+
+    resolveStale([email]);
+    await Promise.resolve();
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", "deferred-thread"]),
+    ).toBeUndefined();
+
+    await act(async () => {
+      failSync(new Error("provider_read_failed: synthetic provider failure"));
+      await expect(request).rejects.toThrow("synthetic provider failure");
+    });
+  });
+
+  it("cancels a stale thread read that starts while provider sync is pending", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+
+    let failSync!: (error: Error) => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSync = reject;
+        }),
+    );
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current(email.id);
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+
+    let resolveStale!: (emails: EmailSummary[]) => void;
+    const staleFetch = qc.fetchQuery({
+      queryKey: ["thread", "started-during-sync"],
+      queryFn: () =>
+        new Promise<EmailSummary[]>((resolve) => {
+          resolveStale = resolve;
+        }),
+    });
+    void staleFetch.catch(() => undefined);
+
+    await act(async () => {
+      failSync(new Error("provider_read_failed: synthetic provider failure"));
+      await expect(request).rejects.toThrow("synthetic provider failure");
+    });
+    resolveStale([email]);
+    await Promise.resolve();
+
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", "started-during-sync"]),
+    ).toBeUndefined();
+    expect(cachedEmails(qc)?.[0]).toMatchObject({
+      read: false,
+      viewed: true,
+    });
+  });
+
+  it("restores the unread indicator when local viewed persistence fails", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail({ viewed: false });
+    qc.setQueryData(["emails"], makeMailData(email));
+    invokeMock.mockRejectedValueOnce(new Error("local persistence failed"));
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await expect(result.current(email.id)).rejects.toThrow(
+        "local persistence failed",
+      );
+    });
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(cachedEmails(qc)?.[0]).toMatchObject({
+      read: false,
+      viewed: false,
+    });
   });
 });
 

@@ -2163,6 +2163,7 @@ mod tests {
             preview: "Follow up".to_string(),
             date: "2026-06-07T10:00:00Z".to_string(),
             read: false,
+            viewed: false,
             labels: vec!["unread".to_string()],
             mentions: vec![],
             links: vec![],

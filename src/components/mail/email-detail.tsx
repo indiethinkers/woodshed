@@ -26,7 +26,11 @@ import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { mailOpenAttachment } from "@/lib/mail-lib/mail";
-import type { Attachment, EmailSummary } from "@/lib/mail-lib/types";
+import {
+  shouldShowUnreadIndicator,
+  type Attachment,
+  type EmailSummary,
+} from "@/lib/mail-lib/types";
 import { BacklinksPanel } from "@/components/shared/backlinks-panel";
 import { OutgoingLinksPanel } from "@/components/shared/outgoing-links-panel";
 import {
@@ -229,7 +233,7 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
           <div className="mb-4">
             <h1 className="text-lg font-semibold">{latest.subject}</h1>
             <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
-              {!latest.read && (
+              {shouldShowUnreadIndicator(latest) && (
                 <span
                   aria-label="Unread"
                   title="Unread"
@@ -343,9 +347,9 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
 
 /**
  * Detail-view fallback for messages opened from surfaces other than the inbox.
- * Each message is attempted once per mounted detail view: a failed remote
- * update restores the unread UI, but must not turn that render into an
- * unbounded integration retry loop.
+ * Each message is attempted once per mounted detail view. A remote failure is
+ * reported without making an already-viewed message look unread again, and it
+ * must not turn that render into an unbounded integration retry loop.
  */
 export function useAutoMarkRead(
   messages: EmailSummary[],
