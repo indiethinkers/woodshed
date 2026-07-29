@@ -376,28 +376,71 @@ pub async fn gmail_sync_recent(
 
     let credentials = resolve_credentials(&app, &state, &account_email)?;
     let email = credentials.email.clone();
-    // Reconciliation (below) needs creds after the fetch moves them into
-    // the blocking closure, so keep a clone.
-    let creds_for_reconcile = credentials.clone();
-
-    // The imap crate is sync. Run the fetch on a blocking thread so we
-    // don't park a Tokio worker. The pool keeps the IMAP socket alive
-    // across calls so subsequent syncs skip the TLS+LOGIN handshake.
-    let snapshot_epoch = state.mail_mutation_epoch.load(Ordering::Acquire);
-    let pool = state.gmail_pool.clone();
-    let batch =
-        tokio::task::spawn_blocking(move || imap_client::fetch_recent(&pool, &credentials, limit))
-            .await
-            .map_err(|join_err| format!("gmail sync thread panicked: {join_err}"))?
-            .map_err(imap_err_to_string)?;
 
     let inbox = inbox_id(&email);
     let vault = vault_root(&app)?;
-    // Filename cleanup is cosmetic and potentially O(n), so run it only on
-    // an explicit sync rather than every paginated inbox read.
+    // Filename cleanup and the orphaned-sibling sweep are cosmetic and
+    // potentially O(n), so run them only on an explicit sync rather than
+    // every paginated inbox read.
     let _ = crate::commands::mail::migrate_legacy_filenames(&vault, &state);
+    crate::commands::mail::trash_orphaned_html_siblings(&vault, &state);
+
+    // The imap crate is sync. Run every fetch on a blocking thread so we
+    // don't park a Tokio worker. The pool keeps the IMAP socket alive
+    // across calls so subsequent syncs skip the TLS+LOGIN handshake.
+    let snapshot_epoch = state.mail_mutation_epoch.load(Ordering::Acquire);
+
+    // Take the full-inbox ENVELOPE pass first. It is required for
+    // reconciliation either way, and taking it up front lets the backfill
+    // repair stranded records *before* this batch derives thread ids from
+    // them — otherwise fresh mail would be grouped against identities we're
+    // about to rewrite. A failure here is non-fatal: sync still pulls mail,
+    // it just skips the backfill and the reconcile below.
+    let snapshot = {
+        let pool = state.gmail_pool.clone();
+        let creds = credentials.clone();
+        match tokio::task::spawn_blocking(move || imap_client::fetch_inbox_snapshot(&pool, &creds))
+            .await
+            .map_err(|e| format!("inbox snapshot thread panicked: {e}"))
+            .and_then(|result| result.map_err(|e| e.to_string()))
+        {
+            Ok(snapshot) => Some(snapshot),
+            Err(e) => {
+                eprintln!("gmail: inbox snapshot failed for {email}: {e}");
+                None
+            }
+        }
+    };
+
+    if let Some(snapshot) = snapshot.as_ref() {
+        backfill_stranded_identities(
+            &app,
+            &state,
+            &vault,
+            &email,
+            &inbox,
+            snapshot,
+            snapshot_epoch,
+        );
+    }
+
+    let batch = {
+        let pool = state.gmail_pool.clone();
+        let creds = credentials.clone();
+        tokio::task::spawn_blocking(move || imap_client::fetch_recent(&pool, &creds, limit))
+            .await
+            .map_err(|join_err| format!("gmail sync thread panicked: {join_err}"))?
+            .map_err(imap_err_to_string)?
+    };
+
     let mut written = Vec::with_capacity(batch.messages.len());
     let fetched = batch.messages.len();
+
+    // Gmail's conversation id is unavailable, so subject-based grouping fills
+    // the gap for messages with no reply headers. Seed from what's already on
+    // disk for this account so a burst spanning two syncs still converges.
+    let mut conversations = ConversationThreads::default();
+    conversations.seed(&account_inbox_records(&vault, &inbox));
 
     for raw in &batch.messages {
         let parsed = parse::parse(raw);
@@ -421,7 +464,20 @@ pub async fn gmail_sync_recent(
                 parsed.thread_root_message_id.as_deref(),
             )
         };
-        let thread_id = account_scoped_thread_id(&email, &raw_thread_id);
+        let proposed_thread_id = account_scoped_thread_id(&email, &raw_thread_id);
+        // Only messages with no reply headers need subject grouping. A real
+        // References chain is authoritative and must never be overridden by a
+        // subject match.
+        let thread_id = if parsed.gm_thrid != 0 || parsed.thread_root_message_id.is_some() {
+            proposed_thread_id
+        } else {
+            conversations.resolve(
+                &parsed.from_email,
+                &parsed.subject,
+                &parsed.date,
+                proposed_thread_id,
+            )
+        };
 
         // Read state mirrors the IMAP \Seen flag. We translate to the
         // existing Woodshed convention: `read` label means seen,
@@ -493,23 +549,20 @@ pub async fn gmail_sync_recent(
     }
 
     // Reconcile: archive locally anything the user already handled in
-    // Gmail (no longer in the Gmail inbox). Non-fatal — a reconcile
-    // failure shouldn't fail the sync that just pulled fresh mail.
-    let removed = match crate::commands::mail::reconcile_gmail_inbox(
-        &app,
-        &state,
-        &vault,
-        &inbox,
-        &creds_for_reconcile,
-        &written,
-    )
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!("gmail: reconcile failed for {email}: {e}");
-            0
-        }
+    // Gmail (no longer in the Gmail inbox). Skipped when the snapshot fetch
+    // above failed — a reconcile failure shouldn't fail the sync that just
+    // pulled fresh mail, and an absent id set must never be read as "the
+    // Gmail inbox is empty, archive everything local".
+    let removed = match snapshot.as_ref() {
+        Some(snapshot) => crate::commands::mail::reconcile_gmail_inbox(
+            &app,
+            &state,
+            &vault,
+            &inbox,
+            &snapshot.ids,
+            &written,
+        ),
+        None => 0,
     };
 
     Ok(GmailSyncResult {
@@ -930,6 +983,225 @@ fn choose_thread_id(
         .unwrap_or_else(|| local_id.to_string())
 }
 
+// ─── Subject-based conversation grouping ────────────────────────────────────
+//
+// Gmail's own conversation id (X-GM-THRID) is unavailable — imap-proto 0.10
+// can't parse the extension — so threading runs on RFC 5322 headers alone.
+// That is strictly weaker than Gmail: a sender who fires the same subject
+// twice without References (transactional mail, notification bursts) produces
+// one Gmail conversation but N Woodshed rows, which reads as duplicated mail.
+//
+// We recover the missing grouping the way mail clients did before Gmail:
+// sender plus normalized subject, bounded by a time window. The window is what
+// keeps a monthly newsletter with a fixed subject from collapsing a year of
+// mail into a single row.
+
+/// How close together two same-subject, same-sender messages must be before we
+/// treat them as one conversation.
+const SUBJECT_THREAD_WINDOW_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Grouping key for a message that carries no reply headers: sender address
+/// plus its subject with reply/forward prefixes and whitespace normalized
+/// away. `None` when either half is empty — an empty key would group every
+/// subject-less message in the account into one row.
+fn conversation_key(from_email: &str, subject: &str) -> Option<String> {
+    let sender = from_email.trim().to_lowercase();
+    let subject = normalize_subject(subject);
+    if sender.is_empty() || subject.is_empty() {
+        return None;
+    }
+    // `\u{1}` can't occur in either half, so the join is unambiguous.
+    Some(format!("{sender}\u{1}{subject}"))
+}
+
+/// Strip any run of leading `Re:` / `Fwd:` / `Fw:` markers, collapse internal
+/// whitespace, and lowercase. `Re: Re: Your  bill` and `your bill` match.
+fn normalize_subject(subject: &str) -> String {
+    let mut rest = subject.trim();
+    while let Some(stripped) = strip_reply_prefix(rest) {
+        rest = stripped.trim_start();
+    }
+    rest.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn strip_reply_prefix(subject: &str) -> Option<&str> {
+    const PREFIXES: [&str; 3] = ["re:", "fwd:", "fw:"];
+    let lowered = subject.trim_start().to_lowercase();
+    PREFIXES
+        .iter()
+        .find(|prefix| lowered.starts_with(*prefix))
+        .map(|prefix| &subject.trim_start()[prefix.len()..])
+}
+
+/// Assigns thread ids to messages that arrive without reply headers.
+///
+/// The oldest message of a same-key run anchors the conversation and keeps its
+/// own thread id; later members adopt it. Anchoring on the oldest rather than
+/// the most recent is what makes this stable — re-syncing a message finds the
+/// same anchor and lands on the same thread it had last time.
+#[derive(Debug, Default)]
+struct ConversationThreads {
+    /// conversation key → (anchor timestamp in epoch seconds, thread id).
+    anchors: std::collections::HashMap<String, (i64, String)>,
+}
+
+impl ConversationThreads {
+    /// Seed from records already on disk so a burst that straddles two syncs
+    /// still converges on one thread.
+    fn seed(&mut self, existing: &[EmailSummary]) {
+        for email in existing {
+            let Some(key) = conversation_key(&email.from_email, &email.subject) else {
+                continue;
+            };
+            let Some(at) = epoch_seconds(&email.date) else {
+                continue;
+            };
+            self.offer(key, at, email.thread_id.clone());
+        }
+    }
+
+    /// Resolve the thread id for one message, remembering it as a potential
+    /// anchor for later members. `proposed` is the caller's header-derived
+    /// thread id, used when nothing else in the window matches.
+    fn resolve(&mut self, from_email: &str, subject: &str, date: &str, proposed: String) -> String {
+        let (Some(key), Some(at)) = (conversation_key(from_email, subject), epoch_seconds(date))
+        else {
+            return proposed;
+        };
+        if let Some((anchor_at, thread_id)) = self.anchors.get(&key) {
+            if (at - *anchor_at).abs() <= SUBJECT_THREAD_WINDOW_SECS {
+                // Extend the run backwards when this message predates the
+                // anchor, so arrival order can't change the outcome.
+                let (anchor_at, thread_id) = (*anchor_at.min(&at), thread_id.clone());
+                self.anchors.insert(key, (anchor_at, thread_id.clone()));
+                return thread_id;
+            }
+        }
+        // Nothing within the window: this message starts a new run, and later
+        // members measure their distance from here rather than from a stale
+        // anchor months in the past.
+        self.anchors.insert(key, (at, proposed.clone()));
+        proposed
+    }
+
+    /// Keep the earliest candidate per key: a later message joins the run that
+    /// already exists rather than starting a competing one.
+    fn offer(&mut self, key: String, at: i64, thread_id: String) {
+        match self.anchors.get(&key) {
+            Some((anchor_at, _)) if *anchor_at <= at => {}
+            _ => {
+                self.anchors.insert(key, (at, thread_id));
+            }
+        }
+    }
+}
+
+fn epoch_seconds(date: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(date)
+        .ok()
+        .map(|dt| dt.timestamp())
+}
+
+// ─── Stranded-identity backfill ─────────────────────────────────────────────
+
+/// Local inbox records belonging to one account, oldest first.
+fn account_inbox_records(vault: &std::path::Path, inbox: &str) -> Vec<EmailSummary> {
+    let mut records: Vec<EmailSummary> =
+        crate::commands::mail::read_inbox_dir(&vault.join("inbox"))
+            .into_iter()
+            .filter(|email| email.inbox == inbox)
+            .collect();
+    records.sort_by(crate::commands::mail::email_date_cmp);
+    records
+}
+
+/// True when a record's thread id is the "no usable header" fallback — its own
+/// local UID identity. Records written before the wire Message-ID fallback
+/// existed are stuck this way, and a record stuck this way can never merge
+/// with replies that arrive later carrying the real conversation root.
+fn is_uid_fallback_thread(email: &EmailSummary, account_email: &str) -> bool {
+    email.thread_id == account_scoped_thread_id(account_email, &email.id)
+}
+
+/// Repair local records that sync can no longer reach.
+///
+/// `gmail_sync_recent` only rewrites the newest N messages per account, so a
+/// record older than that window keeps whatever identity scheme was current
+/// when it was written — permanently. The full-inbox ENVELOPE pass already
+/// carries every message's wire Message-ID, which is exactly what those
+/// records are missing, so we can repair them without another roundtrip.
+///
+/// Idempotent: a record whose `message_id` and thread id already agree with
+/// the snapshot is left untouched, so repeat syncs write nothing.
+fn backfill_stranded_identities(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    vault: &std::path::Path,
+    account_email: &str,
+    inbox: &str,
+    snapshot: &imap_client::InboxSnapshot,
+    snapshot_epoch: u64,
+) {
+    if snapshot.wire_message_ids.is_empty() {
+        return;
+    }
+
+    let records = account_inbox_records(vault, inbox);
+    // Seed from records that already carry a real conversation root so
+    // repaired records join existing threads instead of starting rivals.
+    let mut conversations = ConversationThreads::default();
+    conversations.seed(
+        &records
+            .iter()
+            .filter(|email| !is_uid_fallback_thread(email, account_email))
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+
+    for summary in records {
+        let Some(wire_message_id) = snapshot.wire_message_ids.get(&summary.id) else {
+            continue;
+        };
+        let stranded_thread = is_uid_fallback_thread(&summary, account_email);
+        if summary.message_id == *wire_message_id && !stranded_thread {
+            continue;
+        }
+
+        // `read_inbox_dir` yields frontmatter-only summaries with the body
+        // stripped; rewriting one of those verbatim would erase the message
+        // text. Re-read the whole record before touching it.
+        let Some(path) = crate::commands::mail::find_email_path(vault, "inbox", &summary.id) else {
+            continue;
+        };
+        let Some(mut email) = crate::commands::mail::load_email_from_path(&path) else {
+            continue;
+        };
+
+        email.message_id = wire_message_id.clone();
+        if stranded_thread {
+            // A record on the UID fallback had neither References nor
+            // In-Reply-To, so its own wire Message-ID is the conversation
+            // root — the same value a fresh sync would derive today.
+            let proposed = account_scoped_thread_id(account_email, wire_message_id);
+            let (from_email, subject, date) = (
+                email.from_email.clone(),
+                email.subject.clone(),
+                email.date.clone(),
+            );
+            email.thread_id = conversations.resolve(&from_email, &subject, &date, proposed);
+        }
+
+        if let Err(e) =
+            crate::commands::mail::persist_inbox_email(app, state, &email, snapshot_epoch)
+        {
+            eprintln!("gmail: backfill failed for {}: {e}", email.id);
+        }
+    }
+}
+
 /// Thread identifiers are local UI grouping keys, so they must include the
 /// receiving/sending account. The same RFC Message-ID can legitimately be
 /// delivered to two configured accounts; treating it as global would make
@@ -1067,6 +1339,196 @@ mod credential_metadata_tests {
 
         assert_eq!(original, "root-message@example.test");
         assert_eq!(reply, original);
+    }
+
+    fn conversation_summary(id: &str, subject: &str, date: &str, thread_id: &str) -> EmailSummary {
+        let mut email = build_email_summary(
+            id.into(),
+            String::new(),
+            thread_id.into(),
+            "gmail:owner@example.test".into(),
+            "Billing".into(),
+            "billing@example.test".into(),
+            subject.into(),
+            String::new(),
+            None,
+            date.into(),
+            vec!["inbox".into(), "unread".into()],
+            Vec::new(),
+        );
+        email.thread_id = thread_id.into();
+        email
+    }
+
+    #[test]
+    fn reply_and_forward_prefixes_do_not_split_a_subject() {
+        assert_eq!(
+            normalize_subject("Re: Fwd:  Issue   processing"),
+            "issue processing"
+        );
+        assert_eq!(normalize_subject("issue processing"), "issue processing");
+        assert_eq!(
+            normalize_subject("RE: Re: Issue processing"),
+            "issue processing"
+        );
+    }
+
+    #[test]
+    fn a_conversation_key_needs_both_a_sender_and_a_subject() {
+        assert!(conversation_key("billing@example.test", "  ").is_none());
+        assert!(conversation_key("  ", "Issue processing payment").is_none());
+        assert_eq!(
+            conversation_key("Billing@Example.test", "Re: Issue"),
+            conversation_key("billing@example.test", "Issue"),
+        );
+    }
+
+    // The reported bug: one Gmail conversation, two identical notifications a
+    // second apart, no References header on either. Without subject grouping
+    // each renders as its own inbox row and reads as duplicated mail.
+    #[test]
+    fn same_subject_bursts_from_one_sender_collapse_into_one_thread() {
+        let mut conversations = ConversationThreads::default();
+        let first = conversations.resolve(
+            "billing@example.test",
+            "Issue processing payment",
+            "2026-07-28T20:34:47+00:00",
+            "thread-first".into(),
+        );
+        let second = conversations.resolve(
+            "billing@example.test",
+            "Issue processing payment",
+            "2026-07-28T20:34:48+00:00",
+            "thread-second".into(),
+        );
+
+        assert_eq!(first, "thread-first");
+        assert_eq!(second, first, "a burst must not render as two rows");
+    }
+
+    // The other half of the trade: a recurring notice with a fixed subject
+    // must not collapse months of mail behind a single row.
+    #[test]
+    fn same_subject_outside_the_window_starts_a_new_thread() {
+        let mut conversations = ConversationThreads::default();
+        let january = conversations.resolve(
+            "billing@example.test",
+            "Your bill is due soon",
+            "2026-01-05T10:00:00+00:00",
+            "thread-january".into(),
+        );
+        let february = conversations.resolve(
+            "billing@example.test",
+            "Your bill is due soon",
+            "2026-02-05T10:00:00+00:00",
+            "thread-february".into(),
+        );
+        let february_again = conversations.resolve(
+            "billing@example.test",
+            "Your bill is due soon",
+            "2026-02-05T10:00:04+00:00",
+            "thread-february-second-notice".into(),
+        );
+
+        assert_eq!(january, "thread-january");
+        assert_eq!(february, "thread-february");
+        // The window slides: February's pair groups with each other, not with
+        // the stale January anchor.
+        assert_eq!(february_again, "thread-february");
+    }
+
+    // Thread ids are persisted, so a re-sync of the same messages has to land
+    // on the same answer or the inbox reshuffles on every refresh.
+    #[test]
+    fn resolving_the_same_messages_again_is_stable() {
+        let run = || {
+            let mut conversations = ConversationThreads::default();
+            conversations.seed(&[
+                conversation_summary(
+                    "gmail-uid-acct-3-1",
+                    "Issue processing payment",
+                    "2026-07-28T20:34:47+00:00",
+                    "thread-anchor",
+                ),
+                conversation_summary(
+                    "gmail-uid-acct-3-2",
+                    "Issue processing payment",
+                    "2026-07-28T20:34:48+00:00",
+                    "thread-anchor",
+                ),
+            ]);
+            conversations.resolve(
+                "billing@example.test",
+                "Issue processing payment",
+                "2026-07-28T20:34:48+00:00",
+                "thread-freshly-proposed".into(),
+            )
+        };
+
+        assert_eq!(run(), "thread-anchor");
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn seeding_prefers_the_oldest_local_record_as_the_anchor() {
+        let mut conversations = ConversationThreads::default();
+        conversations.seed(&[
+            conversation_summary(
+                "gmail-uid-acct-3-2",
+                "Issue processing payment",
+                "2026-07-28T20:34:48+00:00",
+                "thread-newer",
+            ),
+            conversation_summary(
+                "gmail-uid-acct-3-1",
+                "Issue processing payment",
+                "2026-07-28T20:34:47+00:00",
+                "thread-older",
+            ),
+        ]);
+
+        let resolved = conversations.resolve(
+            "billing@example.test",
+            "Issue processing payment",
+            "2026-07-28T20:34:49+00:00",
+            "thread-proposed".into(),
+        );
+        assert_eq!(resolved, "thread-older");
+    }
+
+    #[test]
+    fn a_message_without_a_usable_key_keeps_the_header_derived_thread() {
+        let mut conversations = ConversationThreads::default();
+        let resolved = conversations.resolve(
+            "billing@example.test",
+            "",
+            "2026-07-28T20:34:47+00:00",
+            "thread-from-headers".into(),
+        );
+        assert_eq!(resolved, "thread-from-headers");
+    }
+
+    // Records written before the wire-Message-ID fallback existed thread
+    // against their own local UID and can never merge with later replies.
+    // Recognising them is what lets the backfill know which ones to repair.
+    #[test]
+    fn uid_fallback_threads_are_distinguishable_from_real_conversation_roots() {
+        let account = "owner@example.test";
+        let stranded = conversation_summary(
+            "gmail-uid-acct-3-117406",
+            "Demo vault generator",
+            "2026-07-27T21:32:28-07:00",
+            &account_scoped_thread_id(account, "gmail-uid-acct-3-117406"),
+        );
+        let healthy = conversation_summary(
+            "gmail-uid-acct-3-117407",
+            "Re: Demo vault generator",
+            "2026-07-27T21:34:51-07:00",
+            &account_scoped_thread_id(account, "example/repo/pull/15@example.test"),
+        );
+
+        assert!(is_uid_fallback_thread(&stranded, account));
+        assert!(!is_uid_fallback_thread(&healthy, account));
     }
 
     #[test]

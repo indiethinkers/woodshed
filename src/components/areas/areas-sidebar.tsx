@@ -55,8 +55,7 @@ export function AreasSidebar() {
                 leading={
                   <span
                     aria-hidden
-                    className="block h-2.5 w-2.5 rounded-full"
-                    style={{ background: area.color }}
+                    className="block h-2.5 w-2.5 rounded-full bg-muted-foreground/70"
                   />
                 }
               />
@@ -184,8 +183,7 @@ export function AreasRecentSidebar() {
               ) : (
                 <span
                   aria-hidden
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ background: area.color }}
+                  className="h-2.5 w-2.5 shrink-0 rounded-full bg-muted-foreground/70"
                 />
               )}
               <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground/90">
@@ -236,13 +234,6 @@ export function AreasRecentSidebar() {
                 <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/90">
                   {item.title}
                 </span>
-                <span
-                  aria-label={areaRecord?.name ?? "Unassigned"}
-                  className="h-1.5 w-1.5 shrink-0 rounded-full border border-border"
-                  style={{
-                    background: areaRecord?.color ?? "transparent",
-                  }}
-                />
                 <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/70">
                   {formatAreaItemDate(item.date)}
                 </span>

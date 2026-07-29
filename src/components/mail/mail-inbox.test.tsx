@@ -32,8 +32,21 @@ vi.mock("@/components/layout/list-panel-context-internal", () => ({
   useListPanel: () => ({ collapsed: false }),
 }));
 
+// Stand-in for Base UI's ScrollArea. It keeps `className` and the slot
+// marker so layout assertions still see the real classes — the height-cap
+// classes are the whole reason the list can scroll.
 vi.mock("@/components/ui/scroll-area", () => ({
-  ScrollArea: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ScrollArea: ({
+    children,
+    className,
+  }: {
+    children: ReactNode;
+    className?: string;
+  }) => (
+    <div data-slot="scroll-area" className={className}>
+      {children}
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/hooks/use-mail", () => ({
@@ -86,6 +99,25 @@ describe("MailInbox", () => {
     expect(
       screen.queryByRole("button", { name: "Archive all" }),
     ).not.toBeInTheDocument();
+  });
+
+  // A flex item defaults to `min-height: auto`, so without `min-h-0` the
+  // scroll container grows to the full height of the message list, nothing
+  // ever overflows, and every row past the fold is clipped by the shell's
+  // `overflow-hidden` with no way to reach it.
+  it("keeps the message list in a height-capped scroll container", () => {
+    mocks.emails = [email({ id: "message-1" })];
+    const { container } = render(<MailInbox />);
+
+    const scroller = container.querySelector('[data-slot="scroll-area"]')!;
+    expect(scroller.className).toContain("min-h-0");
+    for (
+      let node = scroller.parentElement;
+      node && node !== container;
+      node = node.parentElement
+    ) {
+      expect(node.className).toContain("min-h-0");
+    }
   });
 
   it("renders one inbox row for messages in the same thread", () => {

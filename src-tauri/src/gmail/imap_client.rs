@@ -148,58 +148,87 @@ pub fn fetch_recent(
 /// (archived, moved, or deleted directly in Gmail) and should be archived
 /// locally so it stops surfacing in the sweep.
 ///
-/// Each entry is the message's bare-or-bracketed RFC 5322 Message-ID, or
-/// `gmail-uid-<uid>` when the message has none — the same two id shapes
-/// `commands::gmail` persists. The caller normalizes both sides through
-/// `strip_brackets` before comparing, so bracket form doesn't matter here.
-/// We read the Message-ID from the parsed ENVELOPE (standard IMAP, cheap,
-/// no manual header parsing); X-GM-MSGID stays disabled (imap-proto 0.10
-/// can't parse it).
+/// Each `ids` entry is the message's bare-or-bracketed RFC 5322 Message-ID
+/// or its canonical UID identity — the same id shapes `commands::gmail`
+/// persists. The caller normalizes both sides through `strip_brackets`
+/// before comparing, so bracket form doesn't matter here. We read the
+/// Message-ID from the parsed ENVELOPE (standard IMAP, cheap, no manual
+/// header parsing); X-GM-MSGID stays disabled (imap-proto 0.10 can't parse
+/// it).
 ///
 /// Guard: if the mailbox reports messages (`EXISTS > 0`) but we parse zero
 /// ids, we return `InboxListInconsistent` rather than an empty set — an
 /// empty set tells the caller "the inbox is empty, archive everything
 /// local," and a parse hiccup must never trigger a mass local archive.
 ///
+/// The same ENVELOPE pass also records each message's canonical UID identity
+/// alongside its wire Message-ID. Sync only rewrites the most recent N
+/// messages per account, so records older than that window can be stranded on
+/// a superseded identity scheme with no way to recover their wire id offline.
+/// This map is that recovery path, and it costs no extra roundtrip.
+///
 /// Blocking — call from `tokio::task::spawn_blocking`.
-pub fn fetch_inbox_ids(
+pub fn fetch_inbox_snapshot(
     pool: &GmailImapPool,
     creds: &Credentials,
-) -> Result<std::collections::HashSet<String>, ImapError> {
+) -> Result<InboxSnapshot, ImapError> {
     pool.with_session(creds, |session| {
         let mailbox = session.select("INBOX")?;
         if mailbox.exists == 0 {
-            return Ok(std::collections::HashSet::new());
+            return Ok(InboxSnapshot::default());
         }
         let uid_validity = mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?;
         let fetches = session.fetch("1:*", "(UID ENVELOPE)")?;
-        let mut ids = std::collections::HashSet::with_capacity(fetches.len());
+        let mut snapshot = InboxSnapshot {
+            ids: std::collections::HashSet::with_capacity(fetches.len()),
+            wire_message_ids: std::collections::HashMap::new(),
+        };
         for f in fetches.iter() {
             let message_id = f
                 .envelope()
                 .and_then(|env| env.message_id.as_ref())
                 .map(|raw| String::from_utf8_lossy(raw).trim().to_string())
                 .filter(|s| !s.is_empty());
-            match message_id {
-                Some(mid) => {
-                    ids.insert(mid);
-                }
-                None => {
-                    // The canonical UID identity below covers messages
-                    // without an RFC Message-ID.
-                }
+            if let Some(mid) = message_id.clone() {
+                snapshot.ids.insert(mid);
             }
+            // The canonical UID identity covers messages without an RFC
+            // Message-ID, and is the key local records are addressed by.
             if let Some(uid) = f.uid {
-                ids.insert(canonical_uid_id(&creds.email, uid_validity, uid));
+                let canonical = canonical_uid_id(&creds.email, uid_validity, uid);
+                if let Some(mid) = message_id {
+                    snapshot
+                        .wire_message_ids
+                        .insert(canonical.clone(), strip_angle_brackets(&mid));
+                }
+                snapshot.ids.insert(canonical);
             }
         }
-        if ids.is_empty() {
+        if snapshot.ids.is_empty() {
             return Err(ImapError::InboxListInconsistent {
                 exists: mailbox.exists,
             });
         }
-        Ok(ids)
+        Ok(snapshot)
     })
+}
+
+/// Everything one full-inbox ENVELOPE pass tells us about a Gmail account.
+#[derive(Debug, Default, Clone)]
+pub struct InboxSnapshot {
+    /// Every identity shape a local record might be stored under: the wire
+    /// Message-ID and the canonical account+UIDVALIDITY+UID id.
+    pub ids: std::collections::HashSet<String>,
+    /// Canonical UID identity → wire Message-ID, for messages that have one.
+    pub wire_message_ids: std::collections::HashMap<String, String>,
+}
+
+fn strip_angle_brackets(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string()
 }
 
 /// Archive a message: mark it read AND remove it from INBOX. Archiving
