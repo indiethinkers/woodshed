@@ -17,6 +17,7 @@ use crate::gmail::{creds, imap_client, parse, smtp_client, CredsError};
 use crate::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -376,6 +377,7 @@ pub async fn gmail_sync_recent(
     // The imap crate is sync. Run the fetch on a blocking thread so we
     // don't park a Tokio worker. The pool keeps the IMAP socket alive
     // across calls so subsequent syncs skip the TLS+LOGIN handshake.
+    let snapshot_epoch = state.mail_mutation_epoch.load(Ordering::Acquire);
     let pool = state.gmail_pool.clone();
     let batch =
         tokio::task::spawn_blocking(move || imap_client::fetch_recent(&pool, &credentials, limit))
@@ -459,8 +461,8 @@ pub async fn gmail_sync_recent(
             attachments,
         );
 
-        match persist_inbox_email(&app, &state, &summary) {
-            Ok(_) => {
+        match persist_inbox_email(&app, &state, &summary, snapshot_epoch) {
+            Ok(Some(_)) => {
                 let mut superseded = vec![legacy_uid.clone()];
                 if parsed.gm_msgid != 0 {
                     superseded.push(format!("gmail-{:x}", parsed.gm_msgid));
@@ -479,6 +481,7 @@ pub async fn gmail_sync_recent(
                 }
                 written.push(id)
             }
+            Ok(None) => {}
             Err(e) => eprintln!("gmail: failed to persist {id}: {e}"),
         }
     }

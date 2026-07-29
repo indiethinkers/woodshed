@@ -23,23 +23,26 @@ import {
   mailSyncRecentMulti,
   mailThread,
 } from "@/lib/mail-lib";
-import type {
-  ComposeInput,
-  DraftDto,
-  DraftSaveInput,
-  EmailFull,
-  EmailSummary,
-  Inbox,
-  MailPage,
-  MailSyncResult,
-  ReplyInput,
-  SendResult,
+import {
+  setEmailViewPending,
+  type ComposeInput,
+  type DraftDto,
+  type DraftSaveInput,
+  type EmailFull,
+  type EmailSummary,
+  type Inbox,
+  type MailPage,
+  type MailSyncResult,
+  type ReplyInput,
+  type SendResult,
 } from "@/lib/mail-lib/types";
 
 type MailCache = InfiniteData<MailPage, number>;
+type MailStateUpdater = <T extends EmailSummary>(email: T) => T;
 
 const HIDDEN_ARCHIVE_IDS_KEY = ["mail-hidden-archive-ids"] as const;
 const EMPTY_ARCHIVE_IDS: string[] = [];
+const MARK_READ_IN_FLIGHT = new Map<string, Promise<void>>();
 
 interface CachedEmailLocation {
   email: EmailSummary;
@@ -91,15 +94,56 @@ function asRead<T extends EmailSummary>(email: T): T {
   if (!labels.some((label) => label.toLowerCase() === "read")) {
     labels.push("read");
   }
-  return { ...email, read: true, labels };
+  return { ...email, read: true, viewed: true, labels };
 }
 
-function replaceEmail<T extends EmailSummary>(
-  emails: T[] | undefined,
+function asViewed<T extends EmailSummary>(email: T): T {
+  return { ...email, viewed: true };
+}
+
+function asUnviewed<T extends EmailSummary>(email: T): T {
+  return { ...email, viewed: false };
+}
+
+function updateMailCopies(
+  qc: QueryClient,
   id: string,
-  replacement: T,
-): T[] | undefined {
-  return emails?.map((email) => (email.id === id ? replacement : email));
+  update: MailStateUpdater,
+) {
+  qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+    updateCachedEmails(old, (email) =>
+      email.id === id ? update(email) : email,
+    ),
+  );
+  qc.setQueryData<EmailSummary | null | undefined>(["email", id], (old) =>
+    old?.id === id ? update(old) : old,
+  );
+  qc.setQueriesData<EmailSummary[] | undefined>(
+    { queryKey: ["thread"] },
+    (old) =>
+      old?.map((email) => (email.id === id ? update(email) : email)),
+  );
+  qc.setQueriesData<EmailFull | null | undefined>(
+    { queryKey: ["email-full"] },
+    (old) => (old?.id === id ? update(old) : old),
+  );
+}
+
+async function cancelMailReads(qc: QueryClient, id: string) {
+  await Promise.all([
+    qc.cancelQueries({ queryKey: ["emails"] }),
+    qc.cancelQueries({ queryKey: ["email", id] }),
+    qc.cancelQueries({ queryKey: ["thread"] }),
+    qc.cancelQueries({ queryKey: ["email-full", id] }),
+  ]);
+}
+
+function didPersistViewedBeforeFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("provider_read_failed:") ||
+    message.includes("viewed_persisted:")
+  );
 }
 
 function restoreCachedEmail(
@@ -267,100 +311,99 @@ export function useThread(threadId: string | null | undefined) {
 }
 
 /**
- * Mark a message read. The cache flips synchronously so the unread dot
- * clears the moment the user opens the email; the IMAP/HTTP roundtrip
+ * Mark a message viewed locally and synchronize Gmail's read state. The cache
+ * flips synchronously so the unread dot clears the moment the user opens the
+ * email; the IMAP/HTTP roundtrip
  * (~500–2000ms) runs in the background. The list isn't refetched on
  * success — the optimistic update is the correct end state, and bulk
  * mark-reads would otherwise thrash the list with mid-flight refetches.
- * On error we restore the previous cache.
+ * A remote failure is still reported to the caller, but it does not make a
+ * message the user already viewed appear unread again.
  *
  * Short-circuits when no cached copy remains unread, so the inbox-open action
  * and the detail-view fallback can safely overlap without duplicate remote
  * calls or unnecessary cache writes.
  */
+async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
+  await cancelMailReads(qc, id);
+
+  const previousList = qc.getQueryData<MailCache>(["emails"]);
+  const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
+  const previousListEmail = findCachedEmail(previousList, id)?.email;
+  const previousThreads = qc
+    .getQueriesData<EmailSummary[]>({ queryKey: ["thread"] })
+    .flatMap(([queryKey, messages]) => {
+      const email = messages?.find(
+        (candidate) => candidate.id === id && !candidate.read,
+      );
+      return email ? [[queryKey, email] as const] : [];
+    });
+  const previousFullMessages = qc
+    .getQueriesData<EmailFull | null>({ queryKey: ["email-full", id] })
+    .flatMap(([queryKey, email]) =>
+      email?.id === id && !email.read ? [[queryKey, email] as const] : [],
+    );
+  const listNeedsUpdate = previousListEmail ? !previousListEmail.read : false;
+  const oneNeedsUpdate = previousOne ? !previousOne.read : false;
+  const wasViewed =
+    previousListEmail?.viewed === true ||
+    previousOne?.viewed === true ||
+    previousThreads.some(([, email]) => email.viewed === true) ||
+    previousFullMessages.some(([, email]) => email.viewed === true);
+  if (
+    !listNeedsUpdate &&
+    !oneNeedsUpdate &&
+    previousThreads.length === 0 &&
+    previousFullMessages.length === 0
+  ) {
+    return;
+  }
+
+  updateMailCopies(qc, id, asViewed);
+  try {
+    await mailMarkRead(id);
+  } catch (error) {
+    // A query can begin after the initial cancellation while the provider
+    // request is pending. Cancel it before committing the durable viewed
+    // state so its older snapshot cannot restore the unread indicator.
+    await cancelMailReads(qc, id);
+    updateMailCopies(
+      qc,
+      id,
+      didPersistViewedBeforeFailure(error) || wasViewed
+        ? asViewed
+        : asUnviewed,
+    );
+    throw error;
+  }
+  await cancelMailReads(qc, id);
+  updateMailCopies(qc, id, asRead);
+  // A full-message read may have started before the local update. Refresh
+  // it from the now-updated record instead of retaining a stale copy for
+  // its five-minute stale window.
+  void qc.invalidateQueries({ queryKey: ["email-full", id] });
+}
+
 export function useMarkRead() {
   const qc = useQueryClient();
   return useCallback(
     async (id: string) => {
-      const previousList = qc.getQueryData<MailCache>(["emails"]);
-      const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
-      const previousListEmail = findCachedEmail(previousList, id)?.email;
-      const previousThreads = qc
-        .getQueriesData<EmailSummary[]>({ queryKey: ["thread"] })
-        .flatMap(([queryKey, messages]) => {
-          const email = messages?.find(
-            (candidate) => candidate.id === id && !candidate.read,
-          );
-          return email ? [[queryKey, email] as const] : [];
-        });
-      const previousFullMessages = qc
-        .getQueriesData<EmailFull | null>({ queryKey: ["email-full", id] })
-        .flatMap(([queryKey, email]) =>
-          email?.id === id && !email.read ? [[queryKey, email] as const] : [],
-        );
-      const listNeedsUpdate = previousListEmail
-        ? !previousListEmail.read
-        : false;
-      const oneNeedsUpdate = previousOne ? !previousOne.read : false;
-      if (
-        !listNeedsUpdate &&
-        !oneNeedsUpdate &&
-        previousThreads.length === 0 &&
-        previousFullMessages.length === 0
-      ) {
-        return;
+      const pending = MARK_READ_IN_FLIGHT.get(id);
+      if (pending) {
+        updateMailCopies(qc, id, asViewed);
+        return pending;
       }
 
-      if (listNeedsUpdate) {
-        qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
-          updateCachedEmails(old, (email) =>
-            email.id === id ? asRead(email) : email,
-          ),
-        );
-      }
-      if (oneNeedsUpdate) {
-        qc.setQueryData<EmailSummary | null | undefined>(
-          ["email", id],
-          (old) => (old ? asRead(old) : old),
-        );
-      }
-      for (const [queryKey] of previousThreads) {
-        qc.setQueryData<EmailSummary[] | undefined>(queryKey, (old) =>
-          old?.map((email) => (email.id === id ? asRead(email) : email)),
-        );
-      }
-      for (const [queryKey] of previousFullMessages) {
-        qc.setQueryData<EmailFull | null | undefined>(queryKey, (old) =>
-          old ? asRead(old) : old,
-        );
-      }
+      setEmailViewPending(id, true);
+      const request = markReadAndUpdateCaches(qc, id);
+      MARK_READ_IN_FLIGHT.set(id, request);
       try {
-        await mailMarkRead(id);
-        // A full-message read may have started before the optimistic update.
-        // Refresh it from the now-updated local record instead of retaining a
-        // stale unread copy for its five-minute stale window.
-        void qc.invalidateQueries({ queryKey: ["email-full", id] });
-      } catch (e) {
-        if (previousListEmail) {
-          qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
-            updateCachedEmails(old, (email) =>
-              email.id === id ? previousListEmail : email,
-            ),
-          );
+        await request;
+      } finally {
+        if (MARK_READ_IN_FLIGHT.get(id) === request) {
+          MARK_READ_IN_FLIGHT.delete(id);
+          setEmailViewPending(id, false);
         }
-        if (previousOne !== undefined)
-          qc.setQueryData(["email", id], previousOne);
-        for (const [queryKey, previousThreadEmail] of previousThreads) {
-          qc.setQueryData<EmailSummary[] | undefined>(queryKey, (old) =>
-            replaceEmail(old, id, previousThreadEmail),
-          );
-        }
-        for (const [queryKey, previousFullMessage] of previousFullMessages) {
-          qc.setQueryData<EmailFull | null | undefined>(queryKey, (old) =>
-            old?.id === id ? previousFullMessage : old,
-          );
-        }
-        throw e;
       }
     },
     [qc],

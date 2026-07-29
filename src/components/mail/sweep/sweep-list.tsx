@@ -2,7 +2,10 @@
 
 import { RefreshCw } from "lucide-react";
 import { LANES, rowsByLane } from "@/lib/sweep";
-import type { EmailSummary } from "@/lib/mail-lib/types";
+import {
+  shouldShowUnreadIndicator,
+  type EmailSummary,
+} from "@/lib/mail-lib/types";
 import type { SweepCard, SweepStatus } from "@/lib/sweep/types";
 import type { SweepLaneRow } from "@/lib/sweep";
 import type { MailRefreshProgress } from "@/lib/hooks/use-mail-refresh-job";
@@ -41,7 +44,7 @@ function formatDate(value: string): string {
 function dotClass(row: SweepLaneRow): string {
   const { email, card } = row;
   if (card?.status === "done") return "bg-transparent";
-  if (email && !email.read) return "bg-blue-500";
+  if (email && shouldShowUnreadIndicator(email)) return "bg-blue-500";
   // Sweep cards can outlive or lose their source email row. In that case
   // we do not have a provider read signal, so don't claim unread with blue.
   if (!email && card) return "bg-muted-foreground/25";

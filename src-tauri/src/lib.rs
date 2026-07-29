@@ -58,6 +58,17 @@ pub struct AppState {
     /// Persistent IMAP connections for Gmail accounts. Lazy-opened on first
     /// use; reused across sync/archive/mark-read. See `gmail::pool`.
     pub gmail_pool: Arc<gmail::GmailImapPool>,
+    /// Serializes local mail read/merge/write sections. Provider calls never
+    /// hold this lock; commands re-resolve the message after network awaits.
+    pub mail_mutations: Mutex<()>,
+    /// Bumped after a successful provider-side mail mutation. Gmail syncs
+    /// capture this before fetching. The per-message map below determines
+    /// whether a particular fetched record is stale.
+    pub mail_mutation_epoch: AtomicU64,
+    /// Last provider-mutation epoch for each account-scoped message id.
+    /// This keeps a mutation to one message from suppressing authoritative
+    /// provider changes to unrelated messages in the same sync batch.
+    pub mail_message_epochs: Mutex<std::collections::HashMap<String, u64>>,
     /// In-memory Gmail credentials cache. Hits the OS keychain at most
     /// once per app launch.
     pub gmail_creds: Arc<gmail::CredsCache>,
@@ -94,6 +105,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Record a completed provider mutation while serialized against local
+    /// mail merge/write sections.
+    pub fn record_mail_provider_mutation(&self, message_id: &str) {
+        let _guard = self.mail_mutations.lock_recover();
+        let epoch = self.mail_mutation_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        self.mail_message_epochs
+            .lock_recover()
+            .insert(message_id.to_string(), epoch);
+    }
+
+    /// Whether this specific message changed after a provider fetch began.
+    pub fn mail_message_mutated_after(&self, message_id: &str, epoch: u64) -> bool {
+        self.mail_message_epochs
+            .lock_recover()
+            .get(message_id)
+            .is_some_and(|message_epoch| *message_epoch > epoch)
+    }
+
     /// Current vault generation. Read by the tag-table memo to decide
     /// hit vs. recompute.
     pub fn vault_generation(&self) -> u64 {
@@ -390,6 +419,9 @@ pub fn run() {
             events_cache: Arc::new(state::EventsCache::new()),
             index: Mutex::new(None),
             gmail_pool: Arc::new(gmail::GmailImapPool::new()),
+            mail_mutations: Mutex::new(()),
+            mail_mutation_epoch: AtomicU64::new(0),
+            mail_message_epochs: Mutex::new(std::collections::HashMap::new()),
             gmail_creds: Arc::new(gmail::CredsCache::new()),
             ical_cache: Arc::new(gcal::IcalEventCache::new()),
             people_email_index: Arc::new(state::PeopleEmailIndex::new()),

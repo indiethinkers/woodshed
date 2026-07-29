@@ -134,6 +134,24 @@ describe("MailInbox", () => {
     expect(mocks.markRead).toHaveBeenCalledWith("message-2");
   });
 
+  it("keeps a locally viewed message clear while retrying provider read sync", async () => {
+    mocks.emails = [
+      email({
+        read: false,
+        viewed: true,
+        labels: ["inbox", "unread"],
+      }),
+    ];
+    const { container } = render(<MailInbox />);
+    const row = container.querySelector("[data-mail-thread-row]")!;
+
+    expect(row.querySelector(".bg-blue-500")).toBeNull();
+    expect(screen.queryByLabelText("Unread")).toBeNull();
+
+    fireEvent.click(row);
+    await waitFor(() => expect(mocks.markRead).toHaveBeenCalledTimes(1));
+  });
+
   it("archives every inbox message represented by a thread row", async () => {
     mocks.emails = [
       email({ id: "message-2", date: "2026-07-24T09:00:00-07:00" }),

@@ -17,7 +17,12 @@ import {
   useMarkRead,
   useRefreshMail,
 } from "@/lib/hooks/use-mail";
-import type { EmailSummary, Inbox, SyncStats } from "@/lib/mail-lib/types";
+import {
+  shouldShowUnreadIndicator,
+  type EmailSummary,
+  type Inbox,
+  type SyncStats,
+} from "@/lib/mail-lib/types";
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { isEditableElement } from "@/lib/dom/is-editable";
@@ -186,7 +191,10 @@ export function MailInbox() {
   const activeEmail = visibleThreads[cursor]?.email;
   const detailPanelWidthClass = "w-[300px]";
   const unreadCount = useMemo(
-    () => visibleThreads.filter((thread) => !thread.email.read).length,
+    () =>
+      visibleThreads.filter((thread) =>
+        shouldShowUnreadIndicator(thread.email),
+      ).length,
     [visibleThreads],
   );
 
@@ -366,7 +374,7 @@ function EmailRow({
         />
       )}
       <div className="w-2 shrink-0 flex items-center justify-center">
-        {!email.read && (
+        {shouldShowUnreadIndicator(email) && (
           <span className="block h-1.5 w-1.5 rounded-full bg-blue-500" />
         )}
       </div>
@@ -417,13 +425,17 @@ function collapseMailThreads(emails: EmailSummary[]): MailThread[] {
 
     existing.messageIds.push(email.id);
     if (!email.read) existing.unreadMessageIds.push(email.id);
-    const anyUnread = !existing.email.read || !email.read;
+    const anyUnread =
+      shouldShowUnreadIndicator(existing.email) ||
+      shouldShowUnreadIndicator(email);
     if (
       new Date(email.date).getTime() > new Date(existing.email.date).getTime()
     ) {
-      existing.email = { ...email, read: !anyUnread };
-    } else if (anyUnread && existing.email.read) {
-      existing.email = { ...existing.email, read: false };
+      existing.email = anyUnread
+        ? { ...email, read: false, viewed: false }
+        : email;
+    } else if (anyUnread && !shouldShowUnreadIndicator(existing.email)) {
+      existing.email = { ...existing.email, read: false, viewed: false };
     }
   }
 
@@ -462,7 +474,7 @@ function EmailDetailPane({
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
             <MailIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
             <span className="font-medium text-foreground">Mail</span>
-            {!email.read && (
+            {shouldShowUnreadIndicator(email) && (
               <span
                 aria-label="Unread"
                 title="Unread"
