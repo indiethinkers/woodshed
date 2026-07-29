@@ -41,6 +41,7 @@ import { HtmlBody } from "@/components/mail/html-body";
 import { InlineReply } from "@/components/mail/inline-reply";
 import { Markdown } from "@/components/shared/markdown";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface EmailDetailProps {
   email: EmailSummary;
@@ -418,11 +419,17 @@ function ThreadMessage({
   return (
     <div
       ref={ref}
-      className={`relative border border-border rounded-md bg-background transition-shadow duration-200 ${
-        isSelected
-          ? "shadow-[0_1px_3px_rgba(124,58,237,0.08),0_8px_24px_-12px_rgba(124,58,237,0.22)]"
-          : ""
-      }`}
+      className={cn(
+        "relative overflow-hidden border border-border rounded-md bg-background transition-shadow duration-200",
+        // The light sheet applies only while the message is open. Sender HTML
+        // forces a light canvas, so an open message is a document either way
+        // and the whole card should agree with it. A collapsed row shows no
+        // sender content at all, so it stays part of the app's themed chrome
+        // rather than turning a thread into a stack of white bars.
+        open && "wd-email-sheet",
+        isSelected &&
+          "shadow-[0_1px_3px_rgba(124,58,237,0.08),0_8px_24px_-12px_rgba(124,58,237,0.22)]",
+      )}
     >
       <button
         type="button"
