@@ -3,7 +3,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChronologicalSidebar } from "@/components/shared/chronological-sidebar";
 import { ListSidebarPrimaryAction } from "@/components/shared/list-sidebar";
 import { RecordContextSidebar } from "@/components/shared/record-context-sidebar";
-import { useToday } from "@/lib/hooks/use-today";
 import { getMarkdownPreview } from "@/lib/markdown-preview";
 import { useAllNotes, useNote, useNoteMutations } from "@/lib/hooks/use-notes";
 
@@ -19,9 +18,8 @@ export function NoteContextSidebar({ id }: { id: string }) {
   );
 }
 
-/** Notebook index navigator: favorites pinned above chronological buckets. */
+/** Notebook index navigator: quick access to favorite notes. */
 export function NotebookIndexSidebar() {
-  const today = useToday();
   const { data, isLoading } = useAllNotes();
 
   const items = useMemo(
@@ -40,7 +38,6 @@ export function NotebookIndexSidebar() {
   return (
     <ChronologicalSidebar
       items={items}
-      referenceDate={new Date(`${today}T00:00:00`)}
       isLoading={isLoading}
       emptyMessage="No notes yet. Create one above."
       favoriteEmptyMessage="Star a note to keep it within reach."

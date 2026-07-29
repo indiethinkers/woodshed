@@ -1,11 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ListSidebarSectionHeader } from "@/components/shared/list-sidebar";
-import {
-  formatShortDate,
-  groupByDate,
-  type DateGroup,
-} from "@/lib/date-grouping";
+import { formatShortDate } from "@/lib/date-grouping";
 
 export interface ChronologicalSidebarItem {
   id: string;
@@ -17,14 +13,13 @@ export interface ChronologicalSidebarItem {
 }
 
 /**
- * A compact record navigator for writing-and-reading surfaces. Favorites are
- * pinned once at the top; everything else keeps the familiar Notes-style
- * chronological buckets.
+ * A compact record navigator for writing-and-reading surfaces. The sidebar is
+ * intentionally limited to favorites; the adjacent database remains the
+ * complete index for browsing every record.
  */
 export function ChronologicalSidebar({
   title,
   items,
-  referenceDate,
   isLoading = false,
   action,
   toolbar,
@@ -34,7 +29,6 @@ export function ChronologicalSidebar({
   /** Omit when the page title already identifies the surface. */
   title?: string;
   items: ChronologicalSidebarItem[];
-  referenceDate: Date;
   isLoading?: boolean;
   action?: ReactNode;
   toolbar?: ReactNode;
@@ -42,10 +36,7 @@ export function ChronologicalSidebar({
   favoriteEmptyMessage: string;
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const { favorites, groups } = organizeChronologicalSidebarItems(
-    items,
-    referenceDate,
-  );
+  const favorites = favoriteChronologicalSidebarItems(items);
 
   return (
     <section className={title ? "px-3 py-3" : "px-4 py-4"}>
@@ -69,7 +60,7 @@ export function ChronologicalSidebar({
         </p>
       ) : (
         <div>
-          <SidebarSection label="Favorites" count={favorites.length}>
+          <SidebarSection label="Favorites">
             {favorites.length > 0 ? (
               favorites.map((item) => (
                 <SidebarRecordRow
@@ -87,58 +78,30 @@ export function ChronologicalSidebar({
             )}
           </SidebarSection>
 
-          {groups.map((group) => (
-            <SidebarSection
-              key={group.label}
-              label={group.label}
-              count={group.items.length}
-            >
-              {group.items.map((item) => (
-                <SidebarRecordRow
-                  key={item.id}
-                  item={item}
-                  active={pathname === item.href}
-                />
-              ))}
-            </SidebarSection>
-          ))}
         </div>
       )}
     </section>
   );
 }
 
-export function organizeChronologicalSidebarItems(
+export function favoriteChronologicalSidebarItems(
   items: ChronologicalSidebarItem[],
-  referenceDate: Date,
-): {
-  favorites: ChronologicalSidebarItem[];
-  groups: DateGroup<ChronologicalSidebarItem>[];
-} {
-  const favorites = items
+): ChronologicalSidebarItem[] {
+  return items
     .filter((item) => item.favorite)
     .sort((a, b) => sortableTime(b.date) - sortableTime(a.date));
-  const groups = groupByDate(
-    items.filter((item) => !item.favorite),
-    (item) => item.date,
-    referenceDate,
-  );
-
-  return { favorites, groups };
 }
 
 function SidebarSection({
   label,
-  count,
   children,
 }: {
   label: string;
-  count: number;
   children: ReactNode;
 }) {
   return (
     <section className="mt-6 first:mt-0">
-      <ListSidebarSectionHeader label={label} count={count} />
+      <ListSidebarSectionHeader label={label} />
       <ul className="divide-y divide-border/30">{children}</ul>
     </section>
   );
@@ -173,22 +136,26 @@ function SidebarRecordRow({
           className={`truncate text-[13px] font-medium leading-snug transition-colors ${
             active
               ? "text-foreground"
-              : "text-foreground/72 group-hover:text-foreground/90"
+              : "text-foreground/90 group-hover:text-foreground"
           }`}
         >
           {item.title}
         </div>
         <div
-          className={`mt-0.5 flex min-w-0 items-baseline gap-2 truncate text-[12px] transition-colors ${
+          className={`mt-1 flex min-w-0 items-start gap-2 text-[12px] transition-colors ${
             active
-              ? "text-muted-foreground"
-              : "text-muted-foreground/55 group-hover:text-muted-foreground/75"
+              ? "text-muted-foreground/90"
+              : "text-muted-foreground/80 group-hover:text-muted-foreground"
           }`}
         >
           <span className="shrink-0 tabular-nums">
             {formatShortDate(item.date)}
           </span>
-          {item.preview && <span className="truncate">{item.preview}</span>}
+          {item.preview && (
+            <span className="min-w-0 line-clamp-2 leading-[1.35]">
+              {item.preview}
+            </span>
+          )}
         </div>
       </Link>
     </li>

@@ -87,7 +87,7 @@ export function ListSidebarSectionHeader({
   count,
 }: {
   label: string;
-  count: number;
+  count?: number;
 }) {
   return (
     <div className="mb-3 flex items-center gap-3 px-2">
@@ -95,9 +95,11 @@ export function ListSidebarSectionHeader({
         {label}
       </h3>
       <div aria-hidden className="h-px flex-1 bg-border" />
-      <span className="font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">
-        {String(count).padStart(2, "0")}
-      </span>
+      {count !== undefined && (
+        <span className="font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">
+          {String(count).padStart(2, "0")}
+        </span>
+      )}
     </div>
   );
 }
