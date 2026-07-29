@@ -20,11 +20,16 @@ across concurrent or failed startup attempts.
 
 Vault Markdown, YAML, email HTML, iCal feeds, fetched web pages, and model output
 are untrusted. HTML is sanitized before rendering; email content renders in an
-opaque sandboxed frame; sender styles, active elements, forms, and SVG are
-removed. Remote image URLs are rewritten to Woodshed's bounded cache and load
-when the user opens a message; sender HTML never fetches them directly. The main
-webview also blocks arbitrary HTTP(S) image loads; YouTube embeds make no
-request until the user presses Play.
+opaque sandboxed frame; active elements, forms, SVG, and sender stylesheets are
+removed. Inline `style` attributes are kept so a message renders as its sender
+laid it out — including the hidden preheader every sender ships — minus any
+declaration that could start a network request or reach a legacy scripting hook.
+The rendered body is additionally served under `default-src 'none'`, so no
+sender markup or CSS can reach the network even if sanitization is wrong. Remote
+image URLs are rewritten to Woodshed's bounded cache and load when the user
+opens a message; sender HTML never fetches them directly. The main webview also
+blocks arbitrary HTTP(S) image loads; YouTube embeds make no request until the
+user presses Play.
 
 ## Storage
 

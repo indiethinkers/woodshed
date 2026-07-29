@@ -189,9 +189,11 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
         width: "100%",
         height: `${height}px`,
         border: "0",
-        // Rendered inside the surrounding bordered card; a transparent
-        // background lets the card style show through.
-        background: "transparent",
+        // The rendered document paints its own light canvas (sender colours
+        // assume one), so match it here rather than leaving the frame
+        // transparent — otherwise the app's dark background shows through for
+        // the frame we spend loading and the email flashes in.
+        background: "#ffffff",
       }}
       />
     </div>

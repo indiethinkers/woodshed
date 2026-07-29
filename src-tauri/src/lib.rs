@@ -170,6 +170,26 @@ fn empty_response(status: u16) -> tauri::http::Response<Vec<u8>> {
         .expect("static response builder cannot fail")
 }
 
+/// Content-Security-Policy for the rendered email document.
+///
+/// The sanitizer in `email_render` is the first line of defence; this is the
+/// structural one. `default-src 'none'` means no sender markup or CSS can
+/// reach the network no matter what slips past sanitization, which is what
+/// keeps the invariant that sender HTML never fetches remote URLs directly —
+/// remote images only load through the bounded `wsmail://` image cache.
+///
+/// `'unsafe-inline'` covers Woodshed's own wrapper `<style>` and bridge
+/// `<script>`, which are the only style and script in the document. Source
+/// lists are schemes rather than `'self'`: the frame is sandboxed without
+/// `allow-same-origin`, so its origin is opaque and `'self'` would match
+/// nothing.
+const EMAIL_BODY_CSP: &str = "default-src 'none'; \
+     img-src wsmail: data:; \
+     style-src 'unsafe-inline'; \
+     script-src 'unsafe-inline'; \
+     form-action 'none'; \
+     base-uri 'none'";
+
 enum WsmailRoute {
     /// `/img/<urlsafe-b64-of-original-url>` — resolved upstream URL.
     Img(String),
@@ -311,6 +331,7 @@ pub fn run() {
                                 .status(200)
                                 .header("Content-Type", "text/html; charset=utf-8")
                                 .header("Cache-Control", "no-store")
+                                .header("Content-Security-Policy", EMAIL_BODY_CSP)
                                 .body(bytes)
                                 .unwrap_or_else(|_| empty_response(500)),
                             Ok(None) => {
@@ -559,4 +580,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Woodshed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sanitizer keeps sender CSS now, so this header is what actually
+    /// guarantees the invariant that sender HTML never fetches remote URLs
+    /// directly. Remote images must still come from the bounded image cache.
+    #[test]
+    fn the_email_body_csp_permits_no_network_origin() {
+        assert!(EMAIL_BODY_CSP.starts_with("default-src 'none'"));
+        for forbidden in ["http:", "https:", "*", "'unsafe-eval'"] {
+            assert!(
+                !EMAIL_BODY_CSP.contains(forbidden),
+                "{forbidden} must not appear in the email body CSP"
+            );
+        }
+        assert!(EMAIL_BODY_CSP.contains("img-src wsmail: data:"));
+        // `'self'` is meaningless here: the frame is sandboxed without
+        // allow-same-origin, so its origin is opaque and would match nothing.
+        assert!(!EMAIL_BODY_CSP.contains("'self'"));
+    }
+
+    #[test]
+    fn wsmail_routes_split_images_from_bodies_and_reject_junk() {
+        assert!(matches!(
+            wsmail_route("wsmail://localhost/body/abc123"),
+            Some(WsmailRoute::Body(id)) if id == "abc123"
+        ));
+        assert!(wsmail_route("wsmail://localhost/other/abc").is_none());
+        assert!(wsmail_route("not-a-uri").is_none());
+    }
 }
