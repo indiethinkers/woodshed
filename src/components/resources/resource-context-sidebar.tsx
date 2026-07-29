@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { ChronologicalSidebar } from "@/components/shared/chronological-sidebar";
 import { ListSidebarPrimaryAction } from "@/components/shared/list-sidebar";
 import { RecordContextSidebar } from "@/components/shared/record-context-sidebar";
-import { useToday } from "@/lib/hooks/use-today";
 import { useAllResources, useResource } from "@/lib/hooks/use-resources";
 import { NewResourceForm } from "./new-resource-form";
 
@@ -18,9 +17,8 @@ export function ResourceContextSidebar({ id }: { id: string }) {
   );
 }
 
-/** Resources index navigator: favorites pinned above capture-date buckets. */
+/** Resources index navigator: quick access to favorite resources. */
 export function ResourcesIndexSidebar() {
-  const today = useToday();
   const { data, isLoading } = useAllResources();
 
   const items = useMemo(
@@ -39,7 +37,6 @@ export function ResourcesIndexSidebar() {
   return (
     <ChronologicalSidebar
       items={items}
-      referenceDate={new Date(`${today}T00:00:00`)}
       isLoading={isLoading}
       emptyMessage="No resources yet. Save one above."
       favoriteEmptyMessage="Star a resource to keep it within reach."

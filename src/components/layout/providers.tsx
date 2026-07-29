@@ -118,11 +118,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <TooltipProvider>
           <AgentPanelProvider>
             <RightSidebarProvider>
-              <ListPanelProvider>
-                <TabsProvider>
+              <TabsProvider>
+                <ListPanelProvider>
                   <RouteTheme>{children}</RouteTheme>
-                </TabsProvider>
-              </ListPanelProvider>
+                </ListPanelProvider>
+              </TabsProvider>
             </RightSidebarProvider>
           </AgentPanelProvider>
         </TooltipProvider>
