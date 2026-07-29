@@ -1924,7 +1924,13 @@ pub struct EmailBodyRenderResult {
     has_remote_images: bool,
 }
 
-const EMAIL_BODY_RENDER_CACHE_VERSION: u8 = 2;
+/// Bump whenever `email_render` changes its output. Rendered bodies are cached
+/// on disk keyed by message id, and `email_body_render` returns early on a hit
+/// — without a bump, every email the user has already opened keeps serving the
+/// render from the previous version of the pipeline.
+///
+/// v3: inline `style` attributes survive sanitization.
+const EMAIL_BODY_RENDER_CACHE_VERSION: u8 = 3;
 
 fn email_body_cache_id(id: &str, load_remote_images: bool) -> String {
     let mode = if load_remote_images {
@@ -2004,13 +2010,22 @@ mod tests {
 
     #[test]
     fn rendered_email_cache_ids_include_the_renderer_version() {
+        // Derived from the constant rather than hard-coded, so bumping the
+        // renderer version doesn't require editing this test — what matters is
+        // that the version reaches the key and that the two image modes stay
+        // distinct.
+        let version = EMAIL_BODY_RENDER_CACHE_VERSION;
         assert_eq!(
             email_body_cache_id("message-1", true),
-            "message-1:remote-images:v2"
+            format!("message-1:remote-images:v{version}")
         );
         assert_eq!(
             email_body_cache_id("message-1", false),
-            "message-1:images-blocked:v2"
+            format!("message-1:images-blocked:v{version}")
+        );
+        assert_ne!(
+            email_body_cache_id("message-1", true),
+            email_body_cache_id("message-1", false)
         );
     }
 

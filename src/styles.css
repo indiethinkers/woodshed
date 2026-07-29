@@ -1083,6 +1083,43 @@
   opacity: 0.06;
 }
 
+/* ─────────── Email message sheet ─────────── */
+
+/* One opened email, rendered as a light sheet in both themes.
+ *
+ * Sender HTML sets colours that assume a light canvas, so the body iframe has
+ * to paint one (see `email_render::STYLES`). That left a white block inset in a
+ * dark card, with dark gutters around it, a dark sender row above, and a dark
+ * tail below wherever the message was shorter than the card. Extending the
+ * light surface to the whole card turns that seam into one continuous sheet —
+ * the message reads as a document, and the app chrome around it stays themed.
+ *
+ * Scoped by re-declaring the palette rather than per-element `dark:` overrides:
+ * every token the subtree already uses (`bg-background`, `text-muted-foreground`,
+ * `border-border`, `bg-muted`, `text-destructive`) resolves against these, so
+ * the HTML and plaintext branches and the attachment row all follow with no
+ * markup churn. Values are the light theme's, except the surface, which is pure
+ * white to match the iframe exactly — `--bg-content`'s #FCFCFC would show a
+ * visible seam where the body starts.
+ *
+ * Keep in sync with the `body { background }` in `src-tauri/src/email_render.rs`.
+ */
+.wd-email-sheet {
+  --background: #ffffff;
+  --card: #ffffff;
+  --foreground: hsl(0 0% 15%);
+  --card-foreground: hsl(0 0% 15%);
+  --muted: hsl(180 4% 92%);
+  --muted-foreground: hsl(210 3% 47%);
+  --accent: hsl(180 4% 89%);
+  --border: hsl(180 4% 88%);
+  --destructive: hsl(0 65% 48%);
+  --ring: hsl(210 6% 30% / 0.35);
+  /* `color` inherits as an already-resolved value, not as a var reference, so
+     without this the subtree keeps whatever ink the ancestor theme computed. */
+  color: var(--foreground);
+}
+
 /* ─────────── Meeting transcript (collapsible) ─────────── */
 
 /* A recorded meeting's transcript, folded by default so it doesn't dominate

@@ -7,6 +7,9 @@
 //     `<embed>`, `<frame>`, `<frameset>`, `<base>`, `<head>`,
 //     `<meta http-equiv="refresh|set-cookie">`, on* event-handler
 //     attributes, `javascript:`/`data:` hrefs, `javascript:` srcs)
+//   - keep inline `style` attributes minus any declaration that could
+//     fetch (see `sanitize_style_attribute`) — emails carry their whole
+//     layout there, including the `display: none` that hides preheaders
 //   - unwrap any `<html>` / `<body>` tags so the email content sits
 //     cleanly inside our own document wrapper
 //   - decorate `<img>` for lazy network (`loading`, `decoding`,
@@ -40,8 +43,18 @@ const STYLES: &str = r#"
     color: #1f2328;
     word-wrap: break-word;
     overflow-wrap: anywhere;
+    /* Sender colours assume a light canvas, so the document owns one
+       explicitly rather than inheriting the app's theme and leaving dark-mode
+       readers with #333 text on a dark background. The email's own body tag is
+       unwrapped (and with it any background it set), so without this the canvas
+       is whatever the sender's outermost table happens to paint — which reads
+       as a stray white block floating in the pane. */
+    background: #ffffff;
   }
-  img { max-width: 100%; height: auto; }
+  /* `!important` because inline styles now survive sanitization: a sender's
+     `width: 900px` on an image would otherwise overflow the pane horizontally.
+     `height` stays overridable so spacer images keep their explicit heights. */
+  img { max-width: 100% !important; height: auto; }
   [data-woodshed-remote-image="blocked"] { display: none !important; }
   a { color: #1d4ed8; }
   table { max-width: 100% !important; }
@@ -114,6 +127,189 @@ const BRIDGE: &str = r#"
   }
 })();
 "#;
+
+// ─── Inline style sanitization ───────────────────────────────────────────────
+//
+// Email layout lives almost entirely in inline `style` attributes, and the
+// single most important thing they do is *hide* content: every sender puts a
+// preheader (the preview line the inbox list shows) in a `display: none` block,
+// and ships desktop and mobile variants of the same block with one hidden.
+// Dropping the attribute wholesale unhides all of it, collapses spacer heights,
+// and leaves the reader looking at a truncated preview line and duplicated
+// sections.
+//
+// So we keep declarations and drop the ones that can act. The only thing CSS
+// can do from inside an opaque sandboxed frame is fetch — which would break the
+// invariant that sender HTML never reaches the network directly — so that is
+// what the filter targets. `EMAIL_BODY_CSP` on the `/body/` response is the
+// structural backstop if anything here is ever wrong.
+
+/// Declarations whose value can start a network request, or that hand control
+/// to a legacy scripting hook. Matched as substrings of the normalized value.
+const FETCHING_CSS_TOKENS: [&str; 7] = [
+    "url(",
+    "image(",
+    "image-set(",
+    "element(",
+    "expression(",
+    "@import",
+    "-moz-binding",
+];
+
+/// Properties dropped regardless of value: `src` only means anything inside
+/// `@font-face` (which cannot appear in an attribute), and the other two are
+/// legacy scripting hooks.
+const DENIED_CSS_PROPERTIES: [&str; 3] = ["src", "behavior", "-moz-binding"];
+
+/// Decode the HTML entities that can appear inside a `style` attribute.
+///
+/// `lol_html` hands back attribute values exactly as written, entities and all,
+/// so this has to happen before anything else. It is not cosmetic: without it
+/// `background: &#117;rl(https://tracker/p)` reads as a harmless literal to the
+/// token filter and is then decoded into `url(` by the browser. Decoding first
+/// means the filter sees what the browser will see.
+///
+/// Unknown or malformed sequences are left as written — a stray `&` in a CSS
+/// value is meaningless, so there is nothing to gain by guessing.
+fn decode_html_entities(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'&' {
+            let ch_len = raw[i..].chars().next().map_or(1, char::len_utf8);
+            out.push_str(&raw[i..i + ch_len]);
+            i += ch_len;
+            continue;
+        }
+        // Entities are short; a `;` further out than this isn't one.
+        let limit = (i + 12).min(bytes.len());
+        match raw[i..limit].find(';') {
+            Some(offset) => {
+                let entity = &raw[i + 1..i + offset];
+                let decoded = match entity.to_ascii_lowercase().as_str() {
+                    "quot" | "#34" | "#x22" => Some('"'),
+                    "apos" | "#39" | "#x27" => Some('\''),
+                    "amp" | "#38" | "#x26" => Some('&'),
+                    "lt" | "#60" | "#x3c" => Some('<'),
+                    "gt" | "#62" | "#x3e" => Some('>'),
+                    "#40" | "#x28" => Some('('),
+                    "#41" | "#x29" => Some(')'),
+                    // Any other numeric reference: decode it so the filter sees
+                    // the same character the browser will.
+                    other => other
+                        .strip_prefix('#')
+                        .and_then(|digits| match digits.strip_prefix('x') {
+                            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                            None => digits.parse::<u32>().ok(),
+                        })
+                        .and_then(char::from_u32),
+                };
+                match decoded {
+                    Some(c) => {
+                        out.push(c);
+                        i += offset + 1;
+                    }
+                    None => {
+                        out.push('&');
+                        i += 1;
+                    }
+                }
+            }
+            None => {
+                out.push('&');
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Escape a sanitized value for writing back into a double-quoted attribute.
+/// `set_attribute` writes bytes verbatim, so an unescaped `"` would close the
+/// attribute early.
+fn encode_attribute_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Split a declaration list on `;`, ignoring separators inside quoted strings.
+/// `font-family: "Foo;Bar", serif` is one declaration, not two.
+fn split_css_declarations(value: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut start = 0;
+    for (index, c) in value.char_indices() {
+        match (quote, c) {
+            (Some(open), _) if c == open => quote = None,
+            (None, '"') | (None, '\'') => quote = Some(c),
+            (None, ';') => {
+                out.push(&value[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&value[start..]);
+    out
+}
+
+/// Sanitize one inline `style` attribute. Returns `None` when nothing
+/// survives, so the caller can drop the attribute instead of leaving `style=""`.
+/// The result is entity-decoded; the caller escapes it on the way back out.
+fn sanitize_style_attribute(raw: &str) -> Option<String> {
+    let decoded = decode_html_entities(raw);
+    let mut kept: Vec<String> = Vec::new();
+    for declaration in split_css_declarations(&decoded) {
+        let declaration = declaration.trim();
+        if declaration.is_empty() {
+            continue;
+        }
+        // Split on the first colon only: values legitimately contain colons
+        // (`background: url(https://…)`, though that one is dropped below).
+        let Some((property, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        let property = property.trim().to_lowercase();
+        let value = value.trim();
+        if property.is_empty() || value.is_empty() {
+            continue;
+        }
+        if !property
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            continue;
+        }
+        if DENIED_CSS_PROPERTIES.contains(&property.as_str()) {
+            continue;
+        }
+        // Backslash escapes (`\75 rl(`) and comments (`u/**/rl(`) both exist to
+        // spell a token without writing it literally. Real email HTML uses
+        // neither, so rejecting them outright beats trying to decode them.
+        if value.contains('\\') || value.contains("/*") {
+            continue;
+        }
+        let lowered = value.to_lowercase();
+        if FETCHING_CSS_TOKENS
+            .iter()
+            .any(|token| lowered.contains(token))
+        {
+            continue;
+        }
+        kept.push(format!("{property}: {value}"));
+    }
+    (!kept.is_empty()).then(|| kept.join("; "))
+}
 
 fn img_cache_url(url: &str) -> String {
     let key = URL_SAFE_NO_PAD.encode(url.as_bytes());
@@ -260,10 +456,20 @@ fn sanitize_and_rewrite(
                     for name in on_attrs {
                         el.remove_attribute(&name);
                     }
-                    // CSS can make its own tracking requests via url(), so
-                    // sender-controlled styles are excluded from this isolated
-                    // document. Woodshed's wrapper supplies readable defaults.
-                    el.remove_attribute("style");
+                    // Keep the sender's layout, drop anything in it that could
+                    // fetch. See `sanitize_style_attribute`.
+                    match el
+                        .get_attribute("style")
+                        .as_deref()
+                        .and_then(sanitize_style_attribute)
+                    {
+                        Some(safe) => {
+                            let _ = el.set_attribute("style", &encode_attribute_value(&safe));
+                        }
+                        None => el.remove_attribute("style"),
+                    }
+                    // `background` is a bare URL with no property to filter,
+                    // and `poster` only applies to the media elements we drop.
                     el.remove_attribute("background");
                     el.remove_attribute("poster");
                     if let Some(href) = el.get_attribute("href") {
@@ -363,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_css_and_embedded_active_content() {
+    fn strips_fetching_css_and_embedded_active_content() {
         let raw = r#"<style>body{background:url(https://tracker.example/p)}</style>
             <p style="background:url(https://tracker.example/q)">hello</p>
             <form action="https://evil.example"><input name="secret"></form>
@@ -374,6 +580,168 @@ mod tests {
         assert!(!out.contains("<input"));
         assert!(!out.contains("<svg"));
         assert!(out.contains("hello"));
+    }
+
+    // The reported bug. Every sender hides a preheader — the preview line the
+    // inbox list shows — in a `display: none` block. Dropping the style
+    // attribute rendered that line at the top of the message, truncated
+    // mid-word, above the real content. This is the exact attribute shape from
+    // the email that surfaced it.
+    #[test]
+    fn a_hidden_preheader_stays_hidden() {
+        let raw = r#"<span class="preheader" style="color: transparent; display: none; height: 0; max-height: 0; max-width: 0; opacity: 0; overflow: hidden; mso-hide: all; visibility: hidden; width: 0;">preview line</span><p>real body</p>"#;
+        let out = render_email(raw, empty_dims(), false).unwrap();
+        assert!(out.contains("display: none"), "in {out}");
+        assert!(out.contains("max-height: 0"));
+        assert!(out.contains("visibility: hidden"));
+        assert!(out.contains("real body"));
+    }
+
+    #[test]
+    fn a_fetching_declaration_is_dropped_without_losing_its_neighbours() {
+        let kept = sanitize_style_attribute(
+            "padding: 24px; background: url(https://tracker.example/p); font-size: 15px",
+        )
+        .expect("safe declarations survive");
+        assert_eq!(kept, "padding: 24px; font-size: 15px");
+    }
+
+    #[test]
+    fn every_fetching_css_function_is_rejected() {
+        for value in [
+            "background: url(https://a.example/p)",
+            "background: URL('https://a.example/p')",
+            "background-image: image-set(\"https://a.example/p\" 1x)",
+            "background-image: -webkit-image-set(\"https://a.example/p\" 1x)",
+            "background: image('https://a.example/p')",
+            "background: element(#other)",
+            "width: expression(alert(1))",
+            "behavior: url(#default#time2)",
+            "-moz-binding: url(https://a.example/x.xml)",
+        ] {
+            assert!(
+                sanitize_style_attribute(value).is_none(),
+                "expected {value} to be rejected entirely"
+            );
+        }
+    }
+
+    // `\75 rl(` and `u/**/rl(` both spell `url(` without writing it. Real email
+    // HTML uses neither, so any value carrying an escape or a comment is
+    // dropped rather than decoded.
+    #[test]
+    fn css_escapes_and_comments_are_rejected_rather_than_decoded() {
+        assert!(sanitize_style_attribute(r"background: \75 rl(https://a.example/p)").is_none());
+        assert!(sanitize_style_attribute("background: u/**/rl(https://a.example/p)").is_none());
+        assert!(sanitize_style_attribute(r"content: \0041").is_none());
+    }
+
+    #[test]
+    fn a_style_attribute_with_nothing_safe_left_is_removed_entirely() {
+        assert!(sanitize_style_attribute("background: url(https://a.example/p)").is_none());
+        assert!(sanitize_style_attribute("   ").is_none());
+        assert!(sanitize_style_attribute(";;;").is_none());
+        assert!(sanitize_style_attribute("novalue:").is_none());
+
+        let raw = r#"<p style="background:url(https://a.example/p)">hi</p>"#;
+        let out = render_email(raw, empty_dims(), false).unwrap();
+        assert!(
+            !out.contains("style="),
+            "empty style attr left behind: {out}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_property_name_is_dropped() {
+        // Anything that isn't an identifier can't be a real property, and
+        // letting it through would mean trusting the value scan alone.
+        assert!(sanitize_style_attribute("colo r: red").is_none());
+        assert!(sanitize_style_attribute("}\ncolor: red").is_none());
+        assert_eq!(
+            sanitize_style_attribute("-webkit-text-size-adjust: 100%").as_deref(),
+            Some("-webkit-text-size-adjust: 100%"),
+        );
+    }
+
+    // lol_html hands attribute values back exactly as written, so an entity
+    // spelling of `url(` would read as a harmless literal to the token filter
+    // and then be decoded by the browser. Decode before filtering, always.
+    #[test]
+    fn entity_encoded_fetch_tokens_do_not_slip_past_the_filter() {
+        for value in [
+            "background: &#117;rl(https://a.example/p)",
+            "background: &#x75;rl(https://a.example/p)",
+            "background: u&#114;l(https://a.example/p)",
+            "background: url&#40;https://a.example/p&#41;",
+        ] {
+            assert!(
+                sanitize_style_attribute(value).is_none(),
+                "expected {value} to be rejected after entity decoding"
+            );
+        }
+    }
+
+    // Quoted font names are entity-escaped in real email HTML, and the `;`
+    // inside `&quot;` used to split the declaration — mangling the font stack
+    // and taking the following declaration down with it.
+    #[test]
+    fn entity_escaped_font_stacks_survive_intact() {
+        let kept = sanitize_style_attribute(
+            "font-family: &quot;Google Sans&quot;, Roboto, sans-serif; color: red",
+        )
+        .expect("font stack survives");
+        assert_eq!(
+            kept,
+            "font-family: \"Google Sans\", Roboto, sans-serif; color: red"
+        );
+
+        // …and it round-trips back into the attribute correctly.
+        let raw = r#"<p style="font-family: &quot;Google Sans&quot;, Roboto; color: red">hi</p>"#;
+        let out = render_email(raw, empty_dims(), false).unwrap();
+        assert!(
+            out.contains(r#"style="font-family: &quot;Google Sans&quot;, Roboto; color: red""#),
+            "attribute did not round-trip in {out}"
+        );
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_quoted_value_is_not_a_declaration_separator() {
+        assert_eq!(
+            split_css_declarations("font-family: \"Foo;Bar\", serif; color: red").len(),
+            2
+        );
+        let kept = sanitize_style_attribute("font-family: \"Foo;Bar\", serif; color: red")
+            .expect("both survive");
+        assert!(kept.contains("\"Foo;Bar\""), "got {kept}");
+        assert!(kept.contains("color: red"));
+    }
+
+    #[test]
+    fn unknown_and_malformed_entities_are_left_alone() {
+        assert_eq!(decode_html_entities("a &notreal; b"), "a &notreal; b");
+        assert_eq!(decode_html_entities("50% & rising"), "50% & rising");
+        assert_eq!(decode_html_entities("&amp;quot;"), "&quot;");
+        assert_eq!(decode_html_entities("&#8212;"), "—");
+    }
+
+    #[test]
+    fn layout_declarations_emails_depend_on_survive() {
+        let kept = sanitize_style_attribute(
+            "mso-hide: all; font-family: Georgia, serif; line-height: 1.4; \
+             text-align: center; border-collapse: collapse; height: 20px; \
+             background-color: #f6f6f6; background: linear-gradient(#fff, #eee)",
+        )
+        .expect("layout declarations survive");
+        for expected in [
+            "mso-hide: all",
+            "font-family: Georgia, serif",
+            "text-align: center",
+            "height: 20px",
+            "background-color: #f6f6f6",
+            "linear-gradient(#fff, #eee)",
+        ] {
+            assert!(kept.contains(expected), "{expected} missing from {kept}");
+        }
     }
 
     #[test]
