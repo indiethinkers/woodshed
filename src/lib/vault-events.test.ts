@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { invalidateForPath } from "./vault-events";
+import { invalidateAfterIndexRebuild, invalidateForPath } from "./vault-events";
 
 describe("invalidateForPath", () => {
   let queryClient: QueryClient;
@@ -123,5 +123,20 @@ describe("invalidateForPath", () => {
   it("ignores paths without a section", () => {
     invalidateForPath(queryClient, "lonely.md");
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("invalidateAfterIndexRebuild", () => {
+  it("refreshes generated tag dates after a background rebuild", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    invalidateAfterIndexRebuild(queryClient);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["emails"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tagTable"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["tagsWithCounts"],
+    });
   });
 });

@@ -1,15 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Tool } from "ai";
 import { AlertCircle, PlugZap, Save, Trash2 } from "lucide-react";
-import {
-  Agent,
-  AgentContent,
-  AgentHeader,
-  AgentInstructions,
-  AgentOutput,
-  AgentTool,
-  AgentTools,
-} from "@/components/ai-elements/agent";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import { tauriInvoke } from "@/lib/tauri";
 
@@ -37,48 +27,6 @@ const DEFAULT_CONFIG: AgentConfig = {
   hasApiKey: false,
 };
 const MASKED_KEY_VALUE = "configured-password";
-const AGENT_STREAM_OUTPUT_SCHEMA = `type WoodshedAgentStream =
-  | { type: "text-delta"; textDelta: string }
-  | { type: "reasoning-delta"; textDelta: string }
-  | { type: "tool-input" | "tool-output"; toolCallId: string }
-  | { type: "source-url"; url: string; title?: string }
-  | { type: "finish" };`;
-const AGENT_PREVIEW_TOOLS: Array<{ value: string; tool: Tool }> = [
-  {
-    value: "stream_reasoning",
-    tool: previewTool("Stream reasoning and visible remote activity", {
-      type: "object",
-      properties: {
-        delta: { type: "string" },
-      },
-    }),
-  },
-  {
-    value: "tool_calls",
-    tool: previewTool("Render Hermes tool calls with approval states", {
-      type: "object",
-      properties: {
-        toolCallId: { type: "string" },
-        input: { type: "object" },
-        output: { type: "object" },
-      },
-    }),
-  },
-  {
-    value: "vault_context",
-    tool: previewTool("Persist Agent chats as local markdown records", {
-      type: "object",
-      properties: {
-        sessionKey: { type: "string" },
-        chatId: { type: "string" },
-      },
-    }),
-  },
-];
-
-function previewTool(description: string, inputSchema: unknown): Tool {
-  return { description, inputSchema } as unknown as Tool;
-}
 
 export function AgentSettingsSection() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
@@ -235,10 +183,14 @@ export function AgentSettingsSection() {
           </label>
         </div>
 
-        <label className="text-[12px] text-muted-foreground">
-          Bearer key
+        <div className="text-[13px] text-foreground">
+          <label htmlFor="hermes-token" className="block">
+            Bearer token
+          </label>
           <div className="relative mt-1">
             <input
+              id="hermes-token"
+              aria-describedby="hermes-token-help"
               ref={keyInputRef}
               type="password"
               value={keyInputValue}
@@ -272,11 +224,21 @@ export function AgentSettingsSection() {
                 e.preventDefault();
                 beginReplacingKey(e.clipboardData.getData("text"));
               }}
-              placeholder={hasKey ? "Paste replacement key" : "Paste generated key"}
-              className="w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+              placeholder={hasKey ? "Paste replacement token" : "Paste Hermes token"}
+              className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
             />
           </div>
-        </label>
+          <p
+            id="hermes-token-help"
+            className="mt-2 text-[13px] leading-5 text-muted-foreground"
+          >
+            This is the value you set as <code>API_SERVER_KEY</code> when
+            configuring the Hermes API server; Woodshed does not issue it.
+            Paste only the value—without “Bearer” or “Authorization:”—and
+            Woodshed stores it in your operating system keychain and adds the
+            authorization header when connecting.
+          </p>
+        </div>
 
         <label className="text-[12px] text-muted-foreground">
           Session key
@@ -346,23 +308,16 @@ export function AgentSettingsSection() {
           </div>
         )}
       </form>
-      <Agent className="mt-6 max-w-[680px] bg-background/40 shadow-none">
-        <AgentHeader
-          model={model.trim() || DEFAULT_CONFIG.model}
-          name={displayName.trim() || DEFAULT_CONFIG.displayName}
-        />
-        <AgentContent>
-          <AgentInstructions>
-            {`Woodshed sends Agent conversations to ${baseUrl.trim() || DEFAULT_CONFIG.baseUrl} using session "${sessionKey.trim() || DEFAULT_CONFIG.sessionKey}" and renders structured stream events when Hermes provides them.`}
-          </AgentInstructions>
-          <AgentTools>
-            {AGENT_PREVIEW_TOOLS.map(({ tool, value }) => (
-              <AgentTool key={value} tool={tool} value={value} />
-            ))}
-          </AgentTools>
-          <AgentOutput schema={AGENT_STREAM_OUTPUT_SCHEMA} />
-        </AgentContent>
-      </Agent>
+      <div className="mt-4 max-w-[680px] rounded-md border border-border bg-foreground/[0.02] px-4 py-3">
+        <h3 className="text-[13px] font-medium text-foreground">
+          What this connection enables
+        </h3>
+        <ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-muted-foreground">
+          <li>• Chat requests go directly from Woodshed to your Hermes endpoint.</li>
+          <li>• Remote activity appears in the conversation while Hermes works.</li>
+          <li>• Conversations remain readable Markdown files in your vault.</li>
+        </ul>
+      </div>
     </SettingsGroup>
   );
 }

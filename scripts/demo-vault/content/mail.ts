@@ -909,7 +909,7 @@ const MESSAGES: MessageSeed[] = [
     body: [
       "The answer is short, so here it is in full.",
       "",
-      "Content leaves the machine in exactly six cases, all user-initiated:",
+      "Content leaves the machine in exactly five cases, all user-initiated:",
       "",
       "1. Mail — IMAP/SMTP to the provider you configured, on sync or send",
       "2. Calendar — HTTPS GET of the read-only iCal URL you supplied",
@@ -917,8 +917,6 @@ const MESSAGES: MessageSeed[] = [
       "4. Remote images in HTML mail — through a bounded local cache; sender HTML",
       "   never fetches anything directly",
       "5. Agent — requests to the endpoint you configured, after an explicit send",
-      "6. Dictation — microphone audio to your configured speech provider, while",
-      "   invoked",
       "",
       "What does not happen: no account system, no telemetry, no crash reporting,",
       "no Woodshed-operated backend of any kind. There is no server for vault",

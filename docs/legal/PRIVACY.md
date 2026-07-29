@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective and last updated:** July 26, 2026
+**Effective:** July 26, 2026 · **Last updated:** July 28, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -19,9 +19,11 @@ images through Woodshed's bounded cache by default.
 - The selected vault contains Markdown records, synced mail, and attachments.
 - The application-data directory contains non-secret preferences, a rebuildable
   SQLite search index, a rebuildable iCal event cache, and rotating local logs.
-- Gmail App Passwords, Google Calendar secret iCal URLs, Hermes API keys, and
-  Deepgram keys are stored in the operating-system credential store. Legacy
+- Gmail App Passwords, Google Calendar secret iCal URLs, and Hermes API keys
+  are stored in the operating-system credential store. Legacy
   plaintext configuration values are migrated there and scrubbed on first use.
+- Upgraded installations delete the obsolete transcription credential and
+  preference on the next launch.
 - Development builds may read explicitly configured values from `.env.local`.
 
 The app does not encrypt vault files or synced mail. Use operating-system disk
@@ -34,7 +36,8 @@ actions require a configured integration and an explicit command; remote image
 requests are the exception described below.
 
 - **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
-  sends mail and replies. Synced messages are written to the local vault.
+  sends mail, replies, and user-selected attachments. Synced messages and
+  attachment copies are written to the local vault.
 - **Google Calendar or another iCal host:** an explicit Sync downloads the
   configured read-only calendar feed and writes a derived local cache.
 - **Resource capture:** saving a URL downloads that public page and, for
@@ -48,10 +51,6 @@ requests are the exception described below.
   the selected instruction and relevant vault or email content directly to the
   endpoint you configured. Opening Sweep does not transmit content. Proposed
   record creation and mail archive actions require confirmation.
-- **Deepgram:** dictation sends the microphone clip for transcription; voice
-  playback sends reply text for speech synthesis. Nothing is sent until you
-  invoke a voice feature.
-
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 

@@ -99,6 +99,18 @@ pub fn watcher_start(
         Err(e) => crate::log_error!("vault::migration", "{}", e),
     }
 
+    match crate::commands::mail::migrate_gmail_thread_ids(&vault_root) {
+        Ok(0) => {}
+        Ok(count) => {
+            migration_changed = true;
+            crate::log_info!(
+                "mail::migration",
+                "account-scoped {count} legacy thread ids"
+            );
+        }
+        Err(error) => crate::log_error!("mail::migration", "{error}"),
+    }
+
     // One-shot cleanup: sweep any `cadence/gcal-*.md` files left over
     // from the pre-cache iCal sync implementation. The first pass ran
     // for ~30 seconds and tried to write thousands of files; many made
@@ -194,6 +206,7 @@ pub fn watcher_start(
             match index_for_rebuild.rebuild_from_vault(&vault_for_rebuild) {
                 Ok(count) => {
                     crate::log_info!("index", "rebuild complete: {count} documents");
+                    app_for_rebuild.state::<AppState>().invalidate_tag_caches();
                     let _ = app_for_rebuild.emit("index:rebuild:done", count);
                 }
                 Err(e) => {

@@ -70,7 +70,9 @@ interface RecordTableProps<T> {
   loading?: boolean;
   rowKey: (row: T) => string;
   rowHref: (row: T) => string;
-  /** Big page title — matches the `#tag` heading on the event table. */
+  /** Page tables own the page heading; inline tables sit inside a page. */
+  variant?: "page" | "inline";
+  /** Page or inline-table title. */
   title: string;
   /** Noun used in the "visible / total" count, e.g. "notes". */
   unit?: string;
@@ -134,6 +136,7 @@ export function RecordTable<T>({
   loading = false,
   rowKey,
   rowHref,
+  variant = "page",
   title,
   unit = "rows",
   action,
@@ -171,7 +174,10 @@ export function RecordTable<T>({
   // Selection only tracks rows the user can currently see — filtering a row
   // out drops it from the active selection by construction.
   const selectedRows = useMemo(
-    () => (selectable ? visibleRows.filter((row) => selectedKeys.has(rowKey(row))) : []),
+    () =>
+      selectable
+        ? visibleRows.filter((row) => selectedKeys.has(rowKey(row)))
+        : [],
     [selectable, visibleRows, selectedKeys, rowKey],
   );
 
@@ -187,7 +193,8 @@ export function RecordTable<T>({
   function toggleAll() {
     const visibleKeys = visibleRows.map(rowKey);
     const allSelected =
-      visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeys.has(key));
+      visibleKeys.length > 0 &&
+      visibleKeys.every((key) => selectedKeys.has(key));
     setSelectedKeys(allSelected ? new Set() : new Set(visibleKeys));
   }
 
@@ -208,24 +215,57 @@ export function RecordTable<T>({
     !totalOnlyWhenUnfiltered ||
     query.trim().length > 0 ||
     filters.conditions.length > 0;
+  const countUnit = rows.length === 1 ? singularize(unit) : unit;
 
   return (
-    <div className="w-full pb-24">
-      <header className="mb-5 w-full">
-        <div className="flex items-start justify-between gap-4">
+    <div
+      data-record-table-variant={variant}
+      className={variant === "page" ? "w-full pb-24" : "w-full"}
+    >
+      <header
+        data-inline-table-header={variant === "inline" ? "" : undefined}
+        className={variant === "page" ? "mb-5 w-full" : "mb-2 w-full"}
+      >
+        <div className="flex min-h-8 items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <h1 className="min-w-0 text-[32px] font-bold leading-tight tracking-normal text-foreground">
-              {title}
-            </h1>
-            <FilePathLine className="mt-1.5" />
+            {variant === "page" ? (
+              <>
+                <h1 className="min-w-0 text-[32px] font-bold leading-tight tracking-normal text-foreground">
+                  {title}
+                </h1>
+                <FilePathLine className="mt-1.5" />
+              </>
+            ) : (
+              <div className="flex h-7 min-w-0 items-center gap-2.5">
+                <span
+                  data-inline-table-marker
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/35 ring-[3px] ring-foreground/[0.04]"
+                />
+                <h2 className="min-w-0 text-[12px] font-medium text-foreground/90">
+                  {title}
+                </h2>
+                <span
+                  data-inline-table-count
+                  className="rounded-full bg-muted/70 px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground ring-1 ring-inset ring-border/50"
+                >
+                  {showCountFraction && `${visibleRows.length} / `}
+                  {rows.length} {countUnit}
+                </span>
+              </div>
+            )}
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
-              {showCountFraction && `${visibleRows.length} / `}
-              {rows.length} {unit}
-            </span>
-            {action}
-          </div>
+          {(variant === "page" || action) && (
+            <div className="flex shrink-0 items-center gap-3">
+              {variant === "page" && (
+                <span className="font-mono text-[12px] tabular-nums text-muted-foreground">
+                  {showCountFraction && `${visibleRows.length} / `}
+                  {rows.length} {countUnit}
+                </span>
+              )}
+              {action}
+            </div>
+          )}
         </div>
       </header>
 
@@ -288,7 +328,7 @@ export function RecordTable<T>({
         </div>
       )}
 
-      <GeneratedDatabase
+      <RecordTableGrid
         columns={columns}
         emptyMessage={emptyMessage}
         errorState={errorState}
@@ -296,6 +336,7 @@ export function RecordTable<T>({
         rowHref={rowHref}
         rowKey={rowKey}
         rows={visibleRows}
+        compact={variant === "inline"}
         sorts={sorts}
         onSort={onSortsChange}
         selectable={selectable}
@@ -322,7 +363,10 @@ export function RecordTable<T>({
             </AlertDialogHeader>
             <ul className="max-h-48 overflow-y-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-[13px]">
               {selectedRows.slice(0, 8).map((row) => (
-                <li key={rowKey(row)} className="truncate py-0.5 text-foreground">
+                <li
+                  key={rowKey(row)}
+                  className="truncate py-0.5 text-foreground"
+                >
                   {labelFor(row)}
                 </li>
               ))}
@@ -430,11 +474,12 @@ function useVisibleRowRange(
       const top =
         current.getBoundingClientRect().top -
         scrollEl.getBoundingClientRect().top;
-      const start = Math.max(0, Math.floor(-top / ROW_HEIGHT) - OVERSCAN);
-      const end = Math.min(
+      const [start, end] = calculateVisibleRowRange({
         rowCount,
-        Math.ceil((scrollEl.clientHeight - top) / ROW_HEIGHT) + OVERSCAN,
-      );
+        top,
+        viewportHeight: scrollEl.clientHeight,
+        overscan: OVERSCAN,
+      });
       setRange((prev) =>
         prev[0] === start && prev[1] === end ? prev : [start, end],
       );
@@ -446,7 +491,8 @@ function useVisibleRowRange(
     observer.observe(scrollEl);
     // The viewport's content wrapper catches layout shifts above the grid
     // (e.g. the bulk bar or an inline create form appearing).
-    if (scrollEl.firstElementChild) observer.observe(scrollEl.firstElementChild);
+    if (scrollEl.firstElementChild)
+      observer.observe(scrollEl.firstElementChild);
     return () => {
       scrollEl.removeEventListener("scroll", update);
       observer.disconnect();
@@ -456,7 +502,29 @@ function useVisibleRowRange(
   return range;
 }
 
-function GeneratedDatabase<T>({
+export function calculateVisibleRowRange({
+  rowCount,
+  top,
+  viewportHeight,
+  overscan = 12,
+}: {
+  rowCount: number;
+  top: number;
+  viewportHeight: number;
+  overscan?: number;
+}): [number, number] {
+  const start = Math.min(
+    rowCount,
+    Math.max(0, Math.floor(-top / ROW_HEIGHT) - overscan),
+  );
+  const end = Math.min(
+    rowCount,
+    Math.max(start, Math.ceil((viewportHeight - top) / ROW_HEIGHT) + overscan),
+  );
+  return [start, end];
+}
+
+function RecordTableGrid<T>({
   columns,
   emptyMessage,
   errorState,
@@ -464,6 +532,7 @@ function GeneratedDatabase<T>({
   rowHref,
   rowKey,
   rows,
+  compact,
   sorts,
   onSort,
   selectable,
@@ -480,6 +549,7 @@ function GeneratedDatabase<T>({
   rowHref: (row: T) => string;
   rowKey: (row: T) => string;
   rows: T[];
+  compact: boolean;
   sorts: ViewSort[];
   onSort: (sorts: ViewSort[]) => void;
   selectable: boolean;
@@ -495,14 +565,14 @@ function GeneratedDatabase<T>({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [start, end] = useVisibleRowRange(rows.length, bodyRef);
 
-  if (loading) return <TableSkeleton />;
+  if (loading) return <TableSkeleton compact={compact} />;
 
   const visibleKeys = rows.map(rowKey);
   const anySelected = visibleKeys.some((key) => selectedKeys.has(key));
 
   return (
     <div
-      className="min-h-[240px] overflow-x-auto border-y border-border/60"
+      className={`${compact ? "" : "min-h-[240px]"} overflow-x-auto border-y border-border/60`}
       style={columnSizing(columns, selectable)}
     >
       <div className="min-w-full" style={{ width: "max-content" }}>
@@ -532,7 +602,9 @@ function GeneratedDatabase<T>({
         </Row>
 
         <div ref={bodyRef}>
-          {start > 0 && <div aria-hidden style={{ height: start * ROW_HEIGHT }} />}
+          {start > 0 && (
+            <div aria-hidden style={{ height: start * ROW_HEIGHT }} />
+          )}
           {rows.slice(start, end).map((row) => {
             const key = rowKey(row);
             return (
@@ -551,7 +623,10 @@ function GeneratedDatabase<T>({
             );
           })}
           {end < rows.length && (
-            <div aria-hidden style={{ height: (rows.length - end) * ROW_HEIGHT }} />
+            <div
+              aria-hidden
+              style={{ height: (rows.length - end) * ROW_HEIGHT }}
+            />
           )}
         </div>
 
@@ -601,7 +676,7 @@ function DatabaseRow<T>({
   quietEmptyCells: boolean;
 }) {
   return (
-    // Fixed h-9: the windowed renderer in GeneratedDatabase assumes a
+    // Fixed h-9: the windowed renderer in RecordTableGrid assumes a
     // uniform ROW_HEIGHT. Every cell truncates, so nothing needs to grow.
     <div
       className={`group flex h-9 items-stretch border-b border-border/40 transition-colors ${
@@ -732,7 +807,9 @@ function RowCheckbox({
     // border→ring workaround on Checkbox below. Hidden-by-visibility nodes
     // are never painted, so there's no intermediate frame to strand.
     <span
-      className={visible ? "" : "invisible group-has-[[data-rowlead]:hover]:visible"}
+      className={
+        visible ? "" : "invisible group-has-[[data-rowlead]:hover]:visible"
+      }
     >
       <Checkbox checked={checked} onChange={onChange} />
     </span>
@@ -987,22 +1064,30 @@ function ViewTab({
 
 // Mirrors the real grid's bones (header row + bordered 36px rows) so the
 // loaded table lands on the same layout instead of jumping.
-function TableSkeleton() {
+function TableSkeleton({ compact }: { compact: boolean }) {
+  const widths = compact ? [40, 56, 32] : [40, 56, 32, 48, 36, 52, 44, 28];
   return (
-    <div className="min-h-[240px] animate-pulse border-y border-border/60">
+    <div
+      data-testid="record-table-skeleton"
+      data-compact={compact}
+      className={`${compact ? "" : "min-h-[240px]"} animate-pulse border-y border-border/60`}
+    >
       <div className="flex h-8 items-center gap-6 border-b border-border/60 px-2.5">
         <div className="h-3 w-24 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
       </div>
-      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+      {widths.map((width, i) => (
         <div
           key={i}
           className="flex h-9 items-center gap-6 border-b border-border/40 px-2.5"
         >
           <div
             className="h-3 rounded bg-muted"
-            style={{ width: `${[40, 56, 32, 48, 36, 52, 44, 28][i]}%`, maxWidth: 280 }}
+            style={{
+              width: `${width}%`,
+              maxWidth: 280,
+            }}
           />
         </div>
       ))}
@@ -1146,7 +1231,9 @@ function applyView<T>({
       const results = filters.conditions.map((condition) =>
         evaluateCondition(columns, row, condition),
       );
-      return filters.op === "or" ? results.some(Boolean) : results.every(Boolean);
+      return filters.op === "or"
+        ? results.some(Boolean)
+        : results.every(Boolean);
     });
   }
 
@@ -1256,10 +1343,7 @@ function compareColumn<T>(
   return direction === "asc" ? cmp : -cmp;
 }
 
-function sortValue<T>(
-  column: RecordColumn<T>,
-  row: T,
-): string | number | null {
+function sortValue<T>(column: RecordColumn<T>, row: T): string | number | null {
   const value = column.value(row);
   if (column.type === "date") {
     if (typeof value !== "string" || !value) return null;

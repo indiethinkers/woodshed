@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ChevronDown,
   Mail as MailIcon,
@@ -15,13 +14,10 @@ import {
   useArchiveOne,
   useInboxes,
   useMail,
+  useMarkRead,
   useRefreshMail,
 } from "@/lib/hooks/use-mail";
-import type {
-  EmailSummary,
-  Inbox,
-  SyncStats,
-} from "@/lib/mail-lib/types";
+import type { EmailSummary, Inbox, SyncStats } from "@/lib/mail-lib/types";
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { isEditableElement } from "@/lib/dom/is-editable";
@@ -43,6 +39,7 @@ export function MailInbox() {
   const { data: inboxes = [], isLoading: inboxesLoading } = useInboxes();
   const { data: people = [] } = useAllPeople();
   const archiveOne = useArchiveOne();
+  const markRead = useMarkRead();
   const [filterInbox, setFilterInbox] = useState<string>(ALL_INBOXES);
   const [composeOpen, setComposeOpen] = useState(false);
 
@@ -62,7 +59,7 @@ export function MailInbox() {
     visibleThreads.length === 0
       ? 0
       : Math.min(rawCursor, visibleThreads.length - 1);
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
 
   // Multi-select for bulk archive. `a` toggles select-all of currently-
   // visible threads; `e` archives the selection (or the cursor row when
@@ -83,6 +80,25 @@ export function MailInbox() {
     return next.size === selected.size ? selected : next;
   }, [selected, visibleThreads]);
 
+  const markThreadRead = useCallback(
+    (thread: MailThread) => {
+      if (thread.unreadMessageIds.length === 0) return;
+      void Promise.allSettled(
+        thread.unreadMessageIds.map((id) => markRead(id)),
+      ).then((results) => {
+        const failureCount = results.filter(
+          (result) => result.status === "rejected",
+        ).length;
+        if (failureCount > 0) {
+          console.error(
+            `Mark read failed for ${failureCount} messages in the opened thread.`,
+          );
+        }
+      });
+    },
+    [markRead],
+  );
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
@@ -97,12 +113,13 @@ export function MailInbox() {
         e.preventDefault();
         setCursor((c) => Math.max(0, c - 1));
       } else if (e.key === "Enter") {
-        const next = visibleThreads[cursor]?.email;
+        const next = visibleThreads[cursor];
         if (!next) return;
         e.preventDefault();
+        markThreadRead(next);
         void navigate({
           to: "/mail/$id",
-          params: { id: next.id },
+          params: { id: next.email.id },
         });
       } else if (e.key === "e" || e.key === "E") {
         // Archive — Superhuman / Gmail convention. If there's a multi-
@@ -117,9 +134,7 @@ export function MailInbox() {
             : visibleThreads[cursor]
               ? [visibleThreads[cursor]]
               : [];
-        const ids = threadsToArchive.flatMap(
-          (thread) => thread.messageIds,
-        );
+        const ids = threadsToArchive.flatMap((thread) => thread.messageIds);
         if (ids.length === 0) return;
         // Optimistic clear of selection — feels snappier and matches
         // user intent (the selection just got actioned).
@@ -155,7 +170,14 @@ export function MailInbox() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [visibleThreads, cursor, navigate, archiveOne, liveSelected]);
+  }, [
+    visibleThreads,
+    cursor,
+    navigate,
+    archiveOne,
+    liveSelected,
+    markThreadRead,
+  ]);
 
   useEffect(() => {
     rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
@@ -251,13 +273,10 @@ export function MailInbox() {
                     people={people}
                     isCursor={idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
-                    onClick={() => setCursor(idx)}
-                    onDoubleClick={() =>
-                      void navigate({
-                        to: "/mail/$id",
-                        params: { id: thread.email.id },
-                      })
-                    }
+                    onClick={() => {
+                      setCursor(idx);
+                      markThreadRead(thread);
+                    }}
                     ref={(el) => {
                       rowRefs.current[idx] = el;
                     }}
@@ -270,7 +289,9 @@ export function MailInbox() {
                     disabled={isFetchingNextPage}
                     onClick={() => void fetchNextPage()}
                   >
-                    {isFetchingNextPage ? "Loading older mail…" : "Load older mail"}
+                    {isFetchingNextPage
+                      ? "Loading older mail…"
+                      : "Load older mail"}
                   </button>
                 )}
               </div>
@@ -301,8 +322,7 @@ interface EmailRowProps {
   isCursor: boolean;
   isSelected: boolean;
   onClick: () => void;
-  onDoubleClick: () => void;
-  ref?: React.Ref<HTMLDivElement>;
+  ref?: React.Ref<HTMLAnchorElement>;
 }
 
 function EmailRow({
@@ -312,7 +332,6 @@ function EmailRow({
   isCursor,
   isSelected,
   onClick,
-  onDoubleClick,
   ref,
 }: EmailRowProps) {
   // Selected wins over cursor visually — the multi-selection is the
@@ -326,11 +345,12 @@ function EmailRow({
   const senderPerson = findPersonForMailSender(people, email);
   const senderName = senderPerson?.name ?? email.from;
   return (
-    <div
+    <Link
+      to="/mail/$id"
+      params={{ id: email.id }}
       ref={ref}
       data-mail-thread-row
       onClick={onClick}
-      onDoubleClick={onDoubleClick}
       className={`relative flex items-center gap-4 pl-4 pr-3 py-2.5 rounded-md cursor-pointer transition-colors ${bgClass}`}
     >
       {isSelected && (
@@ -369,7 +389,7 @@ function EmailRow({
       <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
         {formatRelativeDate(email.date)}
       </span>
-    </div>
+    </Link>
   );
 }
 
@@ -377,6 +397,7 @@ interface MailThread {
   threadId: string;
   email: EmailSummary;
   messageIds: string[];
+  unreadMessageIds: string[];
 }
 
 function collapseMailThreads(emails: EmailSummary[]): MailThread[] {
@@ -389,15 +410,16 @@ function collapseMailThreads(emails: EmailSummary[]): MailThread[] {
         threadId,
         email,
         messageIds: [email.id],
+        unreadMessageIds: email.read ? [] : [email.id],
       });
       continue;
     }
 
     existing.messageIds.push(email.id);
+    if (!email.read) existing.unreadMessageIds.push(email.id);
     const anyUnread = !existing.email.read || !email.read;
     if (
-      new Date(email.date).getTime() >
-      new Date(existing.email.date).getTime()
+      new Date(email.date).getTime() > new Date(existing.email.date).getTime()
     ) {
       existing.email = { ...email, read: !anyUnread };
     } else if (anyUnread && existing.email.read) {
@@ -448,7 +470,9 @@ function EmailDetailPane({
               />
             )}
           </div>
-          <div className="text-sm font-medium leading-snug">{email.subject}</div>
+          <div className="text-sm font-medium leading-snug">
+            {email.subject}
+          </div>
           <div className="text-[13px] text-muted-foreground mt-1 leading-snug line-clamp-3">
             {email.preview}
           </div>
@@ -574,8 +598,7 @@ function EmptyInbox({
           >
             Settings
           </Link>
-          . Your account shows up here as soon as you paste your App
-          Password.
+          . Your account shows up here as soon as you paste your App Password.
         </p>
       </div>
     );
@@ -640,7 +663,7 @@ function SyncRefreshButton({ inboxId }: { inboxId: string | undefined }) {
   const tooltip =
     status === "syncing"
       ? "Syncing…"
-      : message ?? "Refresh mail (all providers)";
+      : (message ?? "Refresh mail (all providers)");
 
   return (
     <div className="flex items-center gap-1.5 relative">

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Send, X } from "lucide-react";
+import {
+  ChevronDown,
+  Maximize2,
+  Minimize2,
+  Paperclip,
+  Send,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   useDeleteDraft,
@@ -16,8 +24,17 @@ import type {
   DraftSaveInput,
   EmailSummary,
   Inbox,
+  OutgoingAttachment,
   ReplyInput,
 } from "@/lib/mail-lib/types";
+
+const MAX_ATTACHMENT_COUNT = 10;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+interface SelectedAttachment extends OutgoingAttachment {
+  size: number;
+}
 
 export type ComposeMode =
   | { kind: "new"; defaultFromInbox?: string }
@@ -72,6 +89,8 @@ export function ComposeDialog({
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
+  const [expanded, setExpanded] = useState(false);
   const [draftId, setDraftId] = useState<string | undefined>(draft?.id);
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -187,7 +206,18 @@ export function ComposeDialog({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, handleClose, fromInbox, to, cc, bcc, subject, body]);
+  }, [
+    open,
+    handleClose,
+    fromInbox,
+    to,
+    cc,
+    bcc,
+    subject,
+    body,
+    attachments,
+    status,
+  ]);
 
   async function handleSend() {
     if (status === "sending") return;
@@ -214,6 +244,7 @@ export function ComposeDialog({
           to: recipients,
           cc: parseRecipients(cc),
           body,
+          attachments: attachments.map(toOutgoingAttachment),
         };
         await reply(input);
       } else {
@@ -224,6 +255,7 @@ export function ComposeDialog({
           bcc: parseRecipients(bcc),
           subject,
           body,
+          attachments: attachments.map(toOutgoingAttachment),
         };
         await send(input);
       }
@@ -261,6 +293,41 @@ export function ComposeDialog({
     onClose();
   }
 
+  async function handleAttachmentSelection(files: FileList | null) {
+    if (!files?.length) return;
+    const nextFiles = Array.from(files);
+    if (attachments.length + nextFiles.length > MAX_ATTACHMENT_COUNT) {
+      setError(`You can attach up to ${MAX_ATTACHMENT_COUNT} files.`);
+      return;
+    }
+    if (nextFiles.some((file) => file.size > MAX_ATTACHMENT_BYTES)) {
+      setError("Each attachment must be 10 MB or smaller.");
+      return;
+    }
+    const nextTotal =
+      attachments.reduce((sum, attachment) => sum + attachment.size, 0) +
+      nextFiles.reduce((sum, file) => sum + file.size, 0);
+    if (nextTotal > MAX_TOTAL_ATTACHMENT_BYTES) {
+      setError("Attachments must total 20 MB or less.");
+      return;
+    }
+
+    try {
+      const encoded = await Promise.all(
+        nextFiles.map(async (file) => ({
+          filename: file.name,
+          contentType: file.type || "application/octet-stream",
+          dataBase64: await readFileAsBase64(file),
+          size: file.size,
+        })),
+      );
+      setAttachments((current) => [...current, ...encoded]);
+      setError(null);
+    } catch {
+      setError("Woodshed could not read that attachment.");
+    }
+  }
+
   if (!open) return null;
   if (typeof document === "undefined") return null;
 
@@ -285,7 +352,12 @@ export function ComposeDialog({
         role="dialog"
         aria-modal="true"
         aria-label={titleLabel}
-        className="relative w-full max-w-[640px] bg-popover text-popover-foreground border border-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+        data-expanded={expanded ? "true" : "false"}
+        className={`relative flex w-full flex-col overflow-hidden border border-border bg-popover text-popover-foreground shadow-2xl transition-[width,height,max-width] ${
+          expanded
+            ? "h-[calc(100vh-2rem)] max-w-[1100px] rounded-xl"
+            : "max-h-[85vh] max-w-[640px] rounded-xl"
+        }`}
       >
         <div className="flex items-center justify-between px-5 h-11">
           <h2 className="text-[13px] font-medium">{titleLabel}</h2>
@@ -297,6 +369,19 @@ export function ComposeDialog({
             >
               Draft saved
             </span>
+            <button
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
+              aria-label={expanded ? "Restore compose" : "Expand compose"}
+              title={expanded ? "Restore compose" : "Expand compose"}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+            >
+              {expanded ? (
+                <Minimize2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              )}
+            </button>
             <button
               type="button"
               onClick={handleClose}
@@ -383,12 +468,43 @@ export function ComposeDialog({
           </FieldRow>
         </div>
 
+        {attachments.length > 0 && (
+          <ul className="flex flex-wrap gap-2 border-t border-border px-5 py-2.5">
+            {attachments.map((attachment, index) => (
+              <li
+                key={`${attachment.filename}-${index}`}
+                className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-foreground/[0.025] px-2.5 py-1.5 text-[12px]"
+              >
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{attachment.filename}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  {formatBytes(attachment.size)}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.filename}`}
+                  onClick={() =>
+                    setAttachments((current) =>
+                      current.filter((_, currentIndex) => currentIndex !== index),
+                    )
+                  }
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
         <textarea
           ref={bodyRef}
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Write your message…"
-          className="flex-1 min-h-[260px] max-h-[50vh] w-full resize-none px-5 py-4 bg-transparent outline-none text-[14px] leading-[22px] placeholder:text-muted-foreground/60 border-t border-border"
+          className={`flex-1 min-h-[260px] w-full resize-none border-t border-border bg-transparent px-5 py-4 text-[14px] leading-[22px] outline-none placeholder:text-muted-foreground/60 ${
+            expanded ? "max-h-none" : "max-h-[50vh]"
+          }`}
           spellCheck
           autoComplete="off"
           autoCorrect="off"
@@ -402,14 +518,31 @@ export function ComposeDialog({
         )}
 
         <div className="flex items-center justify-between gap-2 px-5 h-12 border-t border-border">
-          <button
-            type="button"
-            onClick={handleDiscard}
-            disabled={status === "sending"}
-            className="text-[12px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-          >
-            Discard
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleDiscard}
+              disabled={status === "sending"}
+              className="text-[12px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              Discard
+            </button>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground">
+              <Paperclip className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Attach
+              <input
+                type="file"
+                multiple
+                aria-label="Add attachments"
+                className="sr-only"
+                onChange={(event) => {
+                  const files = event.currentTarget.files;
+                  void handleAttachmentSelection(files);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
           <button
             type="button"
             onClick={handleSend}
@@ -429,6 +562,37 @@ export function ComposeDialog({
     </div>,
     document.body,
   );
+}
+
+function toOutgoingAttachment({
+  filename,
+  contentType,
+  dataBase64,
+}: SelectedAttachment): OutgoingAttachment {
+  return { filename, contentType, dataBase64 };
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("file read failed"));
+    reader.onload = () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      const separator = value.indexOf(",");
+      if (separator < 0) {
+        reject(new Error("file encoding failed"));
+        return;
+      }
+      resolve(value.slice(separator + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function FieldRow({

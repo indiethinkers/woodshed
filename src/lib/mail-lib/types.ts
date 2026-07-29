@@ -19,6 +19,8 @@ export interface SyncStats {
 
 export interface EmailSummary {
   id: string;
+  /** RFC 5322 Message-ID. Older records may omit it until their next sync. */
+  messageId?: string;
   threadId: string;
   from: string;
   fromEmail: string;
@@ -94,6 +96,7 @@ export interface ComposeInput {
   bcc?: string[];
   subject: string;
   body: string;
+  attachments?: OutgoingAttachment[];
 }
 
 export interface ReplyInput {
@@ -103,6 +106,13 @@ export interface ReplyInput {
   to?: string[];
   cc?: string[];
   body: string;
+  attachments?: OutgoingAttachment[];
+}
+
+export interface OutgoingAttachment {
+  filename: string;
+  contentType: string;
+  dataBase64: string;
 }
 
 export interface SendResult {

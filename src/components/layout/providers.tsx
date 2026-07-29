@@ -7,7 +7,10 @@ import { TabsProvider } from "@/components/layout/tabs-context";
 import { RouteTheme } from "@/components/layout/route-theme";
 import { Toaster } from "@/components/layout/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { vaultEventListener } from "@/lib/vault-events";
+import {
+  invalidateAfterIndexRebuild,
+  vaultEventListener,
+} from "@/lib/vault-events";
 import { logsEvent } from "@/lib/tauri";
 import { WikilinkTargetsBridge } from "@/lib/hooks/wikilink-targets-bridge";
 import { MailRefreshProvider } from "@/lib/hooks/use-mail-refresh-job";
@@ -66,7 +69,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | null = null;
     void import("@tauri-apps/api/event").then(({ listen }) => {
       listen("index:rebuild:done", () => {
-        void queryClient.invalidateQueries({ queryKey: ["emails"] });
+        invalidateAfterIndexRebuild(queryClient);
       }).then((fn) => {
         unlisten = fn;
       });

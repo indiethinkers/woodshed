@@ -422,14 +422,6 @@ membership; queued, working, and done cards may outlive the source email.
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.
 
-### Voice
-
-Dictation and voice mode send microphone audio to Deepgram only when invoked.
-Spoken replies use the configured Deepgram Aura voice.
-
-Microphone permission and a user-supplied key are required. Keep production
-keys in the OS credential store and development overrides out of Git.
-
 ## Privacy and diagnostics
 
 - No account database, analytics, crash reporting, or Woodshed-operated backend.

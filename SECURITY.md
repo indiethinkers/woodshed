@@ -31,7 +31,7 @@ High-priority reports include:
 - credential disclosure or persistence outside the OS credential store;
 - remote-content script execution or email HTML sandbox escape;
 - SSRF, redirect rebinding, or unbounded network-resource consumption;
-- unintended transmission of vault, mail, calendar, or microphone data;
+- unintended transmission of vault, mail, or calendar data;
 - unsafe Gmail operations caused by attacker-controlled message identifiers.
 
 The local user already has access to their own vault and application data. A

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EyeOff, ExternalLink, MoreHorizontal, Video } from "lucide-react";
 import { FilePathLine } from "@/components/shared/file-path-pill";
+import { ExternalAnchor } from "@/components/shared/external-link";
 import { BacklinksPanel } from "@/components/shared/backlinks-panel";
 import { OutgoingLinksPanel } from "@/components/shared/outgoing-links-panel";
 import { TiptapEditor } from "@/components/shared/tiptap-editor";
@@ -261,16 +262,14 @@ function IcalEventInner({
       <Separator className="mt-8" />
 
       {event.meetingUrl && brand && (
-        <a
+        <ExternalAnchor
           href={event.meetingUrl}
-          target="_blank"
-          rel="noreferrer"
           className="inline-flex items-center gap-1.5 mt-6 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
         >
           <Video className="h-3.5 w-3.5" />
           <span>Join {brand.label}</span>
           <ExternalLink className="h-3 w-3 opacity-70" />
-        </a>
+        </ExternalAnchor>
       )}
 
       {event.description && (
@@ -430,15 +429,13 @@ function DescriptionWithLinks({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         p.kind === "url" ? (
-          <a
+          <ExternalAnchor
             key={i}
             href={p.value}
-            target="_blank"
-            rel="noreferrer"
             className="text-foreground underline underline-offset-2 decoration-muted-foreground/40 hover:decoration-foreground break-all"
           >
             {p.value}
-          </a>
+          </ExternalAnchor>
         ) : (
           <span key={i}>{p.value}</span>
         ),

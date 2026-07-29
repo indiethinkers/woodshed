@@ -8,7 +8,6 @@ import type {
 } from "ai";
 import {
   ArrowUp,
-  AudioWaveform,
   Bot,
   CheckCircle2,
   ChevronDown,
@@ -16,8 +15,6 @@ import {
   Copy,
   FileText,
   History,
-  Loader2,
-  Mic,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -147,11 +144,8 @@ import {
   formatAgentVaultContext,
 } from "@/lib/agent/page-context";
 import { isEditableElement } from "@/lib/dom/is-editable";
-import { useDictation } from "@/lib/hooks/use-dictation";
 import { useToday } from "@/lib/hooks/use-today";
 import { useVaultPath } from "@/lib/hooks/use-vault-path";
-import { useVoicePreference } from "@/lib/hooks/use-voice-preference";
-import { VoiceOverlay } from "@/components/agent/voice-overlay";
 import { cn } from "@/lib/utils";
 import { tauriInvoke } from "@/lib/tauri";
 
@@ -255,7 +249,6 @@ function AgentSurfaceInner({
   const navigate = useNavigate();
   const today = useToday();
   const { data: vaultRoot } = useVaultPath();
-  const { data: voice } = useVoicePreference();
   const href = useRouterState({ select: (s) => s.location.href });
   const urlChatId = useMemo(() => {
     if (!pageMode) return null;
@@ -273,7 +266,6 @@ function AgentSurfaceInner({
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
-  const [voiceActive, setVoiceActive] = useState(false);
   const saveTimerRef = useRef<number | null>(null);
   const hydratedSignatureRef = useRef("");
   const hydratingRef = useRef(false);
@@ -336,20 +328,6 @@ function AgentSurfaceInner({
   const configured = Boolean(config?.hasApiKey);
   const busy = status === "submitted" || status === "streaming";
   const canSubmit = configured && !busy;
-
-  // The most recent assistant turn, for voice mode's reply detection: the orb
-  // speaks a reply once its id differs from the one present when the turn was
-  // sent and the stream has settled. Text grows while streaming; that's fine —
-  // the speak handoff is gated on `busy` going false.
-  const latestAssistant = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message.role === "assistant") {
-        return { id: message.id, text: messageText(message) };
-      }
-    }
-    return null;
-  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -677,21 +655,6 @@ function AgentSurfaceInner({
     }
   }
 
-  // Voice mode's send path. Mirrors handleSubmit for plain text (no files),
-  // creating a chat on the first utterance. Gated on canSubmit so a turn can't
-  // be sent while the agent is mid-reply.
-  function sendVoiceUtterance(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed || !canSubmit) return;
-    setLastError(null);
-    if (!activeId) {
-      void createChatAndSend(trimmed, [], trimmed);
-      return;
-    }
-    rememberRecentAgentChatId(activeId);
-    sendMessage({ files: [], text: trimmed });
-  }
-
   // Sidebar chats are pinned to the page they were started from (context.route).
   // Surface that page's history in the header dropdown so a prior conversation
   // for this page is one click away instead of buried in the full Agent view.
@@ -764,7 +727,6 @@ function AgentSurfaceInner({
             lastError={lastError}
             compact={!pageMode}
             contextTitle={contextTitle}
-            onOpenVoice={() => setVoiceActive(true)}
             onSubmit={handleSubmit}
             status={status}
             stop={stop}
@@ -779,23 +741,12 @@ function AgentSurfaceInner({
             lastError={lastError}
             messages={messages}
             compact={!pageMode}
-            onOpenVoice={() => setVoiceActive(true)}
             onSubmit={handleSubmit}
             onToolApprovalResponse={addToolApprovalResponse}
             status={status}
             stop={stop}
           />
         )}
-        <VoiceOverlay
-          active={voiceActive}
-          agentBusy={busy}
-          displayName={displayName}
-          latestAssistant={latestAssistant}
-          voice={voice}
-          onClose={() => setVoiceActive(false)}
-          onError={setLastError}
-          onUtterance={sendVoiceUtterance}
-        />
       </section>
     </>
   );
@@ -1248,7 +1199,6 @@ function AgentEmptyState({
   contextTitle,
   displayName,
   lastError,
-  onOpenVoice,
   onSubmit,
   status,
   stop,
@@ -1260,7 +1210,6 @@ function AgentEmptyState({
   contextTitle?: string;
   displayName: string;
   lastError: string | null;
-  onOpenVoice: () => void;
   onSubmit: (message: PromptInputMessage) => void;
   status: ChatStatus;
   stop: () => void;
@@ -1311,7 +1260,6 @@ function AgentEmptyState({
             displayName={displayName}
             lastError={lastError}
             compact={compact}
-            onOpenVoice={onOpenVoice}
             onSubmit={onSubmit}
             placeholder={compact ? "" : "How can I help you today?"}
             status={status}
@@ -1331,7 +1279,6 @@ function AgentConversationView({
   displayName,
   lastError,
   messages,
-  onOpenVoice,
   onRestoreCheckpoint,
   onSubmit,
   onToolApprovalResponse,
@@ -1345,7 +1292,6 @@ function AgentConversationView({
   displayName: string;
   lastError: string | null;
   messages: UIMessage[];
-  onOpenVoice: () => void;
   onRestoreCheckpoint: (messageIndex: number) => void;
   onSubmit: (message: PromptInputMessage) => void;
   onToolApprovalResponse: ChatAddToolApproveResponseFunction;
@@ -1405,7 +1351,6 @@ function AgentConversationView({
             displayName={displayName}
             lastError={lastError}
             compact={compact}
-            onOpenVoice={onOpenVoice}
             onSubmit={onSubmit}
             placeholder={compact ? "" : "Send follow-up"}
             status={status}
@@ -2014,7 +1959,6 @@ function AgentComposer({
   configured,
   displayName,
   lastError,
-  onOpenVoice,
   onSubmit,
   placeholder,
   status,
@@ -2027,7 +1971,6 @@ function AgentComposer({
   configured: boolean;
   displayName: string;
   lastError: string | null;
-  onOpenVoice: () => void;
   onSubmit: (message: PromptInputMessage) => void;
   placeholder?: string;
   status: ChatStatus;
@@ -2048,15 +1991,6 @@ function AgentComposer({
   const attachments = usePromptInputAttachments();
   const { textInput } = usePromptInputController();
   const hasText = textInput.value.trim().length > 0;
-
-  // Mic dictation: transcribe a clip and append it to whatever is already in
-  // the box (so you can dictate mid-draft), then refocus for editing.
-  const dictation = useDictation((text) => {
-    const current = textInput.value;
-    const next = current.trim() ? `${current.replace(/\s+$/, "")} ${text}` : text;
-    textInput.setInput(next);
-    textareaRef.current?.focus();
-  });
 
   useEffect(() => {
     if (compact) return;
@@ -2100,7 +2034,7 @@ function AgentComposer({
   return (
     <div>
       {/* The full Agent uses a slim single-row composer. In the narrow page
-          chat, the textarea keeps its own row above upload and dictation. */}
+          chat, the textarea keeps its own row above the attachment control. */}
       <PromptInput
         className={cn(
           // className lands on the form; the visible box + border come from the
@@ -2156,58 +2090,26 @@ function AgentComposer({
             ref={textareaRef}
           />
           {compact && <div aria-hidden className="order-3 flex-1" />}
-          <PromptInputButton
-            aria-label={dictation.status === "recording" ? "Stop dictation" : "Dictate"}
-            className={cn(
-              "size-8 shrink-0 rounded-full transition-colors",
-              compact && "order-4",
-              dictation.status === "recording"
-                ? "bg-red-500/10 text-red-500 hover:bg-red-500/15"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-            disabled={showUnconfigured || dictation.status === "transcribing"}
-            onClick={dictation.toggle}
-            tooltip={dictation.status === "recording" ? "Stop dictation" : "Dictate"}
-          >
-            {dictation.status === "transcribing" ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Mic className="size-4" strokeWidth={1.9} />
-            )}
-          </PromptInputButton>
           {!compact && (
-            <>
-              {generating ? (
-                <PromptInputSubmit
-                  className="size-8 shrink-0 rounded-full border border-border bg-background/45 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  onStop={stop}
-                  status={status}
-                  variant="ghost"
-                >
-                  <span className="size-2.5 rounded-[2px] bg-current" />
-                </PromptInputSubmit>
-              ) : hasText ? (
-                <PromptInputSubmit
-                  className="size-8 shrink-0 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
-                  disabled={configResolved && !canSubmit}
-                  onStop={stop}
-                  status={status}
-                >
-                  <ArrowUp className="size-4" strokeWidth={2.2} />
-                </PromptInputSubmit>
-              ) : (
-                <button
-                  aria-label="Start voice conversation"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={showUnconfigured}
-                  onClick={onOpenVoice}
-                  title="Start voice conversation"
-                  type="button"
-                >
-                  <AudioWaveform className="size-4" strokeWidth={2} />
-                </button>
-              )}
-            </>
+            generating ? (
+              <PromptInputSubmit
+                className="size-8 shrink-0 rounded-full border border-border bg-background/45 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                onStop={stop}
+                status={status}
+                variant="ghost"
+              >
+                <span className="size-2.5 rounded-[2px] bg-current" />
+              </PromptInputSubmit>
+            ) : (
+              <PromptInputSubmit
+                className="size-8 shrink-0 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
+                disabled={!hasText || (configResolved && !canSubmit)}
+                onStop={stop}
+                status={status}
+              >
+                <ArrowUp className="size-4" strokeWidth={2.2} />
+              </PromptInputSubmit>
+            )
           )}
         </div>
       </PromptInput>

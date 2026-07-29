@@ -21,7 +21,6 @@ pub mod index;
 pub mod logging;
 pub mod network;
 pub mod parsers;
-pub mod recording;
 pub mod state;
 pub mod sweep;
 pub mod sync_ext;
@@ -32,9 +31,8 @@ pub mod wikilinks;
 use crate::sync_ext::MutexRecover;
 use commands::{
     agent as agent_cmd, areas, attachments, config, daily, events, gcal as gcal_cmd,
-    gmail as gmail_cmd, logs, mail, notebook, people, recording as recording_cmd, resources,
-    search as search_cmd, sweep as sweep_cmd, tables, tags, tasks, vault as vault_cmd,
-    watcher as watcher_cmd,
+    gmail as gmail_cmd, logs, mail, notebook, people, resources, search as search_cmd,
+    sweep as sweep_cmd, tables, tags, tasks, vault as vault_cmd, watcher as watcher_cmd,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -100,6 +98,15 @@ impl AppState {
     /// hit vs. recompute.
     pub fn vault_generation(&self) -> u64 {
         self.vault_generation.load(Ordering::Relaxed)
+    }
+
+    /// Invalidate tag-derived memos after a whole-index rebuild. A rebuild
+    /// changes the index without a vault write, so the normal watcher-backed
+    /// generation bump does not run.
+    pub fn invalidate_tag_caches(&self) {
+        self.vault_generation.fetch_add(1, Ordering::Relaxed);
+        self.tag_table_cache.lock_recover().clear();
+        *self.tags_counts_cache.lock_recover() = None;
     }
 
     /// Open the index DB if not yet opened, returning a clone of the handle.
@@ -315,6 +322,13 @@ pub fn run() {
                 logging::init(&app_data);
             }
 
+            if let Err(error) = config::cleanup_removed_integration(app.handle()) {
+                crate::log_warn!(
+                    "config::migration",
+                    "obsolete integration cleanup will retry next launch: {error}"
+                );
+            }
+
             // macOS application menu, built explicitly rather than left to
             // Tauri's default. The default Window→Close item binds ⌘W, and
             // AppKit consumes that key equivalent before it ever reaches the
@@ -390,8 +404,6 @@ pub fn run() {
             config::vault_path_default,
             config::profile_get,
             config::profile_set,
-            config::voice_get,
-            config::voice_set,
             config::warning_dismissed_get,
             config::warning_dismiss,
             agent_cmd::agent_config_get,
@@ -430,10 +442,6 @@ pub fn run() {
             events::events_for_date,
             events::event_ical_get,
             events::event_ical_save_notes,
-            recording_cmd::transcription_keys_status,
-            recording_cmd::transcription_key_set,
-            recording_cmd::voice_dictate,
-            recording_cmd::voice_speak,
             people::person_create,
             people::person_update,
             people::person_delete,

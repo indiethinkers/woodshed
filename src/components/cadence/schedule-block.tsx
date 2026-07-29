@@ -113,7 +113,7 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
   // list animates in on expand — except on first render (no in-session toggle),
   // so neither a normal day nor a restored expand preference fades on load.
   const collapsed = userCollapsed ?? dayWrapped;
-  const animateList = dayWrapped || interacted;
+  const animateList = interacted;
 
   return (
     <section className={sectionClass}>
@@ -445,10 +445,6 @@ function writeScheduleCollapsed(collapsed: boolean): void {
 
 function useEventCompletionClock(events: EventDto[]): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    setNowMs(Date.now());
-  }, [events]);
 
   useEffect(() => {
     const current = Date.now();

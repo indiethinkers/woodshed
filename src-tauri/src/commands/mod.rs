@@ -12,7 +12,6 @@ pub mod logs;
 pub mod mail;
 pub mod notebook;
 pub mod people;
-pub mod recording;
 pub mod resources;
 pub mod search;
 pub mod seed;

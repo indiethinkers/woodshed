@@ -170,4 +170,24 @@ describe("ScheduleBlock loading state", () => {
     expect(container.querySelector(".min-h-\\[182px\\]")).not.toBeNull();
     mocks.isLoading = false;
   });
+
+  it("does not replay the enter animation for a restored expanded schedule", () => {
+    window.localStorage.setItem(
+      "woodshed:cadence:schedule-collapsed",
+      "false",
+    );
+    mocks.events = [
+      makeEvent({
+        id: "finished",
+        title: "Finished event",
+        date: "2026-05-18T08:00:00-07:00",
+        duration: 30,
+      }),
+    ];
+
+    const { container } = render(<ScheduleBlock date="2026-05-18" />);
+
+    expect(screen.getByRole("link", { name: "Finished event" })).toBeVisible();
+    expect(container.querySelector("ul")).not.toHaveClass("animate-in");
+  });
 });

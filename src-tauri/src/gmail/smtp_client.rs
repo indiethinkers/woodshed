@@ -10,7 +10,7 @@
 
 use crate::gmail::creds::Credentials;
 use lettre::message::header::{ContentType, InReplyTo, MessageId, References};
-use lettre::message::{Mailbox, Mailboxes};
+use lettre::message::{Attachment as LettreAttachment, Mailbox, Mailboxes, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials as SmtpCreds;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use ulid::Ulid;
@@ -40,11 +40,19 @@ pub struct OutboundMessage {
     pub bcc: Vec<String>,
     pub subject: String,
     pub body: String,
+    pub attachments: Vec<OutgoingAttachment>,
     /// Original message-id this is a reply to (if any). Goes into the
     /// `In-Reply-To:` and gets prepended to `References:`.
     pub in_reply_to: Option<String>,
     /// Existing References chain. We append our `in_reply_to` to it.
     pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutgoingAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +78,23 @@ pub async fn send(creds: &Credentials, msg: &OutboundMessage) -> Result<SendOutc
     // matches how Message-IDs sit in EmailSummary frontmatter elsewhere.
     let msgid_canonical = msgid_local.clone();
 
+    let email = build_message(msg, &msgid_local)?;
+
+    let smtp_creds = SmtpCreds::new(creds.email.clone(), creds.app_password.clone());
+    let mailer: AsyncSmtpTransport<Tokio1Executor> =
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(HOST)?
+            .credentials(smtp_creds)
+            .build();
+
+    mailer.send(email).await?;
+
+    Ok(SendOutcome {
+        message_id: msgid_canonical,
+        sent_at: chrono::Local::now().to_rfc3339(),
+    })
+}
+
+fn build_message(msg: &OutboundMessage, message_id: &str) -> Result<Message, SmtpError> {
     let from_mbox: Mailbox = match &msg.from_display {
         Some(name) if !name.trim().is_empty() => format!("{name} <{}>", msg.from_email).parse()?,
         _ => msg.from_email.parse()?,
@@ -78,8 +103,7 @@ pub async fn send(creds: &Credentials, msg: &OutboundMessage) -> Result<SendOutc
     let mut builder = Message::builder()
         .from(from_mbox)
         .subject(&msg.subject)
-        .header(ContentType::TEXT_PLAIN)
-        .header(MessageId::from(msgid_local.clone()));
+        .header(MessageId::from(message_id.to_string()));
 
     // Recipients — at least one of To/Cc/Bcc must be non-empty.
     if msg.to.is_empty() && msg.cc.is_empty() && msg.bcc.is_empty() {
@@ -124,25 +148,65 @@ pub async fn send(creds: &Credentials, msg: &OutboundMessage) -> Result<SendOutc
         builder = builder.header(References::from(chain.join(" ")));
     }
 
-    let email = builder
-        .body(msg.body.clone())
-        .map_err(|e| SmtpError::Build(e.to_string()))?;
+    if msg.attachments.is_empty() {
+        return builder
+            .header(ContentType::TEXT_PLAIN)
+            .body(msg.body.clone())
+            .map_err(|error| SmtpError::Build(error.to_string()));
+    }
 
-    let smtp_creds = SmtpCreds::new(creds.email.clone(), creds.app_password.clone());
-    let mailer: AsyncSmtpTransport<Tokio1Executor> =
-        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(HOST)?
-            .credentials(smtp_creds)
-            .build();
-
-    mailer.send(email).await?;
-
-    Ok(SendOutcome {
-        message_id: msgid_canonical,
-        sent_at: chrono::Local::now().to_rfc3339(),
-    })
+    let body = SinglePart::builder()
+        .header(ContentType::TEXT_PLAIN)
+        .body(msg.body.clone());
+    let mut multipart = MultiPart::mixed().singlepart(body);
+    for attachment in &msg.attachments {
+        let content_type = ContentType::parse(&attachment.content_type)
+            .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
+        multipart = multipart.singlepart(
+            LettreAttachment::new(attachment.filename.clone())
+                .body(attachment.bytes.clone(), content_type),
+        );
+    }
+    builder
+        .multipart(multipart)
+        .map_err(|error| SmtpError::Build(error.to_string()))
 }
 
 fn bracket(id: &str) -> String {
     let bare = id.trim().trim_start_matches('<').trim_end_matches('>');
     format!("<{bare}>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_a_multipart_message_with_attachments() {
+        let message = OutboundMessage {
+            from_email: "sender@example.test".into(),
+            from_display: Some("Synthetic Sender".into()),
+            to: vec!["recipient@example.test".into()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: "Synthetic subject".into(),
+            body: "Message body".into(),
+            attachments: vec![OutgoingAttachment {
+                filename: "brief.txt".into(),
+                content_type: "text/plain".into(),
+                bytes: b"hello".to_vec(),
+            }],
+            in_reply_to: None,
+            references: Vec::new(),
+        };
+
+        let encoded = build_message(&message, "message@example.test")
+            .expect("multipart message")
+            .formatted();
+        let encoded = String::from_utf8(encoded).expect("RFC 5322 is UTF-8");
+
+        assert!(encoded.contains("Content-Type: multipart/mixed"));
+        assert!(encoded.contains("Content-Disposition: attachment; filename=\"brief.txt\""));
+        assert!(encoded.contains("hello"));
+    }
 }

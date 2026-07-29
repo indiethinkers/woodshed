@@ -38,6 +38,10 @@ const ARCHIVED_LABEL: &str = "archived";
 #[serde(rename_all = "camelCase")]
 pub struct EmailSummary {
     pub id: String,
+    /// RFC 5322 Message-ID from the wire. This is distinct from `id`, which
+    /// is Woodshed's account-scoped local identity for Gmail messages.
+    #[serde(default)]
+    pub message_id: String,
     pub thread_id: String,
     /// Sender display name; falls back to the email address when From has
     /// no display-name part.
@@ -644,6 +648,7 @@ pub(crate) fn persist_sent_email(
 #[allow(clippy::too_many_arguments)] // Canonical construction point for the on-disk mail DTO.
 pub(crate) fn build_email_summary(
     id: String,
+    message_id: String,
     thread_id: String,
     inbox: String,
     from: String,
@@ -665,6 +670,7 @@ pub(crate) fn build_email_summary(
     let read = labels_to_read(&labels);
     EmailSummary {
         id,
+        message_id,
         thread_id,
         from,
         from_email,
@@ -908,6 +914,57 @@ pub(crate) fn migrate_legacy_filenames(
         }
     }
     Ok(())
+}
+
+/// Account-scope thread ids written by older builds. The migration edits only
+/// the `thread:` frontmatter line, preserving bodies and any unknown fields.
+/// It is idempotent and runs before the startup index decision so changed
+/// grouping keys are re-indexed as one unit.
+pub(crate) fn migrate_gmail_thread_ids(vault: &Path) -> Result<usize, String> {
+    let mut changed = 0;
+    for sub in ["inbox", "sent", "archive"] {
+        let dir = vault.join(sub);
+        if !vault_lib::is_real_directory(&dir) {
+            continue;
+        }
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|error| format!("read {sub} for mail migration: {error}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("md")
+                || !vault_lib::is_real_file(&path)
+            {
+                continue;
+            }
+            let content = match vault_lib::read_record(&path) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+            let Some(updated) = scope_gmail_thread_frontmatter(&content) else {
+                continue;
+            };
+            vault_lib::write_atomic(&path, &updated)
+                .map_err(|error| format!("write account-scoped mail thread metadata: {error}"))?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+fn scope_gmail_thread_frontmatter(content: &str) -> Option<String> {
+    let frontmatter = content.find("\n---\n").map(|end| &content[..end + 5])?;
+    let summary = parse_email_md(frontmatter)?;
+    let account_email = crate::commands::gmail::email_from_inbox_id(&summary.inbox)?;
+    let scoped =
+        crate::commands::gmail::account_scoped_thread_id(account_email, &summary.thread_id);
+    if scoped == summary.thread_id {
+        return None;
+    }
+    let old_line = frontmatter
+        .lines()
+        .find(|line| line.starts_with("thread: "))?;
+    let new_line = format!("thread: {}", json_string(&scoped));
+    Some(content.replacen(old_line, &new_line, 1))
 }
 
 #[tauri::command]
@@ -1421,6 +1478,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
         "---\n\
          type: email\n\
          id: {id}\n\
+         message_id: {message_id}\n\
          thread: {thread}\n\
          inbox: {inbox}\n\
          from: {from}\n\
@@ -1435,6 +1493,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
 {attachments}\
          ---\n\n{body}\n",
         id = json_string(&email.id),
+        message_id = json_string(&email.message_id),
         thread = json_string(&email.thread_id),
         inbox = json_string(&email.inbox),
         from = yaml_string(&email.from),
@@ -1521,6 +1580,11 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
     let map = data.as_hashmap().ok()?;
 
     let id = map.get("id")?.as_string().ok()?;
+    let message_id = map
+        .get("message_id")
+        .and_then(|value| value.as_string().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| id.clone());
     let thread = map.get("thread")?.as_string().ok()?;
     // Tolerate older files that used `account:` before the rename to `inbox:`.
     let inbox = map
@@ -1548,6 +1612,7 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         .unwrap_or_else(|| derive_preview(&decode_html_entities(&body)));
     Some(EmailSummary {
         id,
+        message_id,
         thread_id: thread,
         from,
         from_email,
@@ -1673,17 +1738,24 @@ pub struct EmailBodyRenderResult {
     has_remote_images: bool,
 }
 
+const EMAIL_BODY_RENDER_CACHE_VERSION: u8 = 2;
+
+fn email_body_cache_id(id: &str, load_remote_images: bool) -> String {
+    let mode = if load_remote_images {
+        "remote-images"
+    } else {
+        "images-blocked"
+    };
+    format!("{id}:{mode}:v{EMAIL_BODY_RENDER_CACHE_VERSION}")
+}
+
 #[tauri::command]
 pub async fn email_body_render(
     app: AppHandle,
     id: String,
     load_remote_images: bool,
 ) -> Result<EmailBodyRenderResult, String> {
-    let cache_id = if load_remote_images {
-        format!("{id}:remote-images")
-    } else {
-        format!("{id}:images-blocked")
-    };
+    let cache_id = email_body_cache_id(&id, load_remote_images);
     let vault = vault_root(&app)?;
     let (md_path, _sub) =
         find_email_path_anywhere(&vault, &id).ok_or_else(|| format!("email not found: {id}"))?;
@@ -1744,12 +1816,25 @@ pub async fn email_body_render(
 mod tests {
     use super::*;
 
+    #[test]
+    fn rendered_email_cache_ids_include_the_renderer_version() {
+        assert_eq!(
+            email_body_cache_id("message-1", true),
+            "message-1:remote-images:v2"
+        );
+        assert_eq!(
+            email_body_cache_id("message-1", false),
+            "message-1:images-blocked:v2"
+        );
+    }
+
     fn sample_email() -> EmailSummary {
         let body = "Hey — wanna grab lunch?\n\nWas thinking 12:30 at https://joes.example.com."
             .to_string();
         let preview = derive_preview(&body);
         EmailSummary {
             id: "abc123".into(),
+            message_id: "abc123@example.test".into(),
             thread_id: "thread-1".into(),
             from: "Alex Rivera".into(),
             from_email: "alex@example.com".into(),
@@ -1774,6 +1859,7 @@ mod tests {
         let md = render_email_md(&original);
         let parsed = parse_email_md(&md).expect("parse roundtrip");
         assert_eq!(parsed.id, original.id);
+        assert_eq!(parsed.message_id, original.message_id);
         assert_eq!(parsed.thread_id, original.thread_id);
         assert_eq!(parsed.inbox, original.inbox);
         assert_eq!(parsed.from, original.from);
@@ -1786,6 +1872,63 @@ mod tests {
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[test]
+    fn gmail_thread_migration_is_account_scoped_idempotent_and_preserving() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for directory in ["inbox", "sent", "archive"] {
+            std::fs::create_dir_all(tmp.path().join(directory)).unwrap();
+        }
+
+        let mut first = sample_email();
+        first.id = "first-local-id".into();
+        first.message_id = "shared-wire-id@example.test".into();
+        first.thread_id = "shared-wire-id@example.test".into();
+        first.inbox = "gmail:first@example.test".into();
+        let first_content =
+            render_email_md(&first).replacen("subject:", "custom_marker: keep-me\nsubject:", 1);
+        vault_lib::write_atomic(&tmp.path().join("inbox/first.md"), &first_content).unwrap();
+
+        let mut reply = first.clone();
+        reply.id = "reply-local-id".into();
+        reply.message_id = "reply-wire-id@example.test".into();
+        vault_lib::write_atomic(&tmp.path().join("sent/reply.md"), &render_email_md(&reply))
+            .unwrap();
+
+        let mut second_account = first.clone();
+        second_account.id = "second-local-id".into();
+        second_account.inbox = "gmail:second@example.test".into();
+        vault_lib::write_atomic(
+            &tmp.path().join("archive/second.md"),
+            &render_email_md(&second_account),
+        )
+        .unwrap();
+
+        let mut local = first.clone();
+        local.id = "local-only-id".into();
+        local.inbox = "local:mail".into();
+        let local_content = render_email_md(&local);
+        vault_lib::write_atomic(&tmp.path().join("archive/local.md"), &local_content).unwrap();
+
+        assert_eq!(migrate_gmail_thread_ids(tmp.path()).unwrap(), 3);
+        assert_eq!(migrate_gmail_thread_ids(tmp.path()).unwrap(), 0);
+
+        let migrated_first = vault_lib::read_record(&tmp.path().join("inbox/first.md")).unwrap();
+        let migrated_reply = vault_lib::read_record(&tmp.path().join("sent/reply.md")).unwrap();
+        let migrated_second =
+            vault_lib::read_record(&tmp.path().join("archive/second.md")).unwrap();
+        let first_summary = parse_email_md(&migrated_first).unwrap();
+        let reply_summary = parse_email_md(&migrated_reply).unwrap();
+        let second_summary = parse_email_md(&migrated_second).unwrap();
+
+        assert_eq!(first_summary.thread_id, reply_summary.thread_id);
+        assert_ne!(first_summary.thread_id, second_summary.thread_id);
+        assert!(migrated_first.contains("custom_marker: keep-me"));
+        assert_eq!(
+            vault_lib::read_record(&tmp.path().join("archive/local.md")).unwrap(),
+            local_content
+        );
     }
 
     #[test]
@@ -1873,6 +2016,7 @@ mod tests {
         let preview = derive_preview(&body);
         let original = EmailSummary {
             id: "CAHYfhA=Vw_ZGdyFMbDdCJLB2URqExf330MZ4aTUmGS9pnTU8pQ@Mail.gmail.com".into(),
+            message_id: "wire-message@example.test".into(),
             thread_id: "thread-2/abc=def".into(),
             from: "Beehiiv".into(),
             from_email: "noreply@beehiiv.com".into(),

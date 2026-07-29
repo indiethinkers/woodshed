@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailSummary, MailPage } from "@/lib/mail-lib/types";
+import type { EmailFull, EmailSummary, MailPage } from "@/lib/mail-lib/types";
 
 const invokeMock = vi.fn();
 vi.mock("@/lib/tauri", () => ({
@@ -14,7 +14,7 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useArchiveOne, useMail } from "./use-mail";
+import { useArchiveOne, useMail, useMarkRead } from "./use-mail";
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -44,7 +44,9 @@ function makeEmail(over: Partial<EmailSummary> = {}): EmailSummary {
   };
 }
 
-function makeMailData(...emails: EmailSummary[]): InfiniteData<MailPage, number> {
+function makeMailData(
+  ...emails: EmailSummary[]
+): InfiniteData<MailPage, number> {
   return {
     pages: [{ items: emails, nextOffset: null }],
     pageParams: [0],
@@ -56,6 +58,118 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
     .getQueryData<InfiniteData<MailPage, number>>(["emails"])
     ?.pages.flatMap((page) => page.items);
 }
+
+describe("useMarkRead", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("clears unread state everywhere an opened thread is rendered", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["email", email.id], email);
+    qc.setQueryData(["thread", email.threadId], [email]);
+    qc.setQueryData(["email-full", email.id, email.inbox], {
+      ...email,
+      to: ["reader@example.test"],
+      cc: [],
+    } satisfies EmailFull);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current(email.id);
+    });
+
+    expect(cachedEmails(qc)?.[0]).toMatchObject({ read: true });
+    expect(qc.getQueryData<EmailSummary>(["email", email.id])).toMatchObject({
+      read: true,
+    });
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", email.threadId])?.[0],
+    ).toMatchObject({ read: true });
+    expect(
+      qc.getQueryData<EmailFull>(["email-full", email.id, email.inbox]),
+    ).toMatchObject({ read: true });
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores only the failed message when a sibling read succeeds", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const first = makeEmail({ id: "message-1" });
+    const second = makeEmail({ id: "message-2" });
+    qc.setQueryData(["emails"], makeMailData(first, second));
+    qc.setQueryData(["email", first.id], first);
+    qc.setQueryData(["email", second.id], second);
+    qc.setQueryData(["thread", first.threadId], [first, second]);
+    qc.setQueryData(["email-full", first.id, first.inbox], {
+      ...first,
+      to: [],
+      cc: [],
+    } satisfies EmailFull);
+
+    let failFirst!: (error: Error) => void;
+    invokeMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let firstPromise!: Promise<void>;
+    let secondPromise!: Promise<void>;
+    act(() => {
+      firstPromise = result.current(first.id);
+      secondPromise = result.current(second.id);
+    });
+
+    await act(async () => {
+      await secondPromise;
+      failFirst(new Error("remote read failed"));
+      await expect(firstPromise).rejects.toThrow("remote read failed");
+    });
+
+    expect(cachedEmails(qc)).toMatchObject([
+      { id: first.id, read: false },
+      { id: second.id, read: true },
+    ]);
+    expect(qc.getQueryData<EmailSummary>(["email", first.id])).toMatchObject({
+      read: false,
+    });
+    expect(qc.getQueryData<EmailSummary>(["email", second.id])).toMatchObject({
+      read: true,
+    });
+    expect(
+      qc.getQueryData<EmailSummary[]>(["thread", first.threadId]),
+    ).toMatchObject([
+      { id: first.id, read: false },
+      { id: second.id, read: true },
+    ]);
+    expect(
+      qc.getQueryData<EmailFull>(["email-full", first.id, first.inbox]),
+    ).toMatchObject({ read: false });
+  });
+});
 
 describe("useArchiveOne", () => {
   let qc: QueryClient;

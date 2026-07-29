@@ -26,6 +26,7 @@ export interface TagTableRow {
 export interface TagCount {
   tag: string;
   count: number;
+  created: string | null;
 }
 
 // Shared query definitions so the hooks and the startup prefetch

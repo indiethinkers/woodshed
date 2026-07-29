@@ -8,6 +8,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
+const LEGACY_CLEANUP_MARKER: &str = "legacy_cleanup_v1";
+const LEGACY_CREDENTIAL_SERVICE: &str = "Woodshed Transcription";
+const LEGACY_CREDENTIAL_ACCOUNT: &str = "deepgram";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +29,34 @@ pub struct Profile {
     pub email: String,
     #[serde(default)]
     pub theme: Theme,
+}
+
+/// Remove state left by the retired transcription integration. This runs at
+/// startup until the keychain deletion succeeds, then records a generic
+/// migration marker so subsequent launches do not keep touching Keychain.
+pub(crate) fn cleanup_removed_integration(app: &AppHandle) -> Result<(), String> {
+    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
+    let store_changed = store.delete("voice");
+    if store
+        .get(LEGACY_CLEANUP_MARKER)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        if store_changed {
+            store.save().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let entry = keyring::Entry::new(LEGACY_CREDENTIAL_SERVICE, LEGACY_CREDENTIAL_ACCOUNT)
+        .map_err(|error| format!("open obsolete credential: {error}"))?;
+    match entry.delete_password() {
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(error) => return Err(format!("delete obsolete credential: {error}")),
+    }
+
+    store.set(LEGACY_CLEANUP_MARKER, serde_json::Value::Bool(true));
+    store.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -58,26 +89,6 @@ pub fn profile_set(app: AppHandle, profile: Profile) -> Result<(), String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     let value = serde_json::to_value(&profile).map_err(|e| e.to_string())?;
     store.set("profile", value);
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Selected Deepgram Aura voice id (e.g. `aura-luna-en`) for voice-mode spoken
-/// replies. Empty string = use the backend default (Asteria). Stored in
-/// config.json, not the keychain — it's a preference, not a secret.
-#[tauri::command]
-pub fn voice_get(app: AppHandle) -> Result<String, String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store
-        .get("voice")
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default())
-}
-
-#[tauri::command]
-pub fn voice_set(app: AppHandle, voice: String) -> Result<(), String> {
-    let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    store.set("voice", serde_json::Value::String(voice));
     store.save().map_err(|e| e.to_string())?;
     Ok(())
 }

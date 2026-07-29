@@ -44,8 +44,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # Async runtime for Gmail/HTTP commands and app background work.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 
-# OS keychain custody (Gmail App Passwords, Deepgram key) + HTTP client
-# (Gmail has no HTTP dep, but gcal/resources/agent/image-cache/transcribe do).
+# OS keychain custody (Gmail App Passwords and integration secrets) + HTTP client
+# (Gmail has no HTTP dep, but gcal/resources/agent/image-cache do).
 keyring = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 

@@ -20,7 +20,7 @@
   <h1>Privacy Policy</h1>
   <p class="doc-meta">
     Effective: <strong>2026-05-08</strong> &nbsp;·&nbsp;
-    Last updated: <strong>2026-07-26</strong> &nbsp;·&nbsp;
+    Last updated: <strong>2026-07-28</strong> &nbsp;·&nbsp;
     Contact: <a href="mailto:daniel@indiethinkers.com">daniel@indiethinkers.com</a>
   </p>
 
@@ -34,18 +34,17 @@
     <li><strong>Vault folder path and profile.</strong> Stored locally so the app can reopen your vault and present your chosen identity.</li>
     <li><strong>Markdown files and attachments.</strong> Notes, tasks, events, people, resources, tables, mail, and attachments are stored in the vault you choose.</li>
     <li><strong>Derived data.</strong> The app-data directory contains a rebuildable SQLite search index, rebuildable iCal cache, preferences, and rotating diagnostics logs.</li>
-    <li><strong>Credentials.</strong> Gmail App Passwords, secret iCal URLs, Hermes API keys, and Deepgram keys are stored in the operating system's credential store. Legacy plaintext values are migrated and scrubbed on first use. Development builds may read values you place in <code>.env.local</code>.</li>
+    <li><strong>Credentials.</strong> Gmail App Passwords, secret iCal URLs, and Hermes API keys are stored in the operating system's credential store. Legacy plaintext values are migrated and scrubbed on first use. Upgraded installations delete the obsolete transcription credential and preference on the next launch. Development builds may read values you place in <code>.env.local</code>.</li>
   </ul>
   <p>Vault files and synced mail are not encrypted by Woodshed. Use operating-system disk encryption and backups appropriate for your data.</p>
 
   <h2>3. Direct integrations</h2>
   <ul>
-    <li><strong>Gmail (IMAP and SMTP).</strong> Woodshed reads the inbox, synchronizes read/archive state, and sends messages or replies that you initiate. Gmail data is written to the local vault. Woodshed does not use Gmail OAuth scopes.</li>
+    <li><strong>Gmail (IMAP and SMTP).</strong> Woodshed reads the inbox, synchronizes read/archive state, and sends messages, replies, and user-selected attachments that you initiate. Gmail data and attachment copies are written to the local vault. Woodshed does not use Gmail OAuth scopes.</li>
     <li><strong>Google Calendar or another iCal host.</strong> An explicit Sync downloads the configured read-only iCal feed. Woodshed does not currently request Calendar OAuth access or write to Google Calendar.</li>
     <li><strong>Resource capture.</strong> Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.</li>
     <li><strong>Remote email images.</strong> Sender images are removed by default and requested only after you choose <strong>Load remote images</strong>. Loading an image can reveal your IP address and time of access to its host.</li>
     <li><strong>Hermes-compatible agent endpoint.</strong> An explicit agent or Sweep action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Opening Sweep sends nothing. Proposed record creation and mail archive actions require confirmation.</li>
-    <li><strong>Deepgram.</strong> Dictation sends a microphone clip for transcription. Voice playback sends reply text for speech synthesis. Nothing is sent until you invoke a voice feature.</li>
   </ul>
   <p>These providers receive requests directly from your device and process them under their own terms. Woodshed does not proxy or retain a server-side copy.</p>
 

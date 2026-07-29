@@ -116,34 +116,10 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
   }, [selectedIdx, messages.length, userCursor]);
 
   const replyTarget = replyTargetId
-    ? messages.find((m) => m.id === replyTargetId) ?? null
+    ? (messages.find((m) => m.id === replyTargetId) ?? null)
     : null;
 
-  // Mark every unread message in the thread as read once. The hook
-  // skips the API call for messages that are already read, so re-renders
-  // are cheap.
-  useEffect(() => {
-    if (isLoading) return;
-    const unreadIds = messages.filter((m) => !m.read).map((m) => m.id);
-    if (unreadIds.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      for (const id of unreadIds) {
-        if (cancelled) return;
-        try {
-          await markRead(id);
-        } catch (e) {
-          // Surface to the console so a stuck unread dot is debuggable
-          // (most common cause: Tauri backend wasn't recompiled after the
-          // mark-read command was added — restart the dev server).
-          console.error("auto mark-read failed for", id, e);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isLoading, messages, markRead]);
+  useAutoMarkRead(messages, isLoading, markRead);
 
   // Find the row that follows this thread in the inbox list — used to
   // jump straight to the next email when archiving or deleting, so the
@@ -260,7 +236,11 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
                   className="inline-block h-2 w-2 rounded-full bg-blue-500 shrink-0"
                 />
               )}
-              <span>{messages.length > 1 ? `${messages.length} messages` : latest.from}</span>
+              <span>
+                {messages.length > 1
+                  ? `${messages.length} messages`
+                  : latest.from}
+              </span>
               <span className="font-mono text-xs">
                 {new Date(latest.date).toLocaleString("en-US", {
                   month: "short",
@@ -362,6 +342,37 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
 }
 
 /**
+ * Detail-view fallback for messages opened from surfaces other than the inbox.
+ * Each message is attempted once per mounted detail view: a failed remote
+ * update restores the unread UI, but must not turn that render into an
+ * unbounded integration retry loop.
+ */
+export function useAutoMarkRead(
+  messages: EmailSummary[],
+  isLoading: boolean,
+  markRead: (id: string) => Promise<void>,
+) {
+  const attemptedIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (isLoading) return;
+    const unreadIds = messages
+      .filter(
+        (message) => !message.read && !attemptedIds.current.has(message.id),
+      )
+      .map((message) => message.id);
+    if (unreadIds.length === 0) return;
+
+    for (const id of unreadIds) {
+      attemptedIds.current.add(id);
+      void markRead(id).catch(() => {
+        console.error("Automatic mark-read failed.");
+      });
+    }
+  }, [isLoading, messages, markRead]);
+}
+
+/**
  * Single message inside a thread. The newest message expands by default;
  * older ones collapse to a single-line preview the user can click open.
  *
@@ -452,7 +463,9 @@ function ThreadMessage({
                 }}
                 className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground rounded-sm cursor-pointer"
                 aria-expanded={detailsOpen}
-                aria-label={detailsOpen ? "Hide message details" : "Show message details"}
+                aria-label={
+                  detailsOpen ? "Hide message details" : "Show message details"
+                }
               >
                 <span>to {toSummary}</span>
                 <ChevronDown
@@ -578,9 +591,7 @@ function AttachmentRow({
               <Icon className="h-3.5 w-3.5 text-muted-foreground" />
             )}
             <span className="max-w-[24ch] truncate">{a.filename}</span>
-            <span className="text-muted-foreground">
-              {formatBytes(a.size)}
-            </span>
+            <span className="text-muted-foreground">{formatBytes(a.size)}</span>
           </button>
         );
       })}

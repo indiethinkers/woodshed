@@ -4,6 +4,10 @@ import { useRightSidebar } from "@/components/layout/right-sidebar-context-inter
 import { useTabs } from "@/components/layout/tabs-context-internal";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import type {
+  SuggestionKeyDownProps,
+  SuggestionProps,
+} from "@tiptap/suggestion";
 import { resolveWikilink } from "@/lib/wikilinks";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -299,6 +303,30 @@ export function TiptapEditor({
     setWikilinkStateInner(next);
   }, []);
   const wikilinkPickerRef = useRef<WikilinkPickerHandle | null>(null);
+  const createWikilinkSuggestionRenderer = useCallback(() => {
+    const updatePicker = (
+      props: SuggestionProps<unknown, WikilinkPickerSelection>,
+    ) => {
+      setWikilinkState({
+        query: props.query,
+        command: (selection) => props.command(selection),
+        clientRect: props.clientRect ?? null,
+      });
+    };
+
+    return {
+      onStart: updatePicker,
+      onUpdate: updatePicker,
+      onExit: () => setWikilinkState(null),
+      onKeyDown: ({ event }: SuggestionKeyDownProps) => {
+        if (event.key === "Escape") {
+          setWikilinkState(null);
+          return true;
+        }
+        return wikilinkPickerRef.current?.onKeyDown(event) ?? false;
+      },
+    };
+  }, [setWikilinkState]);
   const editorRef = useRef<Editor | null>(null);
 
   // Commit a picker selection in alias mode: replace the highlighted range
@@ -714,32 +742,10 @@ export function TiptapEditor({
       Wikilink,
       WikilinkSuggestion.configure({
         suggestion: {
-          render: () => ({
-            onStart: (props) => {
-              setWikilinkState({
-                query: props.query,
-                command: (selection) => props.command(selection),
-                clientRect: props.clientRect ?? null,
-              });
-            },
-            onUpdate: (props) => {
-              setWikilinkState({
-                query: props.query,
-                command: (selection) => props.command(selection),
-                clientRect: props.clientRect ?? null,
-              });
-            },
-            onExit: () => {
-              setWikilinkState(null);
-            },
-            onKeyDown: ({ event }) => {
-              if (event.key === "Escape") {
-                setWikilinkState(null);
-                return true;
-              }
-              return wikilinkPickerRef.current?.onKeyDown(event) ?? false;
-            },
-          }),
+          render: createWikilinkSuggestionRenderer,
+        },
+        atSuggestion: {
+          render: createWikilinkSuggestionRenderer,
         },
       }),
       SlashCommand.configure({
@@ -1220,14 +1226,10 @@ export function TiptapEditor({
         if (href && isExternalHref(href)) {
           event.preventDefault();
           event.stopPropagation();
-          if (hasBackend()) {
-            void openExternalUrl(href).catch((err) => {
-              // eslint-disable-next-line no-console
-              console.error("[link] failed to open external url", href, err);
-            });
-          } else {
-            window.open(href, "_blank", "noopener,noreferrer");
-          }
+          void openExternalUrl(href).catch(() => {
+            // Keep user-authored URLs and native integration errors out of logs.
+            console.error("Woodshed could not open the external link.");
+          });
           return;
         }
       }
@@ -1290,7 +1292,7 @@ export function TiptapEditor({
   // focused but unchanged, accept the external value so a stale instance can't
   // later blur and save old markdown over newer file/query content.
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     const currentMarkdown = (
       editor.storage as unknown as { markdown: MarkdownStorage }
     ).markdown.getMarkdown();

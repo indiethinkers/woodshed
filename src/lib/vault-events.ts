@@ -6,6 +6,12 @@ export type VaultChange =
   | { kind: "modified"; path: string }
   | { kind: "removed"; path: string };
 
+export function invalidateAfterIndexRebuild(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ["emails"] });
+  queryClient.invalidateQueries({ queryKey: ["tagTable"] });
+  queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
+}
+
 // Path-routed query invalidation. Parses the changed path and invalidates
 // only the matching query keys. Coarse fallback (`["tasks"]` invalidates
 // everything) for paths that don't match a known shape.
