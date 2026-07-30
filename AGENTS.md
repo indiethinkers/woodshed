@@ -67,8 +67,9 @@ of truth; the application is a native lens over those files.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
 - **Bounded network actions.** Configured integrations send data only when the
-  user invokes them. Opening an HTML email may also load remote images through
-  Woodshed's bounded cache; sender HTML never fetches URLs directly.
+  user invokes them. Displaying a YouTube embed may load its thumbnail, and
+  opening an HTML email may load remote images. Both use Woodshed's bounded
+  cache; untrusted HTML never fetches URLs directly.
 - **Narrow privilege.** The webview has no general shell or filesystem access.
   Rust exposes scoped commands for specific operations.
 - **Derived state is disposable.** Search indexes and calendar caches can be

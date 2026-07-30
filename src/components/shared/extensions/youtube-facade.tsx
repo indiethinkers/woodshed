@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, ExternalLink, Play } from "lucide-react";
 import { openExternalUrl } from "@/lib/open-external";
+import { isTauriRuntime } from "@/lib/runtime";
 
-/// Shared click-to-load YouTube facade. It makes no request to YouTube until
-/// the user hits play, at which point the privacy-enhanced player iframe is
-/// created.
+function thumbnailSrc(videoId: string): string {
+  const upstream = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  if (!isTauriRuntime()) return upstream;
+  const encoded = window
+    .btoa(upstream)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  return `wsmail://localhost/img/${encoded}`;
+}
+
+/// Shared click-to-load YouTube facade. It loads the video's thumbnail, then
+/// creates the privacy-enhanced player iframe when the user hits play.
 ///
 /// No surrounding card chrome (title / tag pills) — the video stands on its
 /// own, in both the Tiptap editor (`YoutubeResourceView`) and the read-only
@@ -102,6 +113,12 @@ export function YoutubeFacade({
           onClick={() => setPlaying(true)}
           className="group absolute inset-0 h-full w-full cursor-pointer"
         >
+          <img
+            src={thumbnailSrc(videoId)}
+            alt="YouTube video thumbnail"
+            draggable={false}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
           <span
             aria-hidden
             className="absolute left-1/2 top-1/2 flex h-[44px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl bg-black/60 shadow-lg transition-colors duration-150 group-hover:bg-[#ff0000]"

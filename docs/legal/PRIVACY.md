@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** July 28, 2026
+**Effective:** July 26, 2026 · **Last updated:** July 30, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -11,8 +11,9 @@ build is responsible for documenting any behavior it adds or changes.
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
-requests when you invoke them; opening an HTML email also loads its remote
-images through Woodshed's bounded cache by default.
+requests when you invoke them. Displaying a YouTube embed loads its thumbnail,
+and opening an HTML email loads its remote images by default. Both use
+Woodshed's bounded cache.
 
 ## Data stored on your device
 
@@ -47,6 +48,9 @@ requests are the exception described below.
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. Public fetches reject private/local
   destinations and enforce redirect, timeout, size, and concurrency limits.
+- **YouTube thumbnails:** displaying a YouTube embed loads its thumbnail through
+  Woodshed's bounded public-network image cache. YouTube receives your IP address
+  and time of access. The video player loads only after you press Play.
 - **Remote email images:** opening an HTML email requests its remote images by
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and

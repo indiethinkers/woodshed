@@ -319,8 +319,8 @@ pub fn run() {
                                 .header("Cache-Control", "public, max-age=31536000, immutable")
                                 .body(bytes)
                                 .unwrap_or_else(|_| empty_response(500)),
-                            Err(e) => {
-                                eprintln!("wsmail img fetch error: {e}");
+                            Err(_) => {
+                                eprintln!("wsmail image fetch failed");
                                 empty_response(502)
                             }
                         }

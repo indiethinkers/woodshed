@@ -28,8 +28,9 @@ The rendered body is additionally served under `default-src 'none'`, so no
 sender markup or CSS can reach the network even if sanitization is wrong. Remote
 image URLs are rewritten to Woodshed's bounded cache and load when the user
 opens a message; sender HTML never fetches them directly. The main webview also
-blocks arbitrary HTTP(S) image loads; YouTube embeds make no request until the
-user presses Play.
+blocks arbitrary HTTP(S) image loads. YouTube thumbnails load through the same
+bounded image cache when an embed is displayed, and the player makes no request
+until the user presses Play.
 
 ## Storage
 

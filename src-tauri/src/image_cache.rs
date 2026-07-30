@@ -352,10 +352,7 @@ pub async fn get_or_fetch(app: &AppHandle, url: &str) -> Result<(Vec<u8>, String
     if let Err(e) = write_cache_atomic(app, &key, &bytes, &content_type, dimensions).await {
         // Cache write failures shouldn't fail the request — the user
         // gets the image, the next open re-fetches.
-        let safe_url = reqwest::Url::parse(url)
-            .map(|parsed| network::url_for_log(&parsed))
-            .unwrap_or_else(|_| "<invalid-url>".to_string());
-        eprintln!("image-cache: failed to persist {safe_url}: {e}");
+        eprintln!("image-cache: failed to persist remote image: {e}");
     }
     Ok((bytes, content_type))
 }
@@ -379,11 +376,8 @@ pub async fn prefetch_all(app: &AppHandle, urls: Vec<String>) {
             let Ok(_permit) = semaphore.acquire_owned().await else {
                 return;
             };
-            if let Err(error) = get_or_fetch(&app, &url).await {
-                let safe_url = reqwest::Url::parse(&url)
-                    .map(|parsed| network::url_for_log(&parsed))
-                    .unwrap_or_else(|_| "<invalid-url>".to_string());
-                eprintln!("image-cache load: {safe_url}: {error}");
+            if get_or_fetch(&app, &url).await.is_err() {
+                eprintln!("image-cache prefetch failed");
             }
         });
     }
