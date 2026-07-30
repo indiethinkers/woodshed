@@ -14,7 +14,13 @@ export interface YamlMap {
   [key: string]: YamlValue | undefined;
 }
 
-export type YamlValue = string | number | boolean | null | YamlValue[] | YamlMap;
+export type YamlValue =
+  | string
+  | number
+  | boolean
+  | null
+  | YamlValue[]
+  | YamlMap;
 
 /** YAML plain scalars that would reparse as a non-string type. */
 const RESERVED_PLAIN = new Set([
@@ -41,13 +47,13 @@ function hasControlChar(value: string): boolean {
 
 /**
  * True when `value` can be written without quotes and still read back as the
- * identical string. Conservative on purpose — a false negative only costs a
+ * identical string. Conservative on purpose: a false negative only costs a
  * pair of quotes, a false positive silently changes a record's data.
  */
 function isPlainSafe(value: string): boolean {
   if (RESERVED_PLAIN.has(value.toLowerCase())) return false;
   if (value !== value.trim()) return false;
-  // Anything numeric-looking (including dates like 2026-07-27, which YAML 1.1
+  // Anything numeric-looking (including dates like 2026-10-12, which YAML 1.1
   // parsers may coerce to a timestamp) gets quoted.
   if (/^[-+]?(\d|\.\d)/.test(value)) return false;
   // Indicators that open a non-scalar node or a comment when unquoted.
@@ -61,7 +67,7 @@ function isPlainSafe(value: string): boolean {
 
 /**
  * A double-quoted YAML scalar. YAML's double-quoted style shares JSON's escape
- * vocabulary, so JSON.stringify produces a valid — and correctly escaped —
+ * vocabulary, so JSON.stringify produces a valid and correctly escaped
  * scalar for every input, newlines and quotes included.
  */
 export function quote(value: string): string {

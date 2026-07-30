@@ -20,7 +20,7 @@ const SATURDAY_W: Weekday = 6;
 /**
  * A weekly meeting, stored once and projected forward at read time
  * (`occurrence_for` in commands/events.rs:1109). Weekly recurrence matches on
- * weekday, so these never land on a weekend — unlike `daily`, which would put a
+ * weekday, so these never land on a weekend: unlike `daily`, which would put a
  * standup on Saturday.
  */
 interface SeriesSeed {
@@ -37,19 +37,19 @@ interface SeriesSeed {
 
 const SERIES: SeriesSeed[] = [
   {
-    id: "e-series-1on1-alex",
-    title: "1:1 with Alex Rivera",
+    id: "e-series-1on1-jordan",
+    title: "1:1 with Jordan Lee",
     weekday: MONDAY,
     time: "09:30",
     duration: 30,
     area: AREA.product,
-    attendees: ["alex-rivera"],
+    attendees: ["jordan-lee"],
     tags: ["1on1"],
     body: [
-      "Standing 1:1. Alex sets the agenda.",
+      "Standing 1:1. Jordan sets the agenda.",
       "",
       "Recurring topics: the write path, whatever the watcher is doing wrong this",
-      "week, and runway — which he is entitled to ask about every time.",
+      "week, and runway, which he is entitled to ask about every time.",
     ].join("\n"),
   },
   {
@@ -89,8 +89,8 @@ const SERIES: SeriesSeed[] = [
     attendees: ["casey-kim"],
     tags: ["1on1"],
     body: [
-      "Standing 1:1. Currently all onboarding — see",
-      "[[RFC — onboarding starts with import]].",
+      "Standing 1:1. Currently all onboarding: see",
+      "[[RFC: onboarding starts with import]].",
     ].join("\n"),
   },
   {
@@ -100,7 +100,7 @@ const SERIES: SeriesSeed[] = [
     time: "11:00",
     duration: 60,
     area: AREA.product,
-    attendees: ["sam-chen", "morgan-diaz", "casey-kim", "alex-rivera"],
+    attendees: ["sam-chen", "morgan-diaz", "casey-kim", "jordan-lee"],
     body: [
       "Weekly design review. One RFC per session, failure modes written down before",
       "anything ships.",
@@ -150,7 +150,7 @@ const SERIES: SeriesSeed[] = [
     area: AREA.personal,
     attendees: ["jamie-parker"],
     body: [
-      "Standing Saturday walk. No agenda, and explicitly not about the company —",
+      "Standing Saturday walk. No agenda, and explicitly not about the company,",
       "which is the entire point of it being on the calendar.",
     ].join("\n"),
   },
@@ -174,7 +174,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-lena-should-i-raise",
     offset: -55,
-    title: "Lena Fischer — should I raise?",
+    title: "Lena Fischer: should I raise?",
     time: "14:00",
     duration: 60,
     area: AREA.fundraise,
@@ -194,7 +194,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-memo-writing-block",
     offset: -54,
-    title: "Deep work — draft the memo",
+    title: "Deep work: draft the memo",
     time: "07:30",
     duration: 180,
     area: AREA.fundraise,
@@ -204,17 +204,17 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-oskar-intro-call",
     offset: -52,
-    title: "Oskar Lindqvist — intro call",
+    title: "Oskar Lindqvist: intro call",
     time: "11:00",
     duration: 30,
     area: AREA.fundraise,
     attendees: ["oskar-lindqvist"],
     tags: ["fundraise"],
     body: [
-      "Northwind scout. Found us through the file-over-app essay, not through any",
+      "Cedar Grove scout. Found us through the file-over-app essay, not through any",
       "outbound effort.",
       "",
-      "Offered to introduce [[Priya Raman]] before I asked. Said yes immediately.",
+      "Offered to introduce [[Amara Okafor]] before I asked. Said yes immediately.",
     ].join("\n"),
   },
   {
@@ -227,7 +227,7 @@ const ONE_OFFS: OneOffSeed[] = [
     tags: ["fundraise"],
     body: [
       "Eighteen firms down to eleven. Cut anyone who has publicly written that",
-      "productivity tools are not venture-scale — no point spending a first meeting",
+      "productivity tools are not venture-scale: no point spending a first meeting",
       "arguing a prior.",
       "",
       "Became the Investor Pipeline table.",
@@ -236,13 +236,13 @@ const ONE_OFFS: OneOffSeed[] = [
 
   // ── Weeks −5 to −3: first partner calls ──────────────────────────────────
   {
-    id: "e-priya-first-call",
+    id: "e-amara-first-call",
     offset: -44,
-    title: "Priya Raman — first call",
+    title: "Amara Okafor: first call",
     time: "13:00",
     duration: 45,
     area: AREA.fundraise,
-    attendees: ["priya-raman"],
+    attendees: ["amara-okafor"],
     tags: ["fundraise"],
     body: [
       "Excellent call. She had read the changelog before dialling in and asked about",
@@ -250,7 +250,7 @@ const ONE_OFFS: OneOffSeed[] = [
       "",
       "Pushed hardest on retention. I gave the aggregate number and she immediately",
       "asked for the cut by acquisition source, which I did not have. Fix before the",
-      "next one — see [[Retention — what the number actually says]].",
+      "next one: see [[Retention: what the number actually says]].",
       "",
       "Wants a second call with the full partnership.",
     ].join("\n"),
@@ -258,7 +258,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-halyard-first",
     offset: -42,
-    title: `Tomas Bergström — ${FIRMS.halyard}`,
+    title: `Tomas Bergström: ${FIRMS.halyard}`,
     time: "10:00",
     duration: 45,
     area: AREA.fundraise,
@@ -273,7 +273,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-ana-call",
     offset: -40,
-    title: "Ana Ferreira — Ridgeline",
+    title: "Ana Ferreira: Ridgeline",
     time: "15:30",
     duration: 30,
     area: AREA.fundraise,
@@ -289,7 +289,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-daniel-first-call",
     offset: -38,
-    title: "Daniel Osei — first call",
+    title: "Daniel Osei: first call",
     time: "11:00",
     duration: 60,
     area: AREA.fundraise,
@@ -299,14 +299,14 @@ const ONE_OFFS: OneOffSeed[] = [
       "Ex-operator who shipped a sync engine and regretted it. Unusually specific",
       "questions about what breaks under conflict.",
       "",
-      "Asked for a design partner reference and named [[Ravi Menon]] himself after",
+      "Asked for a design partner reference and named [[Elliot Park]] himself after",
       "spotting Cartogram on the deck.",
     ].join("\n"),
   },
   {
     id: "e-halyard-second",
     offset: -36,
-    title: `Tomas Bergström — second call`,
+    title: `Tomas Bergström: second call`,
     time: "14:00",
     duration: 45,
     area: AREA.fundraise,
@@ -317,7 +317,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-nadia-angel",
     offset: -35,
-    title: "Nadia Haddad — angel call",
+    title: "Nadia Haddad: angel call",
     time: "09:00",
     duration: 30,
     area: AREA.fundraise,
@@ -329,23 +329,23 @@ const ONE_OFFS: OneOffSeed[] = [
       "",
       "Her criticism: the vault picker asks for a commitment before the user knows",
       "what a vault is. Correct, and it became",
-      "[[RFC — onboarding starts with import]].",
+      "[[RFC: onboarding starts with import]].",
     ].join("\n"),
   },
   {
-    id: "e-priya-partnership",
+    id: "e-amara-partnership",
     offset: -30,
-    title: `Priya Raman — ${FIRMS.northwind} partnership`,
+    title: `Amara Okafor: ${FIRMS.cedargrove} partnership`,
     time: "13:00",
     duration: 60,
     area: AREA.fundraise,
-    attendees: ["priya-raman"],
+    attendees: ["amara-okafor"],
     tags: ["fundraise"],
     body: [
       "Full partnership meeting. Went long, which I am told is good.",
       "",
-      "The retention cut landed — presenting it as \"users who arrive with material",
-      "stay, users who start empty do not\" turned a soft number into a product",
+      'The retention cut landed: presenting it as "users who arrive with material',
+      'stay, users who start empty do not" turned a soft number into a product',
       "decision, and the room engaged with it as such.",
       "",
       "Next step: diligence, then a partner meeting to decide.",
@@ -354,7 +354,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-halyard-pass",
     offset: -21,
-    title: "Tomas Bergström — pass",
+    title: "Tomas Bergström: pass",
     time: "17:00",
     duration: 15,
     area: AREA.fundraise,
@@ -363,7 +363,7 @@ const ONE_OFFS: OneOffSeed[] = [
     body: [
       "Fifteen minutes, delivered directly rather than by email. Respect that.",
       "",
-      "Written up in [[Halyard passed — postmortem]].",
+      "Written up in [[Halyard passed: postmortem]].",
     ].join("\n"),
   },
 
@@ -371,7 +371,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-mei-diligence",
     offset: -18,
-    title: "Mei Watanabe — diligence kickoff",
+    title: "Mei Watanabe: diligence kickoff",
     time: "10:00",
     duration: 45,
     area: AREA.fundraise,
@@ -388,7 +388,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-jonas-security",
     offset: -27,
-    title: "Jonas Klein — security review",
+    title: "Jonas Klein: security review",
     time: "10:00",
     duration: 45,
     area: AREA.product,
@@ -397,32 +397,32 @@ const ONE_OFFS: OneOffSeed[] = [
     body: [
       "Not an investor call but the most consequential meeting of the week.",
       "",
-      "He needs an enumerable answer to \"when does data leave the machine\". Wrote",
+      'He needs an enumerable answer to "when does data leave the machine". Wrote',
       "[[When does data leave the machine?]] the same afternoon. It unblocked a",
       "60-person deployment.",
     ].join("\n"),
   },
   {
-    id: "e-ravi-reference",
+    id: "e-elliot-reference",
     offset: -4,
-    title: "Ravi Menon — reference call for Foundry Line",
+    title: "Elliot Park: reference call for Foundry Line",
     time: "14:00",
     duration: 30,
     area: AREA.fundraise,
-    attendees: ["ravi-menon"],
+    attendees: ["elliot-park"],
     tags: ["fundraise", "dd"],
     body: [
-      "Ravi took the reference call with [[Daniel Osei]].",
+      "Elliot took the reference call with [[Daniel Osei]].",
       "",
       "Apparently spent twenty minutes on the iCloud data-loss bug and how it was",
-      "handled — which is the best possible reference, and not the one I would have",
+      "handled, which is the best possible reference, and not the one I would have",
       "chosen to give.",
     ].join("\n"),
   },
   {
     id: "e-sofia-reference",
     offset: -3,
-    title: "Sofia Duarte — reference call",
+    title: "Sofia Duarte: reference call",
     time: "11:00",
     duration: 30,
     area: AREA.fundraise,
@@ -442,47 +442,47 @@ const ONE_OFFS: OneOffSeed[] = [
       "Cohort retention, conversion, burn. Built the Metrics table properly instead",
       "of rebuilding a spreadsheet every time someone asks.",
       "",
-      "Output fed [[Retention — what the number actually says]].",
+      "Output fed [[Retention: what the number actually says]].",
     ].join("\n"),
   },
 
   // ── Forward: scheduled ────────────────────────────────────────────────────
   {
-    id: "e-northwind-partner-meeting",
+    id: "e-cedargrove-partner-meeting",
     offset: 3,
-    title: `Priya Raman — ${FIRMS.northwind} partner meeting`,
+    title: `Amara Okafor: ${FIRMS.cedargrove} partner meeting`,
     time: "14:00",
     duration: 90,
     area: AREA.fundraise,
-    attendees: ["priya-raman"],
+    attendees: ["amara-okafor"],
     tags: ["fundraise"],
     body: [
       "The decision meeting.",
       "",
       "Bring: the retention cut, the security document, and a direct answer to the",
-      "collaboration question — see [[RFC — shared vaults (sketch)]]. Do not",
+      "collaboration question: see [[RFC: shared vaults (sketch)]]. Do not",
       "improvise that one.",
       "",
-      "Prep is [[Demo script — what to actually show]].",
+      "Prep is [[Demo script: what to actually show]].",
     ].join("\n"),
   },
   {
-    id: "e-yc-deadline",
+    id: "e-launchpad-deadline",
     offset: 4,
-    title: "YC W27 application deadline",
+    title: "Launchpad Fall application deadline",
     time: "20:00",
     duration: 15,
     area: AREA.fundraise,
     tags: ["fundraise"],
     body: [
-      "Hard deadline. [[YC W27 application — draft answers]] still needs the \"why",
-      "now\" answer cut by a third.",
+      'Hard deadline. [[Launchpad Fall application: draft answers]] still needs the "why',
+      'now" answer cut by a third.',
     ].join("\n"),
   },
   {
     id: "e-daniel-term-sheet",
     offset: 7,
-    title: "Daniel Osei — terms conversation",
+    title: "Daniel Osei: terms conversation",
     time: "11:00",
     duration: 60,
     area: AREA.fundraise,
@@ -498,7 +498,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-ostrich-onboarding",
     offset: 8,
-    title: "Jonas Klein — Ostrich rollout",
+    title: "Jonas Klein: Ostrich rollout",
     time: "15:00",
     duration: 60,
     area: AREA.product,
@@ -508,7 +508,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-meridian-onboarding",
     offset: 10,
-    title: "Sofia Duarte — Meridian team rollout",
+    title: "Sofia Duarte: Meridian team rollout",
     time: "10:00",
     duration: 45,
     area: AREA.product,
@@ -518,7 +518,7 @@ const ONE_OFFS: OneOffSeed[] = [
   {
     id: "e-theo-launch-chat",
     offset: 12,
-    title: "Theo Almeida — launch coverage",
+    title: "Theo Almeida: launch coverage",
     time: "13:00",
     duration: 30,
     area: AREA.growth,
@@ -531,72 +531,64 @@ const ONE_OFFS: OneOffSeed[] = [
 ];
 
 /** Events placed on demo day itself, so Cadence always opens populated. */
-function demoDayEvents(cal: Calendar): OneOffSeed[] {
-  const workday = !cal.isWeekend(0);
+function demoDayEvents(): OneOffSeed[] {
   return [
     {
       id: "e-today-deep-work",
       offset: 0,
-      title: "Deep work — cut the YC application",
-      time: workday ? "08:30" : "10:30",
-      duration: 90,
-      area: AREA.fundraise,
-      tags: ["fundraise"],
+      title: "Set weekly priorities",
+      time: "08:30",
+      duration: 45,
+      area: AREA.product,
       body: [
-        "The \"why now\" answer is a third too long and reads like the memo.",
+        "Pick the three outcomes that need to be true by Friday.",
         "",
-        "[[Notes on writing a strong accelerator application]] — every answer should",
-        "be falsifiable. That is the cut to make.",
+        "Keep the import reliability work ahead of the new database view. The",
+        "migration errors are affecting existing users today.",
       ].join("\n"),
     },
     {
-      id: "e-today-ravi-checkin",
+      id: "e-today-elliot-checkin",
       offset: 0,
-      title: workday
-        ? "Ravi Menon — design partner check-in"
-        : "Review Ravi Menon's vault performance report",
-      time: workday ? "11:00" : "13:00",
+      title: "Customer check-in with Elliot Park",
+      time: "11:00",
       duration: 30,
       area: AREA.product,
-      attendees: workday ? ["ravi-menon"] : [],
+      attendees: ["elliot-park"],
       body: [
-        "Index warmup shipped last week. Confirm the first-query pause is gone at",
-        "his vault size (~900 files).",
+        "Elliot confirmed that search now feels immediate after launch, including on",
+        "the larger shared project folder.",
         "",
-        "Also: the revision-before-direct-write follow-up from",
-        "[[RFC — iCloud direct-write fallback]] is still open.",
+        "Follow up with the timing numbers and ask him to test the recovery copy",
+        "once that patch is ready.",
       ].join("\n"),
     },
     {
-      id: "e-today-northwind-prep",
+      id: "e-today-cedargrove-prep",
       offset: 0,
-      title: "Prep — Northwind partner meeting",
-      time: workday ? "14:00" : "15:30",
+      title: "Review the onboarding handoff",
+      time: "14:00",
       duration: 60,
-      area: AREA.fundraise,
-      tags: ["fundraise"],
+      area: AREA.product,
+      attendees: ["casey-kim"],
       body: [
-        "Thursday is the decision meeting. Work through",
-        "[[Demo script — what to actually show]] end to end, out loud, once.",
+        "Casey has the import path ready for review. Focus on the empty state and",
+        "the recovery path when a folder contains malformed frontmatter.",
         "",
-        "The collaboration answer is the one to rehearse. See",
-        "[[Questions I still cannot answer well]].",
+        "Compare it with [[RFC: onboarding starts with import]] before the call.",
       ].join("\n"),
     },
     {
-      id: "e-today-spc-dinner",
+      id: "e-today-hfc-dinner",
       offset: 0,
-      title: "South Park Commons dinner",
+      title: "Dinner with Jamie Parker",
       time: "18:30",
-      duration: 120,
-      area: AREA.fundraise,
-      tags: ["fundraise"],
+      duration: 90,
+      area: AREA.personal,
+      attendees: ["jamie-parker"],
       body: [
-        "Bring the laptop, not slides. Lead with the constraint rather than the",
-        "traction — see [[South Park Commons — what to lead with]].",
-        "",
-        "The unsolved multi-device problem is the interesting thing to talk about",
-        "here, not the thing to hide.",
+        "Reservation is at 18:30. Leave the laptop at home.",
+        "Pick up groceries on the walk back.",
       ].join("\n"),
     },
   ];
@@ -618,79 +610,76 @@ interface TaskSeed {
   timeSpentSeconds?: number;
   /** Set only on the single in-progress task, so the timer reads as running. */
   running?: boolean;
+  startedAt?: string;
   body?: string;
 }
 
 const TASKS: TaskSeed[] = [
   // ── Demo day ─────────────────────────────────────────────────────────────
   {
-    id: "t-today-yc-cut",
-    content: "Cut the YC \"why now\" answer by a third",
+    id: "t-today-launchpad-cut",
+    content: "Revise the onboarding empty-state copy",
     status: "in-progress",
-    area: AREA.fundraise,
+    area: AREA.product,
     offset: 0,
     order: 1,
-    tags: ["task", "fundraise"],
-    timeSpentSeconds: 2_820,
+    tags: ["task", "rfc"],
+    timeSpentSeconds: 1_200,
     running: true,
+    startedAt: "12:45",
     body: [
-      "Currently 210 words, needs to be under 140.",
+      "The current screen explains the vault before it helps the user choose a",
+      "folder. Cut the explanation and make the two paths concrete.",
       "",
-      "Cut the second paragraph entirely — it restates the memo and adds nothing a",
-      "reader of the first paragraph does not already have.",
+      "Use [[RFC: onboarding starts with import]] as the source, then leave comments",
+      "on Casey's prototype before the 14:00 review.",
     ].join("\n"),
   },
   {
     id: "t-today-retention-cut",
-    content: "Send [[Priya Raman]] the retention cut by acquisition source",
+    content: "Send [[Elliot Park]] the index timing results",
     status: "backlog",
-    area: AREA.fundraise,
+    area: AREA.product,
     offset: 0,
     order: 2,
-    tags: ["task", "fundraise", "dd"],
-    body: "She asked on the first call. Overdue. Numbers are in the Metrics table.",
+    tags: ["task"],
+    body: "Include the cold launch and first-query numbers from this morning.",
   },
   {
-    id: "t-today-ravi-followup",
-    content: "Confirm index warmup fixed first-query latency for [[Ravi Menon]]",
+    id: "t-today-elliot-followup",
+    content: "Review [[Casey Kim]]'s onboarding prototype",
     status: "backlog",
     area: AREA.product,
     offset: 0,
     order: 3,
-    tags: ["task"],
+    tags: ["task", "rfc"],
   },
   {
-    id: "t-today-spc-prep",
-    content: "Re-read [[South Park Commons — what to lead with]] before dinner",
-    status: "backlog",
-    area: AREA.fundraise,
-    offset: 0,
-    order: 4,
-    tags: ["task", "fundraise"],
-  },
-  {
-    id: "t-today-revision-write",
-    content: "Write revision before direct write (iCloud crash window)",
+    id: "t-today-hfc-prep",
+    content: "Add a recovery copy before direct writes",
     status: "backlog",
     area: AREA.product,
     offset: 0,
-    order: 5,
+    order: 4,
     tags: ["task", "rfc"],
-    body: [
-      "Open follow-up from [[RFC — iCloud direct-write fallback]]. A crash mid-write",
-      "currently leaves a partial file with no recoverable copy.",
-      "",
-      "Not urgent until it is.",
-    ].join("\n"),
+    body: "Open follow-up from [[RFC: iCloud direct-write fallback]].",
+  },
+  {
+    id: "t-today-revision-write",
+    content: "Book train tickets for Portland",
+    status: "backlog",
+    area: AREA.personal,
+    offset: 0,
+    order: 5,
   },
   {
     id: "t-today-groceries",
-    content: "Groceries before the dinner",
+    content: "Publish the weekly priorities",
     status: "done",
-    area: AREA.personal,
+    area: AREA.product,
     offset: 0,
     order: 6,
-    timeSpentSeconds: 1_500,
+    timeSpentSeconds: 1_200,
   },
 
   // ── Recent past ──────────────────────────────────────────────────────────
@@ -724,7 +713,7 @@ const TASKS: TaskSeed[] = [
     order: 1,
     tags: ["task", "rfc"],
     timeSpentSeconds: 9_000,
-    body: "[[RFC — warm the search index at launch]]. Shipped, measurably better.",
+    body: "[[RFC: warm the search index at launch]]. Shipped, measurably better.",
   },
   {
     id: "t-halyard-writeup",
@@ -748,7 +737,7 @@ const TASKS: TaskSeed[] = [
   },
   {
     id: "t-runway-math",
-    content: "Give [[Alex Rivera]] the real runway number",
+    content: "Give [[Jordan Lee]] the real runway number",
     status: "done",
     area: AREA.fundraise,
     offset: -31,
@@ -758,7 +747,7 @@ const TASKS: TaskSeed[] = [
   },
   {
     id: "t-board-view-review",
-    content: "Design review — Databases board view",
+    content: "Design review: Databases board view",
     status: "done",
     area: AREA.product,
     offset: -10,
@@ -836,11 +825,11 @@ const TASKS: TaskSeed[] = [
     offset: 1,
     order: 1,
     tags: ["task", "fundraise"],
-    body: "The one question I still improvise. [[RFC — shared vaults (sketch)]].",
+    body: "The one question I still improvise. [[RFC: shared vaults (sketch)]].",
   },
   {
     id: "t-fwd-demo-dry-run",
-    content: "Dry run [[Demo script — what to actually show]] end to end",
+    content: "Dry run [[Demo script: what to actually show]] end to end",
     status: "backlog",
     area: AREA.fundraise,
     offset: 2,
@@ -848,8 +837,8 @@ const TASKS: TaskSeed[] = [
     tags: ["task", "fundraise"],
   },
   {
-    id: "t-fwd-yc-submit",
-    content: "Submit the YC application",
+    id: "t-fwd-launchpad-submit",
+    content: "Submit the Launchpad application",
     status: "backlog",
     area: AREA.fundraise,
     offset: 4,
@@ -884,7 +873,7 @@ const TASKS: TaskSeed[] = [
     order: 1,
     tags: ["task"],
     body: [
-      "She has done four months of community management for free. \"After the round\"",
+      'She has done four months of community management for free. "After the round"',
       "has been the answer for too long.",
     ].join("\n"),
   },
@@ -970,7 +959,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
     body: [
       "Three hours on [[Seed investor memo]]. First draft done.",
       "",
-      "The traction section wrote itself. The \"what is the second act\" section took",
+      'The traction section wrote itself. The "what is the second act" section took',
       "two of the three hours and is still the weakest part, which is information.",
     ].join("\n"),
   },
@@ -978,7 +967,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
     offset: -52,
     body: [
       "[[Oskar Lindqvist]] found us through the file-over-app essay and offered a",
-      "[[Priya Raman]] introduction before I could ask for one.",
+      "[[Amara Okafor]] introduction before I could ask for one.",
       "",
       "Worth noting properly: every good thing that has happened in this raise so far",
       "started with writing, not outreach.",
@@ -988,7 +977,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
     offset: -50,
     body: [
       "Cut the target list from eighteen firms to eleven. Dropped anyone who has",
-      "publicly argued productivity tools are not venture-scale — no point spending",
+      "publicly argued productivity tools are not venture-scale: no point spending",
       "a first meeting arguing someone's prior.",
       "",
       "Built the Investor Pipeline table rather than another spreadsheet. Using the",
@@ -999,20 +988,20 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -47,
     body: [
-      "[[Alex Rivera]] shipped the iCloud direct-write fallback.",
+      "[[Jordan Lee]] shipped the iCloud direct-write fallback.",
       "",
-      "The bug [[Ravi Menon]] found could lose a file outright. He did not report it",
-      "for two days because he assumed he had done something wrong — that detail has",
+      "The bug [[Elliot Park]] found could lose a file outright. He did not report it",
+      "for two days because he assumed he had done something wrong: that detail has",
       "bothered me more than the bug. Data-loss failures need to be loud.",
       "",
-      "[[RFC — iCloud direct-write fallback]] is written up. There is a follow-up we",
+      "[[RFC: iCloud direct-write fallback]] is written up. There is a follow-up we",
       "have not done.",
     ].join("\n"),
   },
   {
     offset: -44,
     body: [
-      "First call with [[Priya Raman]]. Best investor conversation I have had.",
+      "First call with [[Amara Okafor]]. Best investor conversation I have had.",
       "",
       "She had read the changelog. Asked about the FTS index in the first ten minutes.",
       "Then asked for retention cut by acquisition source and I did not have it,",
@@ -1043,11 +1032,11 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -38,
     body: [
-      "[[Daniel Osei]] — ex-operator, shipped a sync engine, regretted it. His",
+      "[[Daniel Osei]]: ex-operator, shipped a sync engine, regretted it. His",
       "questions about conflict handling were more specific than anything I have been",
       "asked by an investor.",
       "",
-      "Asked for a design partner reference and picked [[Ravi Menon]] himself off the",
+      "Asked for a design partner reference and picked [[Elliot Park]] himself off the",
       "deck. Slightly alarming, entirely fair.",
     ].join("\n"),
   },
@@ -1063,22 +1052,22 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -31,
     body: [
-      "[[Alex Rivera]] asked for the real runway number in our 1:1 and I did not have",
+      "[[Jordan Lee]] asked for the real runway number in our 1:1 and I did not have",
       "it to hand, which was embarrassing.",
       "",
       "Worked it out properly after: seven months without the round.",
-      "[[Runway math, honestly]]. Told him the same day rather than sitting on it —",
-      "a founding engineer who later discovers the number was worse than described",
+      "[[Runway math, honestly]]. Told him the same day rather than sitting on it.",
+      "A founding engineer who later discovers the number was worse than described",
       "never believes the next one.",
     ].join("\n"),
   },
   {
     offset: -30,
     body: [
-      `${FIRMS.northwind} partnership meeting. Ran long, which I am told is the`,
+      `${FIRMS.cedargrove} partnership meeting. Ran long, which I am told is the`,
       "signal you want.",
       "",
-      "The retention reframe landed — presenting it as a product finding rather than",
+      "The retention reframe landed: presenting it as a product finding rather than",
       "a metric turned it from a soft number into something the room could argue",
       "with. Diligence next, then a decision meeting.",
     ].join("\n"),
@@ -1097,7 +1086,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -26,
     body: [
-      "Index warmup shipped. [[Morgan Diaz]]'s fix — open the connection and run one",
+      "Index warmup shipped. [[Morgan Diaz]]'s fix: open the connection and run one",
       "throwaway query at launch, off the UI thread.",
       "",
       "First-query pause on a 900-file vault went from noticeable to gone.",
@@ -1109,7 +1098,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
       "[[Tomas Bergström]] passed. Fifteen minutes, on a call rather than by email,",
       "with a clean reason.",
       "",
-      "Wrote [[Halyard passed — postmortem]] the same evening while it was still",
+      "Wrote [[Halyard passed: postmortem]] the same evening while it was still",
       "accurate rather than flattering. The useful part is not that he passed, it is",
       "that I answered his question badly and can fix that.",
     ].join("\n"),
@@ -1129,8 +1118,8 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
       "Three hours assembling the diligence pack. Built the Metrics table properly",
       "instead of rebuilding a spreadsheet each time.",
       "",
-      "Doing it forced the retention question open — the aggregate number was hiding",
-      "the actual finding. [[Retention — what the number actually says]].",
+      "Doing it forced the retention question open: the aggregate number was hiding",
+      "the actual finding. [[Retention: what the number actually says]].",
     ].join("\n"),
   },
   {
@@ -1154,17 +1143,17 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
       "is about as much confirmation as you get.",
       "",
       "She has been doing community management for us, unpaid, for four months. That",
-      "needs fixing and \"after the round\" is not a good enough answer.",
+      'needs fixing and "after the round" is not a good enough answer.',
     ].join("\n"),
   },
   {
     offset: -12,
     body: [
-      "Drafted [[RFC — onboarding starts with import]]. Invert the first screen —",
+      "Drafted [[RFC: onboarding starts with import]]. Invert the first screen:",
       "import a folder, connect a calendar, or start empty as the third option rather",
       "than the default.",
       "",
-      "[[Alex Rivera]] thinks import-in-place means reading an arbitrary tree rather",
+      "[[Jordan Lee]] thinks import-in-place means reading an arbitrary tree rather",
       "than migrating people into ours. He is probably right and it is a lot more",
       "work.",
     ].join("\n"),
@@ -1185,22 +1174,22 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -9,
     body: [
-      "Late session on [[YC W27 application — draft answers]].",
+      "Late session on [[Launchpad Fall application: draft answers]].",
       "",
-      "The \"why did you pick this idea\" answer is the only one that came out right",
+      'The "why did you pick this idea" answer is the only one that came out right',
       "first time, probably because it is the only one I have not rehearsed.",
       "",
-      "\"Why now\" reads like the memo. Cut it.",
+      '"What changed" reads like the memo. Cut it.',
     ].join("\n"),
   },
   {
     offset: -7,
     body: [
-      "SPC is a different audience from YC and the application should not be a copy.",
-      "Wrote [[South Park Commons — what to lead with]].",
+      "HFC is a different audience from Launchpad and the application should not be a copy.",
+      "Wrote [[Harbor Founders Circle: what to lead with]].",
       "",
       "Lead with the constraint, not the traction. And say the unsolved part out",
-      "loud — multi-device without a server, without CRDTs, without lying about",
+      "loud: multi-device without a server, without CRDTs, without lying about",
       "conflicts. It is the most interesting thing about the problem.",
     ].join("\n"),
   },
@@ -1220,7 +1209,7 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
   {
     offset: -4,
     body: [
-      "[[Ravi Menon]] took the Foundry Line reference call.",
+      "[[Elliot Park]] took the Foundry Line reference call.",
       "",
       "He apparently spent twenty minutes on the iCloud data-loss bug and how it was",
       "handled. Not the reference I would have chosen and probably a better one than",
@@ -1232,9 +1221,9 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
     body: [
       "[[Sofia Duarte]] gave the second reference, offered before I asked.",
       "",
-      "Wrote [[Demo script — what to actually show]] in the afternoon. No slides. The",
+      "Wrote [[Demo script: what to actually show]] in the afternoon. No slides. The",
       "moment that lands is following a wikilink to a person and showing their",
-      "backlinks — Sofia described that unprompted as the reason she looks competent",
+      "backlinks: Sofia described that unprompted as the reason she looks competent",
       "in 1:1s, and it is eight seconds of demo.",
     ].join("\n"),
   },
@@ -1243,29 +1232,29 @@ const JOURNALS: Array<{ offset: number; body: string }> = [
     body: [
       "Week closed. Wrote [[Week in review]].",
       "",
-      "Good week on references and shipping, bad week on the YC application, which",
+      "Good week on references and shipping, bad week on the Launchpad application, which",
       "is still not cut and is due Friday. Slept badly all week.",
     ].join("\n"),
   },
   {
     offset: 0,
     body: [
-      "Demo day.",
+      "Monday.",
       "",
-      "Morning on the YC \"why now\" answer — 210 words down to something under 140.",
-      "Every answer should be falsifiable; the second paragraph restates the memo and",
-      "adds nothing, so it goes.",
+      "Weekly planning was useful. Import reliability stays at the top until the",
+      "malformed-frontmatter path is calm enough that support can explain it in one",
+      "message. The database board view can wait a week.",
       "",
-      "Check in with [[Ravi Menon]] on whether the index warmup actually fixed the",
-      "first-query pause at his vault size. Then Northwind prep — Thursday is the",
-      "decision meeting and the collaboration answer is the one I still improvise.",
-      "Rehearse it out loud once rather than trusting it to come out right.",
+      "[[Elliot Park]] confirmed the index warmup fixed the pause after launch. Send",
+      "him the actual timing numbers while the conversation is still fresh. He also",
+      "volunteered to test the recovery-copy patch on the larger project folder.",
       "",
-      "South Park Commons dinner tonight. Laptop, not slides. Lead with the",
-      "constraint — see [[South Park Commons — what to lead with]].",
+      "This afternoon is the onboarding handoff with [[Casey Kim]]. Tighten the empty",
+      "state first, then walk through a folder with one broken file. The goal is a",
+      "clear recovery path, not a perfect first run.",
       "",
-      "Still owe [[Priya Raman]] the retention cut by acquisition source. She asked",
-      "on the first call. That is now genuinely overdue.",
+      "Dinner with [[Jamie Parker]] tonight. Book the Portland train before leaving",
+      "the office so it does not become tomorrow's task again.",
     ].join("\n"),
   },
 ];
@@ -1306,7 +1295,7 @@ export function buildCadence(
     writeEvent(w, event);
   }
 
-  for (const one of [...ONE_OFFS, ...demoDayEvents(cal)]) {
+  for (const one of [...ONE_OFFS, ...demoDayEvents()]) {
     checkAttendees(one.id, one.attendees ?? []);
     writeEvent(w, {
       id: one.id,
@@ -1338,7 +1327,10 @@ export function buildCadence(
       body: task.body,
     };
     if (task.running) {
-      input.inProgressStartedAt = cal.at(task.offset, "08:30");
+      input.inProgressStartedAt = cal.at(
+        task.offset,
+        task.startedAt ?? "08:30",
+      );
     }
     writeTask(w, input);
   }

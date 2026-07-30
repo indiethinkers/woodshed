@@ -82,7 +82,7 @@ fn demo_vault_indexes_into_populated_surfaces() {
     // Backlinks are the single most persuasive moment in the demo script:
     // open a person, see every record that mentions them.
     let backlinks = index
-        .backlinks_for_target("Ravi Menon")
+        .backlinks_for_target("Elliot Park")
         .expect("backlinks for a wikilinked person");
     assert!(
         !backlinks.is_empty(),
@@ -90,7 +90,7 @@ fn demo_vault_indexes_into_populated_surfaces() {
     );
 
     eprintln!(
-        "indexed {indexed} records; inbox {} messages; Ravi Menon has {} backlinks",
+        "indexed {indexed} records; inbox {} messages; Elliot Park has {} backlinks",
         page.len(),
         backlinks.len()
     );

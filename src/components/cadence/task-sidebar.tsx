@@ -41,6 +41,7 @@ import { useToday } from "@/lib/hooks/use-today";
 import { useAreas } from "@/lib/hooks/use-areas";
 import { NewAreaForm } from "@/components/areas/new-area-form";
 import { formatDuration, liveTimeSpent } from "@/lib/format-duration";
+import { useDisplayNow } from "@/lib/demo-clock";
 import {
   useTasks,
   useAllTasks,
@@ -1499,13 +1500,7 @@ function TaskDoneCheckbox({
 
 function CardTimeSpent({ task }: { task: TaskDto }) {
   const isLive = task.status === "in-progress" && !!task.inProgressStartedAt;
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    if (!isLive) return;
-    const id = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(id);
-  }, [isLive]);
+  const now = useDisplayNow(isLive ? 1000 : null);
 
   const seconds = liveTimeSpent(
     task.timeSpentSeconds,

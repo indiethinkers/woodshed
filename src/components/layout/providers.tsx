@@ -14,6 +14,7 @@ import {
 import { logsEvent } from "@/lib/tauri";
 import { WikilinkTargetsBridge } from "@/lib/hooks/wikilink-targets-bridge";
 import { MailRefreshProvider } from "@/lib/hooks/use-mail-refresh-job";
+import { DemoClockProvider } from "@/lib/demo-clock";
 
 // Single QueryClient per app. staleTime: Infinity because cache invalidation
 // is event-driven via the Tauri vault:changed listener, not polling.
@@ -113,20 +114,22 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <MailRefreshProvider>
-        <WikilinkTargetsBridge />
-        <TooltipProvider>
-          <AgentPanelProvider>
-            <RightSidebarProvider>
-              <TabsProvider>
-                <ListPanelProvider>
-                  <RouteTheme>{children}</RouteTheme>
-                </ListPanelProvider>
-              </TabsProvider>
-            </RightSidebarProvider>
-          </AgentPanelProvider>
-        </TooltipProvider>
-      </MailRefreshProvider>
+      <DemoClockProvider>
+        <MailRefreshProvider>
+          <WikilinkTargetsBridge />
+          <TooltipProvider>
+            <AgentPanelProvider>
+              <RightSidebarProvider>
+                <TabsProvider>
+                  <ListPanelProvider>
+                    <RouteTheme>{children}</RouteTheme>
+                  </ListPanelProvider>
+                </TabsProvider>
+              </RightSidebarProvider>
+            </AgentPanelProvider>
+          </TooltipProvider>
+        </MailRefreshProvider>
+      </DemoClockProvider>
       <Toaster />
     </QueryClientProvider>
   );

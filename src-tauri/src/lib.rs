@@ -456,6 +456,7 @@ pub fn run() {
             config::vault_path_get,
             config::vault_path_set,
             config::vault_path_default,
+            config::demo_clock_get,
             config::profile_get,
             config::profile_set,
             config::warning_dismissed_get,

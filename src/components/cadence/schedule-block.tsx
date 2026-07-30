@@ -10,6 +10,7 @@ import { useGcalAccounts, useGcalSync } from "@/lib/hooks/use-gcal";
 import { useToday } from "@/lib/hooks/use-today";
 import { cn } from "@/lib/utils";
 import { NewEventForm } from "./new-event-form";
+import { useFixedNowMs } from "@/lib/demo-clock";
 
 const SCHEDULE_COLLAPSED_STORAGE_KEY = "woodshed:cadence:schedule-collapsed";
 const EMPTY_EVENTS: EventDto[] = [];
@@ -59,6 +60,7 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
   // first load (see `animateList`).
   const [interacted, setInteracted] = useState(false);
   const hasGcal = gcalAccounts.length > 0;
+  const fixedNowMs = useFixedNowMs();
 
   // In the inner list panel the schedule is pinned to the bottom (shrink-0,
   // so the scrolling task list above never compresses it) and carries its own
@@ -91,7 +93,7 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
   // next event ends, so completed styling flips without a per-second ticker.
   // Drives the *default* collapsed state; the user can override either way via
   // `userCollapsed`.
-  const now = useEventCompletionClock(events);
+  const now = useEventCompletionClock(events, fixedNowMs);
 
   if (isLoading) {
     return (
@@ -443,10 +445,17 @@ function writeScheduleCollapsed(collapsed: boolean): void {
   }
 }
 
-function useEventCompletionClock(events: EventDto[]): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+function useEventCompletionClock(
+  events: EventDto[],
+  fixedNowMs: number | null,
+): number {
+  const [nowMs, setNowMs] = useState(() => fixedNowMs ?? Date.now());
 
   useEffect(() => {
+    if (fixedNowMs !== null) {
+      setNowMs(fixedNowMs);
+      return;
+    }
     const current = Date.now();
     const nextEndMs = events.reduce<number | null>((next, event) => {
       const endMs = eventEndMs(event);
@@ -462,7 +471,7 @@ function useEventCompletionClock(events: EventDto[]): number {
     );
     const timeout = window.setTimeout(() => setNowMs(Date.now()), delay);
     return () => window.clearTimeout(timeout);
-  }, [events, nowMs]);
+  }, [events, fixedNowMs, nowMs]);
 
   return nowMs;
 }

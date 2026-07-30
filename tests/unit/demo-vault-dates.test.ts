@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Calendar, SATURDAY, SUNDAY } from "../../scripts/demo-vault/dates";
 
-// 2026-07-27 is a Monday — handy as a fixed anchor so weekday assertions read
-// plainly. The generator defaults to "today"; pinning here keeps the test
-// deterministic.
-const ANCHOR = "2026-07-27";
+// 2026-10-12 is a Monday, which keeps the weekday assertions easy to read.
+const ANCHOR = "2026-10-12";
 
 describe("Calendar.day", () => {
   it("returns the anchor at offset 0", () => {
@@ -13,12 +11,12 @@ describe("Calendar.day", () => {
 
   it("walks backward across a month boundary", () => {
     const cal = new Calendar(ANCHOR);
-    expect(cal.day(-56)).toBe("2026-06-01");
-    expect(cal.day(-27)).toBe("2026-06-30");
+    expect(cal.day(-56)).toBe("2026-08-17");
+    expect(cal.day(-27)).toBe("2026-09-15");
   });
 
   it("walks forward across a month boundary", () => {
-    expect(new Calendar(ANCHOR).day(14)).toBe("2026-08-10");
+    expect(new Calendar(ANCHOR).day(14)).toBe("2026-10-26");
   });
 
   it("handles a leap day", () => {
@@ -32,7 +30,7 @@ describe("Calendar.day", () => {
 
 describe("Calendar construction", () => {
   it("rejects a malformed date", () => {
-    expect(() => new Calendar("July 27")).toThrow(/YYYY-MM-DD/);
+    expect(() => new Calendar("next Monday")).toThrow(/YYYY-MM-DD/);
   });
 
   it("rejects a date that does not exist", () => {
@@ -82,7 +80,7 @@ describe("weekday snapping", () => {
 describe("timestamps", () => {
   it("emits parseable RFC 3339 carrying the machine's own offset", () => {
     const stamp = new Calendar(ANCHOR).at(0, "09:30");
-    expect(stamp).toMatch(/^2026-07-27T09:30:00[+-]\d{2}:\d{2}$/);
+    expect(stamp).toMatch(/^2026-10-12T09:30:00[+-]\d{2}:\d{2}$/);
     expect(Number.isNaN(Date.parse(stamp))).toBe(false);
   });
 
@@ -101,7 +99,7 @@ describe("timestamps", () => {
 
   it("emits a naive timestamp with no zone suffix", () => {
     expect(new Calendar(ANCHOR).atNaive(0, "14:00")).toBe(
-      "2026-07-27T14:00:00",
+      "2026-10-12T14:00:00",
     );
   });
 

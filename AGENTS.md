@@ -263,6 +263,7 @@ and not necessarily beside the vault.
 <app_data_dir>/
 ├── config.json                 Non-secret settings and account metadata
 ├── secrets.json                Owner-only Gmail and custom Hermes secrets
+├── demo-clock.json             Optional local demo clock scoped to one vault
 ├── index.db                    Derived FTS5 index
 ├── gcal-cache/<account>.json   Derived iCal event caches
 └── woodshed.log                Rotating application log
