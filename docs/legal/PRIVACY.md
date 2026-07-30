@@ -50,8 +50,9 @@ embeds and remote email images are the exceptions described below.
   destinations and enforce redirect, timeout, size, and concurrency limits.
 - **YouTube embeds:** displaying a YouTube embed loads the privacy-enhanced
   `youtube-nocookie.com` player. YouTube receives your IP address and time of
-  access when the embed is displayed; player content and player requests are
-  handled by YouTube under its own terms.
+  access when the embed is displayed, plus the Woodshed app origin required to
+  identify the player client. Vault routes are not sent. Player content and
+  player requests are handled by YouTube under its own terms.
 - **Remote email images:** opening an HTML email requests its remote images by
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and

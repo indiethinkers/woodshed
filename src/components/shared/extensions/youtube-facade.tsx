@@ -50,7 +50,7 @@ export function YoutubeFacade({
         src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
         title={`YouTube video ${videoId}`}
         loading="lazy"
-        referrerPolicy="no-referrer"
+        referrerPolicy="strict-origin-when-cross-origin"
         className="absolute inset-0 h-full w-full"
         frameBorder={0}
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"

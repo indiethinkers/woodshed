@@ -20,7 +20,7 @@ describe("YoutubeFacade", () => {
     );
     expect(screen.getByTitle("YouTube video demoVideoId")).toHaveAttribute(
       "referrerpolicy",
-      "no-referrer",
+      "strict-origin-when-cross-origin",
     );
     expect(
       screen.getByRole("button", { name: "Copy YouTube link" }),
