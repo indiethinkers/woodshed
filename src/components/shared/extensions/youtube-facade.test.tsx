@@ -1,16 +1,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/lib/runtime", () => ({
-  isTauriRuntime: () => true,
-}));
+import { afterEach, describe, expect, it } from "vitest";
 
 import { YoutubeFacade } from "./youtube-facade";
 
 describe("YoutubeFacade", () => {
   afterEach(cleanup);
 
-  it("shows the video thumbnail before playback", () => {
+  it("renders the native privacy-enhanced player immediately", () => {
     render(
       <YoutubeFacade
         url="https://www.youtube.com/watch?v=demoVideoId"
@@ -18,11 +14,19 @@ describe("YoutubeFacade", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("img", { name: "YouTube video thumbnail" }),
-    ).toHaveAttribute(
+    expect(screen.getByTitle("YouTube video demoVideoId")).toHaveAttribute(
       "src",
-      "wsmail://localhost/img/aHR0cHM6Ly9pLnl0aW1nLmNvbS92aS9kZW1vVmlkZW9JZC9ocWRlZmF1bHQuanBn",
+      "https://www.youtube-nocookie.com/embed/demoVideoId?rel=0&modestbranding=1",
     );
+    expect(screen.getByTitle("YouTube video demoVideoId")).toHaveAttribute(
+      "referrerpolicy",
+      "no-referrer",
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy YouTube link" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open YouTube link" }),
+    ).toBeInTheDocument();
   });
 });

@@ -28,9 +28,11 @@ The rendered body is additionally served under `default-src 'none'`, so no
 sender markup or CSS can reach the network even if sanitization is wrong. Remote
 image URLs are rewritten to Woodshed's bounded cache and load when the user
 opens a message; sender HTML never fetches them directly. The main webview also
-blocks arbitrary HTTP(S) image loads. YouTube thumbnails load through the same
-bounded image cache when an embed is displayed, and the player makes no request
-until the user presses Play.
+blocks arbitrary HTTP(S) image loads. YouTube embeds are the narrow exception:
+the webview CSP permits only `https://www.youtube-nocookie.com` as a frame
+origin, sends no referrer, and lazily loads that privacy-enhanced player when an
+embed is displayed. YouTube controls the frame document and its subrequests;
+they do not pass through Woodshed's bounded Rust fetcher.
 
 ## Storage
 
@@ -73,6 +75,11 @@ Public resource, calendar, oEmbed, and remote-image fetches:
 - enforce connect/overall timeouts, redirect limits, response-size limits, and
   a shared eight-request workload concurrency limit;
 - redact credentials, query strings, and fragments from logs.
+
+YouTube player frames are the documented exception to these Rust fetch limits.
+The main webview CSP restricts their frame origin to `youtube-nocookie.com`, and
+the iframe sends no Woodshed referrer. Network activity inside the frame is
+controlled by YouTube.
 
 Resource budgets are enforced at ingress: text records and rendered email
 bodies are capped at 16 MiB, raw IMAP messages and calendar feed downloads at

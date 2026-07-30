@@ -36,6 +36,9 @@ email fixtures containing real messages, credentials, generated `dist/`, or
 - Do not expose generic shell or filesystem permissions to the webview.
 - Route public URL fetches through `src-tauri/src/network.rs` and set explicit
   time, redirect, and response-size limits.
+- Keep interactive frame exceptions explicit and narrow. YouTube players may
+  load only from `youtube-nocookie.com`, must not receive the Woodshed page URL
+  as a referrer, and must be disclosed in the security model and privacy notice.
 - Route Gmail and Hermes secrets through `CredentialBroker`; route iCal secrets
   through the operating-system credential store. Configuration files may contain
   only non-secret metadata and migration-only deserialization fields.
