@@ -137,6 +137,11 @@ import {
   toolStatusFromPart,
   type AgentToolPart,
 } from "@/lib/agent/message-parts";
+import {
+  attachmentContextFromFiles,
+  attachmentLabel,
+  parsePersistedAttachmentContext,
+} from "@/lib/agent/attachment-context";
 import { createAgentChatTransport } from "@/lib/agent/transport";
 import {
   captureAgentPageContext,
@@ -2141,12 +2146,26 @@ function AgentComposer({
   );
 }
 
-function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
-  return messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    parts: [{ type: "text", text: message.content }],
-  }));
+export function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "user") {
+      return {
+        id: message.id,
+        role: message.role,
+        parts: [{ type: "text" as const, text: message.content }],
+      };
+    }
+
+    const { files, text } = parsePersistedAttachmentContext(message.content);
+    return {
+      id: message.id,
+      role: message.role,
+      parts: [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...files,
+      ],
+    };
+  });
 }
 
 function toVaultMessages(
@@ -2196,21 +2215,10 @@ function isFilePart(
   return part.type === "file";
 }
 
-function attachmentContextFromFiles(files: FileUIPart[]): string {
-  if (files.length === 0) return "";
-  return `Attachments:\n${files
-    .map((file) => `- ${attachmentLabel(file)}${file.mediaType ? ` (${file.mediaType})` : ""}`)
-    .join("\n")}`;
-}
-
 function attachmentTitleFromFiles(files: FileUIPart[]): string {
   if (files.length === 0) return "";
   if (files.length === 1) return attachmentLabel(files[0]);
   return `${files.length} attachments`;
-}
-
-function attachmentLabel(file: FileUIPart): string {
-  return file.filename?.trim() || "Attachment";
 }
 
 function reasoningTextFromMessage(message: UIMessage): string {

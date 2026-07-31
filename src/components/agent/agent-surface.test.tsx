@@ -54,6 +54,7 @@ import {
   AgentSurface,
   AgentThoughtTool,
   AgentWorkIndicator,
+  toUiMessages,
 } from "./agent-surface";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 
@@ -90,6 +91,71 @@ describe("AgentWorkIndicator", () => {
     expect(screen.queryByText("3 steps")).not.toBeInTheDocument();
     expect(screen.queryByText("Remote agent work")).not.toBeInTheDocument();
     expect(screen.queryByText("Response stream")).not.toBeInTheDocument();
+  });
+});
+
+describe("persisted agent attachments", () => {
+  it("restores attachment context as a file part instead of message text", () => {
+    const [message] = toUiMessages([
+      {
+        id: "message-1",
+        role: "user",
+        createdAt: "2031-02-03T12:00:00Z",
+        content:
+          "Review this reference.\n\nAttachments:\n- sample-diagram.png (image/png)",
+      },
+    ]);
+
+    expect(message.parts).toEqual([
+      { type: "text", text: "Review this reference." },
+      {
+        type: "file",
+        filename: "sample-diagram.png",
+        mediaType: "image/png",
+        url: "",
+      },
+    ]);
+  });
+
+  it("restores attachment-only messages with multiple file shapes", () => {
+    const [message] = toUiMessages([
+      {
+        id: "message-2",
+        role: "user",
+        createdAt: "2031-02-03T12:05:00Z",
+        content:
+          "Attachments:\n- sample-photo.jpg (image/jpeg)\n- reference-notes.txt",
+      },
+    ]);
+
+    expect(message.parts).toEqual([
+      {
+        type: "file",
+        filename: "sample-photo.jpg",
+        mediaType: "image/jpeg",
+        url: "",
+      },
+      {
+        type: "file",
+        filename: "reference-notes.txt",
+        mediaType: undefined,
+        url: "",
+      },
+    ]);
+  });
+
+  it("leaves malformed attachment-like prose as message text", () => {
+    const content = "Review these notes.\n\nAttachments:\nnot a file entry";
+    const [message] = toUiMessages([
+      {
+        id: "message-3",
+        role: "user",
+        createdAt: "2031-02-03T12:10:00Z",
+        content,
+      },
+    ]);
+
+    expect(message.parts).toEqual([{ type: "text", text: content }]);
   });
 });
 

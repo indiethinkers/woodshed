@@ -1,5 +1,6 @@
 import type { ChatTransport, FileUIPart, UIMessage, UIMessageChunk } from "ai";
 import { nanoid } from "nanoid";
+import { attachmentContextFromFiles } from "@/lib/agent/attachment-context";
 import { tauriInvoke } from "@/lib/tauri";
 
 interface AgentChatMessage {
@@ -293,15 +294,4 @@ function isFilePart(
   part: UIMessage["parts"][number],
 ): part is UIMessage["parts"][number] & FileUIPart {
   return part.type === "file";
-}
-
-function attachmentContextFromFiles(files: FileUIPart[]): string {
-  if (files.length === 0) return "";
-  return `Attachments:\n${files
-    .map((file) => `- ${attachmentLabel(file)}${file.mediaType ? ` (${file.mediaType})` : ""}`)
-    .join("\n")}`;
-}
-
-function attachmentLabel(file: FileUIPart): string {
-  return file.filename?.trim() || "Attachment";
 }
