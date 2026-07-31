@@ -93,7 +93,7 @@ function RowDetailInner({ table, row }: { table: TableDto; row: RowDto }) {
       return;
     }
     remove.mutate(
-      { rowId: row.id },
+      { rowId: row.id, retainDetail: true },
       {
         onSuccess: () =>
           void navigate({ replace: true, to: "/databases/$id", params: { id: table.id } }),

@@ -52,42 +52,6 @@ export function normalizeToOutline(editor: Editor): void {
   }
 }
 
-/** Remove the untimestamped empty tail written by the former automatic-row
- * behavior. A blank day keeps its sole empty item, and explicit top-level
- * rows are timestamped, so only lists with an extra empty tail qualify. */
-export function removeGeneratedTrailingEmptyBullet(editor: Editor): void {
-  const { state } = editor;
-  const { doc, schema } = state;
-  const bulletListType = schema.nodes.bulletList;
-  const orderedListType = schema.nodes.orderedList;
-  const paragraphType = schema.nodes.paragraph;
-  const lastList = doc.lastChild;
-  if (!bulletListType || !paragraphType || !lastList) return;
-  if (
-    lastList.type !== bulletListType &&
-    (orderedListType ? lastList.type !== orderedListType : true)
-  ) {
-    return;
-  }
-  if (lastList.childCount < 2) return;
-
-  const tail = lastList.lastChild;
-  if (
-    !tail ||
-    tail.childCount !== 1 ||
-    tail.firstChild?.type !== paragraphType ||
-    tail.firstChild.content.size !== 0
-  ) {
-    return;
-  }
-
-  const listPos = doc.content.size - lastList.nodeSize;
-  const tailEnd = listPos + lastList.nodeSize - 1;
-  const tr = state.tr.delete(tailEnd - tail.nodeSize, tailEnd);
-  tr.setMeta("addToHistory", false);
-  editor.view.dispatch(tr);
-}
-
 export function outlineNormalizerPlugin(): Plugin {
   return new Plugin({
     appendTransaction(transactions, _oldState, newState) {

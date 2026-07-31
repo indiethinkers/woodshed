@@ -1,7 +1,8 @@
 // SQLite + FTS5 search index over the vault.
 //
 // One `documents` table holds a flattened view of every searchable record
-// (tasks, events, dailies, notes, people, resources, areas, agent chats, mail, table rows). A companion FTS5 virtual
+// (tasks, events, dailies, notes, people, resources, areas, agent chats, mail,
+// custom tables, and their rows). A companion FTS5 virtual
 // table mirrors `title`, `body`, and `hint` via triggers — search hits join
 // back to `documents` for the metadata we need to render a result row.
 //
@@ -229,6 +230,29 @@ impl IndexHandle {
         Ok(())
     }
 
+    fn delete_by_path_prefix(&self, prefix: &str) -> Result<()> {
+        let mut conn = self.conn.lock_recover();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM document_links WHERE substr(source_path, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        tx.execute(
+            "DELETE FROM document_tags WHERE substr(source_path, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        tx.execute(
+            "DELETE FROM mail_summaries WHERE substr(path, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        tx.execute(
+            "DELETE FROM documents WHERE substr(path, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn mail_inbox_page(
         &self,
         offset: usize,
@@ -305,9 +329,8 @@ impl IndexHandle {
         Ok(count)
     }
 
-    /// Older index databases predate normalized tag edges. Returning true
-    /// forces one background vault rebuild, after which this marker is set.
-    pub fn requires_tag_index_rebuild(&self) -> Result<bool> {
+    /// Return true when a projection upgrade requires a one-time vault rebuild.
+    pub fn requires_index_rebuild(&self) -> Result<bool> {
         let conn = self.conn.lock_recover();
         let value = conn
             .query_row(
@@ -330,9 +353,17 @@ impl IndexHandle {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
+        let custom_tables_value = conn
+            .query_row(
+                "SELECT value FROM index_metadata WHERE key = 'custom_tables_v1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
         Ok(value.as_deref() != Some("1")
             || mail_value.as_deref() != Some("1")
-            || created_value.as_deref() != Some("1"))
+            || created_value.as_deref() != Some("1")
+            || custom_tables_value.as_deref() != Some("1"))
     }
 
     /// Return only the vault-relative paths carrying `tag`. Tag-table
@@ -382,7 +413,7 @@ impl IndexHandle {
         let mut stmt = conn.prepare(
             "SELECT kind, doc_id, title, href \
              FROM documents \
-             WHERE kind IN ('note', 'person', 'event', 'resource', 'task', 'area', 'agent_chat', 'mail', 'row') \
+             WHERE kind IN ('note', 'person', 'event', 'resource', 'task', 'area', 'agent_chat', 'mail', 'table', 'row') \
              ORDER BY kind, title",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -596,7 +627,7 @@ impl IndexHandle {
         for subdir in ["inbox", "sent", "archive"] {
             scan(subdir, &tx, &mut count)?;
         }
-        scan_table_rows(vault_root, &tx, &mut count)?;
+        scan_tables(vault_root, &tx, &mut count)?;
         tx.execute(
             "INSERT INTO index_metadata (key, value) VALUES ('normalized_tags_v1', '1') \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -612,6 +643,11 @@ impl IndexHandle {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         )?;
+        tx.execute(
+            "INSERT INTO index_metadata (key, value) VALUES ('custom_tables_v1', '1') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
         tx.commit()?;
         Ok(count)
     }
@@ -624,7 +660,12 @@ impl IndexHandle {
             Ok(r) => r.to_string_lossy().to_string(),
             Err(_) => return Ok(()),
         };
+        let kind = classify_relative(&rel);
         if !abs_path.exists() {
+            if matches!(kind, Some(Kind::Table)) {
+                let table_prefix = rel.trim_end_matches("_schema.md");
+                return self.delete_by_path_prefix(table_prefix);
+            }
             return self.delete_by_path(&rel);
         }
         // Watcher fires for directories too (macOS notifies the parent dir
@@ -649,7 +690,25 @@ impl IndexHandle {
                 eprintln!("index: refresh {} failed: {}", abs_path.display(), e);
                 Ok(())
             }
+        }?;
+
+        // A schema edit can change the table name, column order, or option
+        // labels used by every row projection. Refresh sibling rows in the
+        // same pass so search never mixes the new schema with stale row text.
+        if matches!(kind, Some(Kind::Table)) {
+            if let Some(table_dir) = abs_path.parent() {
+                for entry in std::fs::read_dir(table_dir)? {
+                    let path = entry?.path();
+                    if path.file_name().and_then(|name| name.to_str()) == Some("_schema.md")
+                        || path.extension().and_then(|ext| ext.to_str()) != Some("md")
+                    {
+                        continue;
+                    }
+                    self.refresh_path(vault_root, &path)?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -783,7 +842,7 @@ fn backfill_document_tags(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn scan_table_rows(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut usize) -> Result<()> {
+fn scan_tables(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut usize) -> Result<()> {
     let root = vault_root.join("tables");
     if !crate::vault::is_real_directory(&root) {
         return Ok(());
@@ -798,7 +857,6 @@ fn scan_table_rows(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut us
             let row_entry = row_entry?;
             let path = row_entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md")
-                || path.file_name().and_then(|s| s.to_str()) == Some("_schema.md")
                 || !crate::vault::is_real_file(&path)
             {
                 continue;
@@ -1098,6 +1156,7 @@ pub enum Kind {
     Area,
     AgentChat,
     Mail,
+    Table,
     TableRow,
 }
 
@@ -1128,6 +1187,7 @@ impl Kind {
             Kind::Area => crate::vault::AREAS_DIR,
             Kind::AgentChat => crate::vault::AGENT_DIR,
             Kind::Mail => "inbox",
+            Kind::Table => "tables",
             Kind::TableRow => "tables",
         }
     }
@@ -1176,7 +1236,10 @@ pub fn classify_relative(rel_path: &str) -> Option<Kind> {
     if first == "tables" {
         let _table_id = parts.next()?;
         let filename = parts.next()?;
-        if filename == "_schema.md" || !filename.ends_with(".md") {
+        if filename == "_schema.md" {
+            return Some(Kind::Table);
+        }
+        if !filename.ends_with(".md") {
             return None;
         }
         return Some(Kind::TableRow);
@@ -1230,9 +1293,18 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
             .ok()
             .map(|c| project_agent_chat(&c, &rel_str, updated_at)),
         Kind::Mail => unreachable!("mail handled before opening generic record content"),
-        Kind::TableRow => parsers::parse_row(&content)
+        Kind::Table => parsers::parse_table_schema(&content)
             .ok()
-            .map(|r| project_row(&r, &rel_str, updated_at)),
+            .map(|table| project_table(&table, &rel_str, updated_at)),
+        Kind::TableRow => parsers::parse_row(&content).ok().map(|row| {
+            let table = abs_path
+                .parent()
+                .map(|dir| dir.join("_schema.md"))
+                .filter(|path| crate::vault::is_real_file(path))
+                .and_then(|path| crate::vault::read_record(&path).ok())
+                .and_then(|schema| parsers::parse_table_schema(&schema).ok());
+            project_row(&row, table.as_ref(), &rel_str, updated_at)
+        }),
     };
     Ok(doc)
 }
@@ -1482,9 +1554,39 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
     }
 }
 
-fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
-    let cells_text = row_cells_text(row);
-    let title = row_title(row);
+fn project_table(table: &parsers::Table, path: &str, updated_at: i64) -> IndexedDoc {
+    IndexedDoc {
+        kind: "table",
+        doc_id: table.id.clone(),
+        path: path.to_string(),
+        title: strip_wikilinks(&table.name),
+        // The table name is the useful command-palette identity. Indexing
+        // every default "Name" column and "All" view would make ordinary
+        // queries return nearly every database.
+        body: String::new(),
+        hint: Some("Custom database".to_string()),
+        href: format!("/databases/{}", table.id),
+        area: None,
+        created_at: created_at_ms(Some(&table.created)),
+        tags: Vec::new(),
+        updated_at,
+    }
+}
+
+fn project_row(
+    row: &parsers::Row,
+    table: Option<&parsers::Table>,
+    path: &str,
+    updated_at: i64,
+) -> IndexedDoc {
+    let displayed_cells = table
+        .map(|table| row_displayed_values(row, table))
+        .unwrap_or_default();
+    let title = displayed_cells
+        .first()
+        .cloned()
+        .unwrap_or_else(|| row.id.clone());
+    let cells_text = displayed_cells.join("\n");
     let body = [cells_text, row.body.clone()]
         .into_iter()
         .filter(|part| !part.trim().is_empty())
@@ -1496,8 +1598,12 @@ fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
         path: path.to_string(),
         title: strip_wikilinks(&title),
         body,
-        hint: Some(row.table.clone()),
-        href: format!("/tables/{}/{}", row.table, row.id),
+        hint: Some(
+            table
+                .map(|table| table.name.clone())
+                .unwrap_or_else(|| row.table.clone()),
+        ),
+        href: format!("/databases/{}/{}", row.table, row.id),
         area: None,
         created_at: created_at_ms(Some(&row.created)),
         tags: Vec::new(),
@@ -1505,21 +1611,43 @@ fn project_row(row: &parsers::Row, path: &str, updated_at: i64) -> IndexedDoc {
     }
 }
 
-fn row_title(row: &parsers::Row) -> String {
-    row.cells
-        .values()
-        .filter_map(yaml_value_text)
-        .find(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| row.id.clone())
+fn row_displayed_values(row: &parsers::Row, table: &parsers::Table) -> Vec<String> {
+    table
+        .columns
+        .iter()
+        .filter_map(|column| {
+            let value = row.cells.get(&column.id)?;
+            displayed_cell_value(value, column)
+        })
+        .filter(|value| !value.trim().is_empty())
+        .collect()
 }
 
-fn row_cells_text(row: &parsers::Row) -> String {
-    row.cells
-        .values()
-        .filter_map(yaml_value_text)
-        .filter(|value| !value.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+fn displayed_cell_value(value: &serde_yaml::Value, column: &parsers::Column) -> Option<String> {
+    match column.type_ {
+        parsers::ColumnType::Checkbox => None,
+        parsers::ColumnType::Select => {
+            let id = value.as_str()?;
+            column
+                .options
+                .iter()
+                .find(|option| option.id == id)
+                .map(|option| option.name.clone())
+        }
+        parsers::ColumnType::MultiSelect => {
+            let names = value
+                .as_sequence()?
+                .iter()
+                .filter_map(serde_yaml::Value::as_str)
+                .filter_map(|id| column.options.iter().find(|option| option.id == id))
+                .map(|option| option.name.clone())
+                .collect::<Vec<_>>();
+            (!names.is_empty()).then(|| names.join(", "))
+        }
+        parsers::ColumnType::Text | parsers::ColumnType::Number | parsers::ColumnType::Date => {
+            yaml_value_text(value)
+        }
+    }
 }
 
 fn yaml_value_text(value: &serde_yaml::Value) -> Option<String> {
@@ -1637,8 +1765,16 @@ pub fn doc_from_email(email: &mail::EmailSummary, vault_rel_path: &str) -> Index
     project_email(email, vault_rel_path, now_ms())
 }
 
-pub fn doc_from_row(row: &parsers::Row, vault_rel_path: &str) -> IndexedDoc {
-    project_row(row, vault_rel_path, now_ms())
+pub fn doc_from_table(table: &parsers::Table, vault_rel_path: &str) -> IndexedDoc {
+    project_table(table, vault_rel_path, now_ms())
+}
+
+pub fn doc_from_row(
+    row: &parsers::Row,
+    table: Option<&parsers::Table>,
+    vault_rel_path: &str,
+) -> IndexedDoc {
+    project_row(row, table, vault_rel_path, now_ms())
 }
 
 fn now_ms() -> i64 {
@@ -1965,7 +2101,10 @@ mod tests {
             classify_relative("tables/budget/row_001.md"),
             Some(Kind::TableRow)
         ));
-        assert!(classify_relative("tables/budget/_schema.md").is_none());
+        assert!(matches!(
+            classify_relative("tables/budget/_schema.md"),
+            Some(Kind::Table)
+        ));
         // `agents/` (plural) is the retired MCP-era dir and stays unindexed;
         // only the singular `agent/` chat dir is recognized.
         assert!(classify_relative("agents/x.md").is_none());
@@ -2190,6 +2329,28 @@ mod tests {
         )
         .unwrap();
 
+        let table = parsers::Table {
+            id: "budget".to_string(),
+            name: "Cost Tracker".to_string(),
+            created: "2026-04-27T10:00:00".to_string(),
+            favorite: false,
+            columns: vec![parsers::Column {
+                id: "col_name".to_string(),
+                name: "Name".to_string(),
+                type_: parsers::ColumnType::Text,
+                options: vec![],
+                width: None,
+                format: None,
+                precision: None,
+            }],
+            views: vec![],
+        };
+        std::fs::write(
+            vault.join("tables").join("budget").join("_schema.md"),
+            parsers::serialize_table_schema(&table).unwrap(),
+        )
+        .unwrap();
+
         let mut cells = BTreeMap::new();
         cells.insert(
             "col_name".to_string(),
@@ -2199,6 +2360,7 @@ mod tests {
             id: "row_001".to_string(),
             table: "budget".to_string(),
             created: "2026-04-27T10:05:00".to_string(),
+            sort_key: None,
             cells,
             body: "Related to [[Acme launch notes]].".to_string(),
         };
@@ -2210,7 +2372,7 @@ mod tests {
 
         let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
         let count = idx.rebuild_from_vault(vault).unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         assert_eq!(idx.search("alex", 10).unwrap().len(), 1);
         assert_eq!(idx.search("coffee", 10).unwrap().len(), 1);
 
@@ -2230,6 +2392,142 @@ mod tests {
         assert_eq!(outgoing.len(), 1);
         assert!(outgoing[0].resolved);
         assert_eq!(outgoing[0].type_.as_deref(), Some("mail"));
+    }
+
+    #[test]
+    fn rebuild_indexes_custom_table_names_and_only_displayed_row_values() {
+        use crate::parsers::{self, Column, ColumnType, Row, SelectOption, Table, View};
+        use std::collections::BTreeMap;
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        let table_dir = vault.join("tables").join("project-ledger");
+        std::fs::create_dir_all(&table_dir).unwrap();
+
+        let table = Table {
+            id: "project-ledger".to_string(),
+            name: "Project Ledger".to_string(),
+            created: "2026-07-31T10:00:00".to_string(),
+            favorite: false,
+            columns: vec![
+                Column {
+                    id: "col_title".to_string(),
+                    name: "Project".to_string(),
+                    type_: ColumnType::Text,
+                    options: vec![],
+                    width: None,
+                    format: None,
+                    precision: None,
+                },
+                Column {
+                    id: "col_stage".to_string(),
+                    name: "Stage".to_string(),
+                    type_: ColumnType::Select,
+                    options: vec![SelectOption {
+                        id: "internal_choice_42".to_string(),
+                        name: "Approved".to_string(),
+                        color: "gray".to_string(),
+                    }],
+                    width: None,
+                    format: None,
+                    precision: None,
+                },
+                Column {
+                    id: "col_done".to_string(),
+                    name: "Done".to_string(),
+                    type_: ColumnType::Checkbox,
+                    options: vec![],
+                    width: None,
+                    format: None,
+                    precision: None,
+                },
+            ],
+            views: vec![View {
+                id: "all".to_string(),
+                name: "All".to_string(),
+                type_: "table".to_string(),
+                sorts: vec![],
+                filters: Default::default(),
+                hidden: vec![],
+                calculations: BTreeMap::new(),
+                group_by: None,
+            }],
+        };
+        std::fs::write(
+            table_dir.join("_schema.md"),
+            parsers::serialize_table_schema(&table).unwrap(),
+        )
+        .unwrap();
+
+        let mut cells = BTreeMap::new();
+        cells.insert(
+            "col_title".to_string(),
+            serde_yaml::Value::String("Synthetic initiative".to_string()),
+        );
+        cells.insert(
+            "col_stage".to_string(),
+            serde_yaml::Value::String("internal_choice_42".to_string()),
+        );
+        cells.insert("col_done".to_string(), serde_yaml::Value::Bool(true));
+        cells.insert(
+            "orphaned_column".to_string(),
+            serde_yaml::Value::String("stale_internal_value".to_string()),
+        );
+        let row = Row {
+            id: "row_001".to_string(),
+            table: table.id.clone(),
+            created: "2026-07-31T10:05:00".to_string(),
+            sort_key: None,
+            cells,
+            body: "A useful row note.".to_string(),
+        };
+        std::fs::write(
+            table_dir.join("row_001.md"),
+            parsers::serialize_row(&row).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("index.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        let table_hits = idx.search("Project Ledger", 10).unwrap();
+        assert!(table_hits.iter().any(|hit| {
+            hit.kind == "table"
+                && hit.title == "Project Ledger"
+                && hit.href == "/databases/project-ledger"
+        }));
+        assert!(idx
+            .list_wikilink_targets()
+            .unwrap()
+            .iter()
+            .any(|target| target.kind == "table" && target.doc_id == "project-ledger"));
+
+        let option_hits = idx.search("Approved", 10).unwrap();
+        assert!(option_hits
+            .iter()
+            .any(|hit| hit.kind == "row" && hit.title == "Synthetic initiative"));
+        assert!(idx.search("internal_choice_42", 10).unwrap().is_empty());
+        assert!(idx.search("stale_internal_value", 10).unwrap().is_empty());
+        assert!(idx.search("true", 10).unwrap().is_empty());
+
+        let mut updated_table = table;
+        updated_table.name = "Project Register".to_string();
+        updated_table.columns[1].options[0].name = "Ready".to_string();
+        let schema_path = table_dir.join("_schema.md");
+        std::fs::write(
+            &schema_path,
+            parsers::serialize_table_schema(&updated_table).unwrap(),
+        )
+        .unwrap();
+        idx.refresh_path(vault, &schema_path).unwrap();
+
+        assert!(idx.search("Project Ledger", 10).unwrap().is_empty());
+        assert!(idx.search("Approved", 10).unwrap().is_empty());
+        assert!(idx
+            .search("Ready", 10)
+            .unwrap()
+            .iter()
+            .any(|hit| hit.kind == "row"));
     }
 
     #[test]

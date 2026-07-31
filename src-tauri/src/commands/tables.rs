@@ -12,7 +12,7 @@ use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -70,6 +70,7 @@ pub struct RowDto {
     pub path: String,
     pub table: String,
     pub created: String,
+    pub sort_key: Option<f64>,
     pub cells: BTreeMap<String, serde_yaml::Value>,
     pub body: String,
 }
@@ -85,6 +86,7 @@ impl RowDto {
             path: rel,
             table: row.table,
             created: row.created,
+            sort_key: row.sort_key,
             cells: row.cells,
             body: row.body,
         }
@@ -128,6 +130,14 @@ pub struct RowUpdate {
     pub cells: Option<BTreeMap<String, serde_yaml::Value>>,
     #[serde(default)]
     pub body: Option<String>,
+}
+
+/// The complete row order for one table. Requiring the full set keeps a
+/// filtered view from accidentally assigning positions to only a subset.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowReorder {
+    pub row_ids: Vec<String>,
 }
 
 fn vault_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -230,19 +240,13 @@ fn write_row(state: &State<AppState>, abs_path: &Path, row: &ParsedRow) -> Resul
     vault_lib::write_atomic(abs_path, &serialized).map_err(|e| e.to_string())
 }
 
-fn upsert_row_index(
-    app: &AppHandle,
-    state: &State<AppState>,
-    vault: &Path,
-    abs_path: &Path,
-    row: &ParsedRow,
-) {
+fn refresh_index_path(app: &AppHandle, state: &State<AppState>, vault: &Path, abs_path: &Path) {
     let Ok(idx) = state.ensure_index(app) else {
         return;
     };
-    let rel = crate::index::rel_path_str(vault, abs_path);
-    if let Err(e) = idx.upsert(&crate::index::doc_from_row(row, &rel)) {
-        eprintln!("index row {} failed: {}", rel, e);
+    if let Err(e) = idx.refresh_path(vault, abs_path) {
+        let rel = crate::index::rel_path_str(vault, abs_path);
+        eprintln!("index table record {} failed: {}", rel, e);
     }
 }
 
@@ -336,6 +340,7 @@ pub fn table_create(
     };
     let path = schema_path(&vault, &id)?;
     write_schema(&state, &path, &table)?;
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(TableDto::from_parsed(table, &vault, &path))
 }
 
@@ -375,6 +380,7 @@ pub fn table_update(
     }
 
     write_schema(&state, &path, &table)?;
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(TableDto::from_parsed(table, &vault, &path))
 }
 
@@ -388,9 +394,7 @@ pub fn table_delete(app: AppHandle, state: State<AppState>, id: String) -> Resul
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md")
-                && path.file_name().and_then(|s| s.to_str()) != Some(SCHEMA_FILE)
-            {
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 delete_index_path(&app, &state, &vault, &path);
             }
         }
@@ -542,16 +546,23 @@ pub fn row_create(
     }
 
     let row_id = format!("row_{}", Ulid::new());
+    let next_sort_key = read_all_rows(&vault, &table_id)?
+        .iter()
+        .filter_map(|row| row.sort_key)
+        .max_by(f64::total_cmp)
+        .unwrap_or(0.0)
+        + 1000.0;
     let row = ParsedRow {
         id: row_id.clone(),
         table: table_id.clone(),
         created: now_iso(),
+        sort_key: Some(next_sort_key),
         cells: input.cells,
         body: input.body.unwrap_or_default(),
     };
     let path = row_path(&vault, &table_id, &row_id)?;
     write_row(&state, &path, &row)?;
-    upsert_row_index(&app, &state, &vault, &path, &row);
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(RowDto::from_parsed(row, &vault, &path))
 }
 
@@ -592,7 +603,7 @@ pub fn row_update(
     }
 
     write_row(&state, &path, &row)?;
-    upsert_row_index(&app, &state, &vault, &path, &row);
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(RowDto::from_parsed(row, &vault, &path))
 }
 
@@ -611,6 +622,39 @@ pub fn row_delete(
     delete_index_path(&app, &state, &vault, &path);
     if path.exists() {
         vault_lib::move_to_trash(&vault, &path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn row_reorder(
+    app: AppHandle,
+    state: State<AppState>,
+    table_id: String,
+    input: RowReorder,
+) -> Result<Vec<RowDto>, String> {
+    let vault = vault_root(&app)?;
+    let current = read_all_rows(&vault, &table_id)?;
+    validate_row_reorder(&current, &input.row_ids)?;
+
+    let mut rows = Vec::with_capacity(input.row_ids.len());
+    for (index, row_id) in input.row_ids.iter().enumerate() {
+        let path = row_path(&vault, &table_id, row_id)?;
+        let content = vault_lib::read_record(&path).map_err(|e| e.to_string())?;
+        let mut row = parsers::parse_row(&content).map_err(|e| format!("{:#}", e))?;
+        row.sort_key = Some((index as f64 + 1.0) * 1000.0);
+        write_row(&state, &path, &row)?;
+        refresh_index_path(&app, &state, &vault, &path);
+        rows.push(RowDto::from_parsed(row, &vault, &path));
+    }
+    Ok(rows)
+}
+
+fn validate_row_reorder(current: &[RowDto], row_ids: &[String]) -> Result<(), String> {
+    let expected: BTreeSet<_> = current.iter().map(|row| row.id.as_str()).collect();
+    let received: BTreeSet<_> = row_ids.iter().map(String::as_str).collect();
+    if row_ids.len() != current.len() || received != expected {
+        return Err("row reorder must include each table row exactly once".to_string());
     }
     Ok(())
 }
@@ -643,8 +687,16 @@ pub(crate) fn read_all_rows(vault: &Path, table_id: &str) -> Result<Vec<RowDto>,
             Err(e) => eprintln!("skipping row {}: {}", path.display(), e),
         }
     }
-    // Default order: creation time ascending. Views layer applies sort.
-    out.sort_by(|a, b| a.created.cmp(&b.created));
+    // Legacy rows do not have sort_key yet, so keep their creation-time order
+    // until a manual reorder assigns keys to the complete table.
+    out.sort_by(|a, b| match (a.sort_key, b.sort_key) {
+        (Some(a_key), Some(b_key)) => a_key
+            .total_cmp(&b_key)
+            .then_with(|| a.created.cmp(&b.created)),
+        (None, None) => a.created.cmp(&b.created),
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+    });
     Ok(out)
 }
 
@@ -707,6 +759,7 @@ mod tests {
             id: row_id.to_string(),
             table: table_id.to_string(),
             created: "2026-04-27T10:05:00".to_string(),
+            sort_key: None,
             cells,
             body: String::new(),
         };
@@ -777,6 +830,60 @@ mod tests {
         let rows = read_all_rows(&vault, "budget").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "row_1");
+    }
+
+    #[test]
+    fn read_all_rows_uses_persisted_manual_order() {
+        let (_tmp, vault) = setup_vault();
+        write_table_schema(&vault, "budget");
+        let first_path = write_row_file(&vault, "budget", "row_first", "First");
+        let second_path = write_row_file(&vault, "budget", "row_second", "Second");
+
+        for (path, sort_key) in [(first_path, 2000.0), (second_path, 1000.0)] {
+            let content = std::fs::read_to_string(&path).unwrap();
+            let mut row = parsers::parse_row(&content).unwrap();
+            row.sort_key = Some(sort_key);
+            std::fs::write(path, parsers::serialize_row(&row).unwrap()).unwrap();
+        }
+
+        let ids: Vec<_> = read_all_rows(&vault, "budget")
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(ids, vec!["row_second", "row_first"]);
+    }
+
+    #[test]
+    fn row_reorder_requires_an_exact_permutation_of_existing_ids() {
+        let current = vec![
+            RowDto {
+                id: "row_a".to_string(),
+                path: String::new(),
+                table: "budget".to_string(),
+                created: String::new(),
+                sort_key: None,
+                cells: BTreeMap::new(),
+                body: String::new(),
+            },
+            RowDto {
+                id: "row_b".to_string(),
+                path: String::new(),
+                table: "budget".to_string(),
+                created: String::new(),
+                sort_key: None,
+                cells: BTreeMap::new(),
+                body: String::new(),
+            },
+        ];
+
+        assert!(
+            validate_row_reorder(&current, &["row_b".to_string(), "row_a".to_string()]).is_ok()
+        );
+        assert!(
+            validate_row_reorder(&current, &["row_a".to_string(), "row_a".to_string()]).is_err()
+        );
+        assert!(validate_row_reorder(&current, &["row_a".to_string()]).is_err());
     }
 
     #[test]

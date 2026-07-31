@@ -3,8 +3,8 @@
 // the list item couldn't legally host, ProseMirror's slice-fitter mangled
 // the list (timestamp destroyed, bullet emptied), and the editor's autosave
 // rewrote the whole file from the mangled doc. These tests pin down the two
-// fixes: (1) the URL→embed transform only fires where the embed is
-// schema-legal, and (2) loading or ingesting a file never produces a commit.
+// fixes: (1) the URL→embed transform always produces schema-legal list
+// content, and (2) loading or ingesting a file never produces a commit.
 import { beforeAll, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -115,6 +115,20 @@ function mountOutlineEditor(value: string, onCommit: (next: string) => void) {
   return { ui, ...render(ui(value)) };
 }
 
+function mountFreeformEditor(value: string, onCommit: (next: string) => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <TiptapEditor
+        value={value}
+        onCommit={onCommit}
+        mode="freeform"
+        placeholder="Start writing..."
+      />
+    </QueryClientProvider>,
+  );
+}
+
 function topLevelListItems(container: HTMLElement): Element[] {
   const root = container.querySelector(".tiptap-content");
   const list = Array.from(root?.children ?? []).find(
@@ -178,6 +192,367 @@ function setDomCursorInside(element: Element) {
 }
 
 describe("TiptapEditor URL embeds (daily journal)", () => {
+  it("reopens an autosaved Cadence tweet as an embed after an app refresh", async () => {
+    const commits: string[] = [];
+    const lead = "Synthetic entry with an attached post:";
+    const tweetUrl =
+      "https://x.com/sample_account/status/1234567890123456789";
+    const mounted = mountOutlineEditor(`- [09:30] ${lead}`, (next) =>
+      commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, lead);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? tweetUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(saved).toContain(tweetUrl);
+    expect(saved).toMatch(/^- \[\d{2}:\d{2}\]\s*$/m);
+    expect(saved.split("\n").filter((line) => line.trim() === "-")).toEqual([]);
+
+    mounted.unmount();
+    const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
+    const reopened = mountOutlineEditor(persisted, () => undefined);
+    await waitFor(() => {
+      expect(reopened.container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    const embedItem = reopened.container
+      .querySelector("[data-tweet-id]")
+      ?.closest("li");
+    expect(
+      embedItem?.querySelector(
+        ":scope > div.react-renderer > [data-tweet-id]",
+      ),
+    ).toBeTruthy();
+    expect(embedItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+    expect(reopened.container.textContent).not.toContain(tweetUrl);
+  }, 20000);
+
+  it("reopens an autosaved Cadence YouTube URL as an embed after an app refresh", async () => {
+    const commits: string[] = [];
+    const lead = "Synthetic entry with an attached video:";
+    const youtubeUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const mounted = mountOutlineEditor(`- [09:30] ${lead}`, (next) =>
+      commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, lead);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? youtubeUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector("[data-youtube-resource]")).toBeTruthy();
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(saved).toContain(youtubeUrl);
+    expect(saved).toMatch(/^- \[\d{2}:\d{2}\]\s*$/m);
+    expect(saved.split("\n").filter((line) => line.trim() === "-")).toEqual([]);
+
+    mounted.unmount();
+    const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
+    const reopened = mountOutlineEditor(persisted, () => undefined);
+    await waitFor(() => {
+      expect(reopened.container.querySelector("[data-youtube-resource]")).toBeTruthy();
+    });
+    const embedItem = reopened.container
+      .querySelector("[data-youtube-resource]")
+      ?.closest("li");
+    expect(
+      embedItem?.querySelector(
+        ":scope > div.react-renderer > [data-youtube-resource]",
+      ),
+    ).toBeTruthy();
+    expect(embedItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+    expect(reopened.container.textContent).not.toContain(youtubeUrl);
+  }, 20000);
+
+  it("renders a pasted embed on the cursor's current empty line", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/987654321";
+    const { container } = mountFreeformEditor(
+      "Synthetic line above\n\nSynthetic line below",
+      () => undefined,
+    );
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, "Synthetic line above");
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    expect(editorEl.querySelectorAll(":scope > p")).toHaveLength(3);
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? tweetUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    const directChildren = Array.from(editorEl.children);
+    expect(directChildren).toHaveLength(3);
+    expect(directChildren[0]).toHaveTextContent("Synthetic line above");
+    expect(directChildren[1]?.querySelector("[data-tweet-id]")).toBeTruthy();
+    expect(directChildren[2]).toHaveTextContent("Synthetic line below");
+  });
+
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/246813579",
+    },
+    {
+      kind: "YouTube",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=abcdefghijk",
+    },
+  ])("keeps a pasted $kind embed inside the cursor's current Cadence row", async ({
+    selector,
+    url,
+  }) => {
+    const first = "Synthetic row above";
+    const second = "Synthetic row below";
+    const { container } = mountOutlineEditor(
+      `- [09:30] ${first}\n- [09:31] ${second}`,
+      () => undefined,
+    );
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, first);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    expect(topLevelListItems(container)).toHaveLength(3);
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? url : ""),
+      },
+    });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      expect(items).toHaveLength(3);
+      expect(items[1]?.querySelector(selector)).toBeTruthy();
+      expect(items[1]?.querySelector(":scope > p")).toBeTruthy();
+    });
+  });
+
+  it("keeps rich clipboard structure instead of flattening it to plain text", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onCommit = vi.fn();
+    const editor = (value: string) => (
+      <QueryClientProvider client={qc}>
+        <TiptapEditor value={value} onCommit={onCommit} mode="freeform" />
+      </QueryClientProvider>
+    );
+    const { container, rerender } = render(editor(""));
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+    editorEl.focus();
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<h2>Release notes</h2><p><strong>Keep this emphasis.</strong></p><ul><li>One</li><li>Two</li></ul><table><thead><tr><th>Owner</th></tr></thead><tbody><tr><td>Alex</td></tr></tbody></table>";
+          }
+          return "Release notes\nKeep this emphasis.\nOne\nTwo\nOwner\nAlex";
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(editorEl.querySelector("h2")).toHaveTextContent("Release notes");
+      expect(editorEl.querySelector("strong")).toHaveTextContent("Keep this emphasis.");
+      expect(editorEl.querySelectorAll("li")).toHaveLength(2);
+      expect(editorEl.querySelector("table")).toHaveTextContent("Owner");
+      expect(editorEl.querySelector("table")).toHaveTextContent("Alex");
+    });
+
+    await waitFor(
+      () => expect(onCommit).toHaveBeenCalled(),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const savedMarkdown = onCommit.mock.calls.at(-1)?.[0] as string;
+    expect(savedMarkdown).toContain("Owner");
+    expect(savedMarkdown).toContain("Alex");
+
+    rerender(editor(savedMarkdown));
+    await waitFor(() => {
+      expect(container.querySelector("table")).toHaveTextContent("Owner");
+      expect(container.querySelector("table")).toHaveTextContent("Alex");
+    });
+  });
+
+  it("creates a new Cadence line above an embed when the lead paragraph only has a timestamp", async () => {
+    const commits: string[] = [];
+    const tweetUrl = "https://x.com/sample_account/status/123456789";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}`,
+      (next) => commits.push(next),
+    );
+
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+      return root!;
+    });
+    const item = topLevelListItems(container)[0]!;
+    const leadParagraph = Array.from(item.children).find(
+      (child) => child.tagName === "P",
+    )!;
+    expect(item.querySelectorAll(":scope > p")).toHaveLength(1);
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorInside(leadParagraph);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(item.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(item.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    expect(commits).toEqual([]);
+  });
+
+  it("creates one empty Cadence block for every Enter between text blocks", async () => {
+    const commits: string[] = [];
+    const first = "First synthetic block";
+    const second = "Second synthetic block";
+    const { container } = mountOutlineEditor(
+      `- [09:30] ${first}\n- [09:31] ${second}`,
+      (next) => commits.push(next),
+    );
+
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      expect(topLevelListItems(container)).toHaveLength(2);
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, first);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      expect(items).toHaveLength(5);
+      expect(items[0]).toHaveTextContent(first);
+      expect(items[4]).toHaveTextContent(second);
+      expect(
+        items.slice(1, 4).every((item) => item.textContent?.trim() === ""),
+      ).toBe(true);
+    });
+  });
+
+  it("keeps explicitly empty Cadence blocks when the editor reopens", async () => {
+    const commits: string[] = [];
+    const note = "Synthetic trailing note";
+    const mounted = mountOutlineEditor(
+      `- [09:30] ${note}`,
+      (next) => commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, note);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(topLevelListItems(mounted.container)).toHaveLength(4);
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(
+      saved.split("\n").filter((line) => line.trim() === "-"),
+    ).toHaveLength(3);
+
+    mounted.unmount();
+    const reopened = mountOutlineEditor(saved, () => undefined);
+    await waitFor(() => {
+      expect(topLevelListItems(reopened.container)).toHaveLength(4);
+    });
+  });
+
   it("loads a journal without mangling bullets or committing anything", async () => {
     vi.stubGlobal(
       "fetch",
@@ -194,14 +569,14 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     // Loading a file is not an edit: nothing may be written back.
     expect(commits).toEqual([]);
 
-    // The URL inside the timestamped bullet stays plain text — converting
-    // it would destroy the bullet (listItem can't host a block atom first).
-    expect(container.textContent).toContain(BULLET_URL);
+    // URL-only list rows retain their required lead paragraph and timestamp,
+    // then render the card as the next block inside that same list item.
+    expect(container.textContent).not.toContain(BULLET_URL);
 
     // The top-level `#resource #youtube` + URL block still converts.
     expect(
-      container.querySelectorAll("[data-youtube-resource], iframe").length,
-    ).toBeGreaterThan(0);
+      container.querySelectorAll("[data-youtube-resource]").length,
+    ).toBe(2);
     expect(container.textContent).not.toContain(BLOCK_URL);
 
     // All four capture timestamps survive.
@@ -244,7 +619,7 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       "A second note right after the URL.",
     );
     expect(container.textContent).toContain("First note of the day");
-    expect(container.textContent).toContain(BULLET_URL);
+    expect(container.textContent).not.toContain(BULLET_URL);
   }, 20000);
 
   it("deletes a YouTube embed from the editor control", async () => {
@@ -263,15 +638,17 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       ).toBeTruthy();
     });
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete YouTube embed"]',
-    );
+    const deleteButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Delete YouTube embed"]',
+      ),
+    ).at(-1);
     expect(deleteButton).toBeTruthy();
     fireEvent.mouseDown(deleteButton!);
     fireEvent.click(deleteButton!);
 
     await waitFor(() => {
-      expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+      expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     });
     await sleep(SETTLE_MS);
 
@@ -297,14 +674,16 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       ).toBeTruthy();
     });
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete YouTube embed"]',
-    );
+    const deleteButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Delete YouTube embed"]',
+      ),
+    ).at(-1);
     fireEvent.mouseDown(deleteButton!);
     fireEvent.click(deleteButton!);
 
     await waitFor(() => {
-      expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+      expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     });
 
     const externalAppend =
@@ -312,7 +691,7 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     rerender(ui(externalAppend));
     await sleep(SETTLE_MS);
 
-    expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+    expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     expect(container.textContent).not.toContain("External append while dirty.");
     expect(commits.at(-1)).not.toContain(BLOCK_URL);
     expect(commits.at(-1)).not.toContain("External append while dirty.");

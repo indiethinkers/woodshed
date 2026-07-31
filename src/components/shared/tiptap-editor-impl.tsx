@@ -12,10 +12,10 @@ import { resolveWikilink } from "@/lib/wikilinks";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { TextSelection } from "@tiptap/pm/state";
-import type { ResolvedPos } from "@tiptap/pm/model";
-import type { Node as PMNode, NodeType } from "prosemirror-model";
+import { Fragment, type Node as PMNode, type NodeType } from "prosemirror-model";
 import {
   YoutubeResource,
   YOUTUBE_URL_RE,
@@ -48,10 +48,7 @@ import {
   type WikilinkPickerHandle,
   type WikilinkPickerState,
 } from "./wikilink-picker";
-import {
-  normalizeToOutline,
-  removeGeneratedTrailingEmptyBullet,
-} from "./outline-normalizer";
+import { normalizeToOutline } from "./outline-normalizer";
 import { unwrapGeneratedOutlineMarkdown } from "./outline-markdown";
 import {
   SlashCommandMenu,
@@ -67,11 +64,9 @@ import { handleListIndentShortcut } from "./list-indent-shortcut";
 import {
   deleteEmptyListItem,
   deleteListItemTextBeforeCursor,
+  handleTimestampedListEnter,
   insertTimestampedHorizontalRule,
-  insertTopLevelItemAfterChildren,
-  listItemHasVisibleContent,
   nestTimestampedListMarker,
-  outdentEmptyNestedListItem,
   outdentListItemAtStart,
   outdentNestedListItem,
 } from "./timestamped-list-enter";
@@ -699,6 +694,12 @@ export function TiptapEditor({
         superscriptTwo: false,
         superscriptThree: false,
       }),
+      // Retain pasted HTML tables as editable table nodes and serialize them
+      // back to Markdown instead of flattening their rows into plain prose.
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableHeader,
+      TableCell,
       SectionHeader,
       MeetingTranscript,
       ...(timestampedListItems ? [DailyTimestamp] : []),
@@ -800,7 +801,7 @@ export function TiptapEditor({
         // are scoped to `[data-outline]` so freeform editors stay clean.
         // Timestamped daily notes are the exception: they're an outline too,
         // but they own a combined treatment under `[data-daily-timestamps]`
-        // (hidden capture metadata + nested bullets), so we keep
+        // (gutter timestamp metadata + nested bullets), so we keep
         // `data-outline` off them to avoid two style layers fighting.
         ...(mode === "outline" && !timestampedListItems
           ? { "data-outline": "" }
@@ -1029,6 +1030,14 @@ export function TiptapEditor({
             }
           }
         }
+        // Rich clipboard content carries a text/html flavor. Let Tiptap's
+        // normal ProseMirror parser own it so headings, emphasis, lists,
+        // links, and tables survive a copy/paste. The custom paths below are
+        // deliberately plain-text normalization for terminal/email wrapping.
+        const hasRichText = Boolean(
+          event.clipboardData?.getData("text/html").trim(),
+        );
+        if (hasRichText) return false;
         const text = event.clipboardData?.getData("text/plain") ?? "";
         const liveEditor = editorRef.current;
         // Paste a URL while text is selected → turn the selection into an
@@ -1086,7 +1095,6 @@ export function TiptapEditor({
       if (mode === "outline") {
         normalizeToOutline(editor);
         parseCollapsedMarkers(editor);
-        removeGeneratedTrailingEmptyBullet(editor);
       }
       // The initial markdown parse leaves YouTube / Twitter URLs as plain
       // links. Convert any URL-only paragraph into the matching embed.
@@ -1382,7 +1390,6 @@ export function TiptapEditor({
     if (mode === "outline") {
       normalizeToOutline(editor);
       parseCollapsedMarkers(editor);
-      removeGeneratedTrailingEmptyBullet(editor);
     }
     // Defer only the embed transform: it mounts React node-views (YouTube /
     // Twitter), and dispatching that from inside an effect can trigger
@@ -1456,59 +1463,6 @@ function imagePickerTarget(
     : null;
 }
 
-function handleTimestampedListEnter(
-  event: KeyboardEvent,
-  editor: Editor | null,
-): boolean {
-  if (!editor) return false;
-  if (event.key !== "Enter") return false;
-  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-    return false;
-  }
-  if (!selectionIsInsideNode(editor, "listItem")) return false;
-
-  // A blank row is already ready for the next thought. It gets stamped
-  // when the user types, so repeated Enter presses should not create a
-  // stack of empty rows. The nested case is different: pressing Enter on
-  // an empty child row means "come back out one level", matching normal
-  // outline editors without letting the caret escape the bullet list.
-  if (!currentListItemHasVisibleContent(editor)) {
-    event.preventDefault();
-    if (outdentEmptyNestedListItem(editor)) return true;
-    return true;
-  }
-
-  if (insertTopLevelItemAfterChildren(editor)) {
-    event.preventDefault();
-    return true;
-  }
-
-  if (!editor.commands.splitListItem("listItem")) return false;
-  event.preventDefault();
-  return true;
-}
-
-function selectionIsInsideNode(editor: Editor, nodeName: string): boolean {
-  const { $from, $to } = editor.state.selection;
-  return (
-    ancestorDepthByName($from, nodeName) !== null &&
-    ancestorDepthByName($to, nodeName) !== null
-  );
-}
-
-function currentListItemHasVisibleContent(editor: Editor): boolean {
-  const depth = ancestorDepthByName(editor.state.selection.$from, "listItem");
-  if (depth === null) return false;
-  return listItemHasVisibleContent(editor.state.selection.$from.node(depth));
-}
-
-function ancestorDepthByName($pos: ResolvedPos, nodeName: string): number | null {
-  for (let depth = $pos.depth; depth > 0; depth -= 1) {
-    if ($pos.node(depth).type.name === nodeName) return depth;
-  }
-  return null;
-}
-
 // ---- URL-only paragraph → embed transform ----
 
 /**
@@ -1532,6 +1486,7 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     from: number;
     to: number;
     text: string;
+    node: PMNode;
     parent: PMNode | null;
     /** Child index within `parent`, for schema-validity checks. */
     index: number;
@@ -1554,6 +1509,7 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
       from: pos,
       to: pos + child.nodeSize,
       text: child.textContent.trim(),
+      node: child,
       parent: parent ?? null,
       index: doc.resolve(pos).index(),
     });
@@ -1573,8 +1529,43 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     return parent.canReplaceWith(fromIndex, p.index + 1, type);
   };
 
-  type Repl = { from: number; to: number; node: PMNode };
+  type Repl = { from: number; to: number; content: PMNode | Fragment };
   const replacements: Repl[] = [];
+
+  const replacementForUrlParagraph = (
+    paragraph: Para,
+    embed: PMNode,
+  ): Repl | null => {
+    if (canHostEmbed(paragraph, paragraph.index, embed.type)) {
+      return { from: paragraph.from, to: paragraph.to, content: embed };
+    }
+
+    // A list item must start with a paragraph, so a URL-only Cadence row
+    // cannot be replaced by a block atom directly. Keep the required lead
+    // paragraph (and its timestamp, when present), then put the card after
+    // it. This preserves the list schema while reconstructing the embed that
+    // was visible before the Markdown round trip.
+    if (
+      paragraph.parent?.type.name !== "listItem" ||
+      paragraph.index !== 0 ||
+      paragraph.node.type.name !== "paragraph"
+    ) {
+      return null;
+    }
+    const timestamp =
+      paragraph.node.firstChild?.type.name === "dailyTimestamp"
+        ? paragraph.node.firstChild
+        : null;
+    const lead = paragraph.node.type.create(
+      paragraph.node.attrs,
+      timestamp ?? undefined,
+    );
+    const content = Fragment.fromArray([lead, embed]);
+    if (!paragraph.parent.canReplace(paragraph.index, paragraph.index + 1, content)) {
+      return null;
+    }
+    return { from: paragraph.from, to: paragraph.to, content };
+  };
 
   for (let i = 0; i < paragraphs.length; i++) {
     const p = paragraphs[i];
@@ -1599,14 +1590,14 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
           replacements.push({
             from: prev!.from,
             to: p.to,
-            node: ytType.create({ url: p.text, videoId: yt[1] }),
+            content: ytType.create({ url: p.text, videoId: yt[1] }),
           });
-        } else if (canHostEmbed(p, p.index, ytType)) {
-          replacements.push({
-            from: p.from,
-            to: p.to,
-            node: ytType.create({ url: p.text, videoId: yt[1] }),
-          });
+        } else {
+          const replacement = replacementForUrlParagraph(
+            p,
+            ytType.create({ url: p.text, videoId: yt[1] }),
+          );
+          if (replacement) replacements.push(replacement);
         }
       }
       continue;
@@ -1615,12 +1606,12 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     const tw = p.text.match(TWEET_URL_RE);
     if (tw && tw[0] === p.text) {
       const twType = schema.nodes.twitter;
-      if (twType && canHostEmbed(p, p.index, twType)) {
-        replacements.push({
-          from: p.from,
-          to: p.to,
-          node: twType.create({ url: p.text, tweetId: tw[2], handle: tw[1] }),
-        });
+      if (twType) {
+        const replacement = replacementForUrlParagraph(
+          p,
+          twType.create({ url: p.text, tweetId: tw[2], handle: tw[1] }),
+        );
+        if (replacement) replacements.push(replacement);
       }
       continue;
     }
@@ -1633,11 +1624,12 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
   // splices we already performed.
   for (let i = replacements.length - 1; i >= 0; i--) {
     const r = replacements[i];
-    tr = tr.replaceWith(r.from, r.to, r.node);
+    tr = tr.replaceWith(r.from, r.to, r.content);
   }
   if (!tr.docChanged) return;
   // Leave ProseMirror's mapped selection alone. Forcing the selection to the
   // end of the document makes a lower embed conversion steal the caret from
   // text the user is editing above it.
+  tr.setMeta("skipDailyTimestamp", true);
   editor.view.dispatch(tr);
 }

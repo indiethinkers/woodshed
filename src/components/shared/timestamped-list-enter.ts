@@ -1,6 +1,10 @@
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
-import { Fragment, type Node as PMNode } from "prosemirror-model";
+import {
+  Fragment,
+  type Node as PMNode,
+  type ResolvedPos,
+} from "prosemirror-model";
 
 export function insertTopLevelItemAfterChildren(editor: Editor): boolean {
   const { state } = editor;
@@ -41,6 +45,122 @@ export function insertTopLevelItemAfterChildren(editor: Editor): boolean {
   tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2), 1));
   editor.view.dispatch(tr.scrollIntoView());
   return true;
+}
+
+/**
+ * When an atom embed follows an empty lead paragraph in one daily list item,
+ * splitting that paragraph can fail because the atom must stay in place.
+ * Enter instead inserts a second paragraph above the embed and moves the
+ * cursor there, so users can write multiple lines before the card.
+ */
+export function insertParagraphAboveTrailingEmbed(editor: Editor): boolean {
+  const { state } = editor;
+  const { $from, empty } = state.selection;
+  if (
+    !empty ||
+    !$from.parent.isTextblock ||
+    listItemHasVisibleContent($from.parent)
+  ) {
+    return false;
+  }
+
+  let itemDepth: number | null = null;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name === "listItem") {
+      itemDepth = depth;
+      break;
+    }
+  }
+  if (itemDepth === null) return false;
+
+  const item = $from.node(itemDepth);
+  const paragraphIndex = $from.index(itemDepth);
+  const trailingBlock = item.maybeChild(paragraphIndex + 1);
+  if (!trailingBlock || !trailingBlock.isAtom || trailingBlock.isInline) {
+    return false;
+  }
+
+  const paragraph = state.schema.nodes.paragraph?.createAndFill();
+  if (!paragraph) return false;
+  const insertPos = $from.before($from.depth);
+  const tr = state.tr.insert(insertPos, paragraph);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1), 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+export function handleTimestampedListEnter(
+  event: KeyboardEvent,
+  editor: Editor | null,
+): boolean {
+  if (!editor || event.key !== "Enter") return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+    return false;
+  }
+  if (!selectionIsInsideNode(editor, "listItem")) return false;
+
+  if (insertParagraphAboveTrailingEmbed(editor)) {
+    event.preventDefault();
+    return true;
+  }
+
+  // Each blank top-level row is intentional spacing, so keep it and create
+  // another on repeated Enter. An empty nested row still means "come back
+  // out one level", matching normal outline editors.
+  if (!currentListItemHasVisibleContent(editor)) {
+    if (
+      outdentEmptyNestedListItem(editor) ||
+      insertEmptyTopLevelListItemAfterCurrent(editor)
+    ) {
+      event.preventDefault();
+      return true;
+    }
+    return false;
+  }
+
+  if (insertTopLevelItemAfterChildren(editor)) {
+    event.preventDefault();
+    return true;
+  }
+
+  if (!editor.commands.splitListItem("listItem")) return false;
+  event.preventDefault();
+  return true;
+}
+
+function insertEmptyTopLevelListItemAfterCurrent(editor: Editor): boolean {
+  const context = currentListItemContext(editor);
+  if (!context?.isTopLevel) return false;
+
+  const listItem = editor.state.schema.nodes.listItem?.createAndFill();
+  if (!listItem) return false;
+
+  const insertPos = editor.state.selection.$from.after(context.itemDepth);
+  const tr = editor.state.tr.insert(insertPos, listItem);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2), 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function selectionIsInsideNode(editor: Editor, nodeName: string): boolean {
+  const { $from, $to } = editor.state.selection;
+  return (
+    ancestorDepthByName($from, nodeName) !== null &&
+    ancestorDepthByName($to, nodeName) !== null
+  );
+}
+
+function currentListItemHasVisibleContent(editor: Editor): boolean {
+  const depth = ancestorDepthByName(editor.state.selection.$from, "listItem");
+  if (depth === null) return false;
+  return listItemHasVisibleContent(editor.state.selection.$from.node(depth));
+}
+
+function ancestorDepthByName($pos: ResolvedPos, nodeName: string): number | null {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === nodeName) return depth;
+  }
+  return null;
 }
 
 export function deleteEmptyListItem(editor: Editor): boolean {

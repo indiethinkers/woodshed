@@ -640,6 +640,7 @@ fn budget_row(
         id: id.to_string(),
         table: "budget".to_string(),
         created: format!("{}T08:05:00", SEED_DATE),
+        sort_key: None,
         cells,
         body: String::new(),
     }

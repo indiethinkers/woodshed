@@ -126,8 +126,8 @@ function PersonDetailInner({ person }: { person: PersonDto }) {
 
   function handleDelete() {
     remove.mutate(
-      { id: person.id },
-      { onSuccess: () => navigate({ replace: true, to: "/people" }) },
+      { id: person.id, retainDetail: true },
+      { onSuccess: () => void navigate({ replace: true, to: "/people" }) },
     );
   }
 

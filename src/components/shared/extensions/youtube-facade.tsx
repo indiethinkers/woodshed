@@ -48,7 +48,7 @@ export function YoutubeFacade({
   }
 
   return (
-    <div className="group/youtube relative my-3 aspect-video w-full overflow-hidden rounded-md bg-black first:mt-0 last:mb-0">
+    <div className="group/youtube relative my-3 aspect-video w-full overflow-hidden rounded-md bg-black">
       <iframe
         src={embedUrl.toString()}
         title={`YouTube video ${videoId}`}

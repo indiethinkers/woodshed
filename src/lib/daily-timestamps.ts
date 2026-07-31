@@ -13,7 +13,26 @@ export function isDailyTimestamp(value: string): boolean {
 export function stripEmptyTimestampBulletsFromMarkdown(value: string): string {
   const lines = value.split(/\r?\n/);
   if (!lines.some(isEmptyTimestampBulletLine)) return value;
-  return lines.filter((line) => !isEmptyTimestampBulletLine(line)).join("\n");
+  return lines
+    .filter(
+      (line, index) =>
+        !isEmptyTimestampBulletLine(line) ||
+        ownsIndentedContinuation(lines, index),
+    )
+    .join("\n");
+}
+
+function ownsIndentedContinuation(lines: string[], index: number): boolean {
+  const baseIndent = leadingWhitespaceLength(lines[index]);
+  for (let next = index + 1; next < lines.length; next++) {
+    if (!lines[next].trim()) continue;
+    return leadingWhitespaceLength(lines[next]) > baseIndent;
+  }
+  return false;
+}
+
+function leadingWhitespaceLength(line: string): number {
+  return line.length - line.trimStart().length;
 }
 
 function isEmptyTimestampBulletLine(line: string): boolean {

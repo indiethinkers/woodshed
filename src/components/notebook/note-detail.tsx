@@ -120,8 +120,8 @@ function NoteDetailInner({ note }: { note: NoteDto }) {
 
   function handleDelete() {
     remove.mutate(
-      { id: note.id },
-      { onSuccess: () => navigate({ replace: true, to: "/notebook" }) },
+      { id: note.id, retainDetail: true },
+      { onSuccess: () => void navigate({ replace: true, to: "/notebook" }) },
     );
   }
 

@@ -153,4 +153,32 @@ describe("compileResults", () => {
     });
     expect(groups[0].kind).toBe("day");
   });
+
+  it("renders custom database hits as Databases results", () => {
+    const groups = compileResults({
+      query: "project ledger",
+      today: "2026-06-07",
+      hits: [
+        {
+          kind: "table",
+          docId: "project-ledger",
+          title: "Project Ledger",
+          href: "/databases/project-ledger",
+        },
+      ],
+    });
+
+    expect(groups).toEqual([
+      expect.objectContaining({
+        kind: "table",
+        label: "Databases",
+        items: [
+          expect.objectContaining({
+            href: "/databases/project-ledger",
+            kind: "table",
+          }),
+        ],
+      }),
+    ]);
+  });
 });

@@ -105,8 +105,8 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
 
   function handleDelete() {
     remove.mutate(
-      { id: resource.id },
-      { onSuccess: () => navigate({ replace: true, to: "/resources" }) },
+      { id: resource.id, retainDetail: true },
+      { onSuccess: () => void navigate({ replace: true, to: "/resources" }) },
     );
   }
 

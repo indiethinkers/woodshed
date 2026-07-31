@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowUpRight, FileText, Plus, Trash2 } from "lucide-react";
+import { ArrowUpRight, FileText, GripVertical, Plus, Trash2 } from "lucide-react";
 import {
   DndContext,
   PointerSensor,
@@ -15,6 +15,7 @@ import {
   arrayMove,
   horizontalListSortingStrategy,
   useSortable,
+  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -47,6 +48,7 @@ import { BoardView } from "./board-view";
 import { CalendarView } from "./calendar-view";
 import { GalleryView, ListView } from "./gallery-list-views";
 import { FilterControl, SortControl, ViewTabs } from "./view-controls";
+import { isEditableElement } from "@/lib/dom/is-editable";
 
 const CALC_FNS: { value: CalcFn; label: string }[] = [
   { value: "sum", label: "Sum" },
@@ -55,6 +57,34 @@ const CALC_FNS: { value: CalcFn; label: string }[] = [
   { value: "min", label: "Min" },
   { value: "max", label: "Max" },
 ];
+
+export function isTableRowDeleteShortcut(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  defaultPrevented: boolean;
+}): boolean {
+  return (
+    (event.key === "Delete" || event.key === "Backspace") &&
+    !event.defaultPrevented &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey
+  );
+}
+
+export function moveTableRowIds(
+  rowIds: string[],
+  activeId: string,
+  overId: string,
+): string[] | null {
+  if (activeId === overId) return null;
+  const oldIndex = rowIds.indexOf(activeId);
+  const newIndex = rowIds.indexOf(overId);
+  if (oldIndex === -1 || newIndex === -1) return null;
+  return arrayMove(rowIds, oldIndex, newIndex);
+}
 
 interface TableViewProps {
   tableId: string;
@@ -88,8 +118,12 @@ function TableSkeleton() {
 function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
   const navigate = useNavigate();
   const { update, remove: removeTable } = useTableMutations();
-  const { create: createRow, update: updateRow, remove: removeRow } =
-    useRowMutations(table.id);
+  const {
+    create: createRow,
+    update: updateRow,
+    remove: removeRow,
+    reorder: reorderRows,
+  } = useRowMutations(table.id);
 
   const [activeViewId, setActiveViewId] = useState<string>(table.views[0]?.id ?? "");
   const activeView = useMemo(
@@ -113,6 +147,32 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
   );
   // Multi-row selection. Set of row ids — bulk edit/delete operate on these.
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const bulkDeleteSelected = useCallback(() => {
+    const ids = Array.from(selectedRowIds);
+    Promise.all(ids.map((rowId) => removeRow.mutateAsync({ rowId }))).catch(
+      () => {
+        // Individual mutation rollbacks restore rows if a delete fails.
+      },
+    );
+    setSelectedRowIds(new Set());
+  }, [removeRow, selectedRowIds]);
+
+  useEffect(() => {
+    function deleteSelectedRows(event: KeyboardEvent) {
+      if (
+        !isTableRowDeleteShortcut(event) ||
+        selectedRowIds.size === 0 ||
+        isEditableElement(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      bulkDeleteSelected();
+    }
+    window.addEventListener("keydown", deleteSelectedRows, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", deleteSelectedRows, { capture: true });
+  }, [bulkDeleteSelected, selectedRowIds.size]);
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!titleEditing) setTitleDraft(table.name);
@@ -285,6 +345,10 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
     (visibleColumns.find((c) => c.type === "text") ?? visibleColumns[0])?.id;
   const hiddenCount = (activeView.hidden ?? []).length;
   const visibleRows = applyView(rows, table.columns, activeView);
+  const canManuallyOrderRows =
+    activeView.type === "table" &&
+    (activeView.sorts?.length ?? 0) === 0 &&
+    (activeView.filters?.conditions.length ?? 0) === 0;
 
   async function createAndFocus(initialCells: Record<string, CellValue> = {}) {
     const created = await createRow.mutateAsync({ cells: initialCells });
@@ -293,20 +357,6 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
 
   function clearSelection() {
     setSelectedRowIds(new Set());
-  }
-
-  function bulkDeleteSelected() {
-    const ids = Array.from(selectedRowIds);
-    // Optimistic-style: fire each delete in parallel. The mutation hook
-    // already debounces cache invalidations and rollbacks per-row, so
-    // partial failures recover individually.
-    Promise.all(ids.map((rowId) => removeRow.mutateAsync({ rowId }))).catch(
-      () => {
-        // Errors are surfaced by individual mutation onError handlers; the
-        // bulk catch just silences the unhandled rejection.
-      },
-    );
-    clearSelection();
   }
 
   function bulkSetCell(columnId: string, value: CellValue) {
@@ -487,6 +537,8 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
           })
         }
         onSetCalculation={setCalculation}
+        canManuallyOrderRows={canManuallyOrderRows}
+        onReorderRows={(rowIds) => reorderRows.mutate({ rowIds })}
       />
       )}
 
@@ -532,6 +584,8 @@ interface TableGridProps {
   onAddOption: (colId: string, option: SelectOption) => void;
   onUpdateCell: (rowId: string, colId: string, value: CellValue) => void;
   onSetCalculation: (colId: string, fn: CalcFn | null) => void;
+  canManuallyOrderRows: boolean;
+  onReorderRows: (rowIds: string[]) => void;
 }
 
 /**
@@ -565,6 +619,8 @@ function TableGrid({
   onAddOption,
   onUpdateCell,
   onSetCalculation,
+  canManuallyOrderRows,
+  onReorderRows,
 }: TableGridProps) {
   // TanStack column defs. Two synthetic columns wrap the user data:
   //   __select  (leading 32px checkbox)
@@ -695,31 +751,45 @@ function TableGrid({
             </HeaderShell>
           </Row>
 
-          {tableBodyRows.map((rowModel) => {
-            const row = rowModel.original;
-            const isSelected = selectedRowIds.has(row.id);
-            const anySelected = selectedRowIds.size > 0;
-            const cells = rowModel.getVisibleCells();
-            const dataCells = cells.filter(
-              (c) =>
-                c.column.id !== "__select" && c.column.id !== "__addcol",
-            );
-            return (
-              <Row
-                key={row.id}
-                className={`group border-b border-border/40 transition-colors ${
-                  isSelected ? "bg-accent/30" : "hover:bg-muted/15"
-                }`}
-              >
-                <CellShell columnId="__select" className="px-1 flex items-center justify-center">
-                  <RowSelectCell
-                    rowId={row.id}
-                    isSelected={isSelected}
-                    anySelected={anySelected}
-                    onToggle={() => onToggleRow(row.id)}
-                  />
-                </CellShell>
-                {dataCells.map((cellModel, idx) => {
+          <RowsDnd
+            tableId={table.id}
+            ids={tableBodyRows.map((rowModel) => rowModel.original.id)}
+            enabled={canManuallyOrderRows}
+            onReorder={onReorderRows}
+          >
+            {tableBodyRows.map((rowModel) => {
+              const row = rowModel.original;
+              const isSelected = selectedRowIds.has(row.id);
+              const anySelected = selectedRowIds.size > 0;
+              const cells = rowModel.getVisibleCells();
+              const dataCells = cells.filter(
+                (c) =>
+                  c.column.id !== "__select" && c.column.id !== "__addcol",
+              );
+              return (
+                <SortableTableRow
+                  key={row.id}
+                  rowId={row.id}
+                  enabled={canManuallyOrderRows}
+                  className={`group border-b border-border/40 transition-colors ${
+                    isSelected ? "bg-accent/30" : "hover:bg-muted/15"
+                  }`}
+                >
+                  {(dragHandle) => (
+                    <>
+                      <CellShell
+                        columnId="__select"
+                        className="px-1 flex items-center justify-center"
+                      >
+                        <RowSelectCell
+                          rowId={row.id}
+                          isSelected={isSelected}
+                          anySelected={anySelected}
+                          onToggle={() => onToggleRow(row.id)}
+                          dragHandle={dragHandle}
+                        />
+                      </CellShell>
+                      {dataCells.map((cellModel, idx) => {
                   const col = visibleColumns[idx];
                   if (!col) return null;
                   return (
@@ -790,12 +860,15 @@ function TableGrid({
                       )}
                     </CellShell>
                   );
-                })}
-                <div className="flex-1" />
-                <CellShell columnId="__addcol" />
-              </Row>
-            );
-          })}
+                      })}
+                      <div className="flex-1" />
+                      <CellShell columnId="__addcol" />
+                    </>
+                  )}
+                </SortableTableRow>
+              );
+            })}
+          </RowsDnd>
 
           {/* + New item row */}
           <Row className="border-b border-border/40 h-9">
@@ -1310,6 +1383,93 @@ function ColumnsDnd({
 }
 
 /**
+ * Row ordering is only available in an unfiltered, unsorted table view so
+ * the persisted order always corresponds to the complete row collection.
+ */
+function RowsDnd({
+  tableId,
+  ids,
+  enabled,
+  onReorder,
+  children,
+}: {
+  tableId: string;
+  ids: string[];
+  enabled: boolean;
+  onReorder: (rowIds: string[]) => void;
+  children: React.ReactNode;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const next = moveTableRowIds(ids, String(active.id), String(over.id));
+    if (next) onReorder(next);
+  }
+  if (!enabled) return <>{children}</>;
+  return (
+    <DndContext
+      id={`table-rows-${tableId}`}
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function SortableTableRow({
+  rowId,
+  enabled,
+  className,
+  children,
+}: {
+  rowId: string;
+  enabled: boolean;
+  className: string;
+  children: (dragHandle: React.ReactNode) => React.ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: rowId, disabled: !enabled });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  const dragHandle = enabled ? (
+    <span
+      {...attributes}
+      {...listeners}
+      aria-label="Reorder row"
+      title="Drag to reorder"
+      className="-ml-1 inline-flex h-5 w-3 shrink-0 cursor-grab items-center justify-center text-muted-foreground/55 opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover:opacity-100 focus-visible:opacity-100"
+    >
+      <GripVertical className="h-3.5 w-3.5" />
+    </span>
+  ) : null;
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-stretch ${className}`}
+    >
+      {children(dragHandle)}
+    </div>
+  );
+}
+
+/**
  * Header cell for a data column. Width comes from the TanStack header
  * (which carries the live size during a resize via `--col-<id>-size`).
  * Reorder via dnd-kit's left-edge handle, resize via TanStack's right-edge
@@ -1404,18 +1564,21 @@ function RowSelectCell({
   isSelected,
   anySelected,
   onToggle,
+  dragHandle,
 }: {
   rowId: string;
   isSelected: boolean;
   anySelected: boolean;
   onToggle: () => void;
+  dragHandle?: React.ReactNode;
 }) {
   // The checkbox is the only affordance in the leading column. It's hidden
   // until the row is hovered (or until the user is already in selection mode,
   // in which case all checkboxes stay visible).
   const alwaysShow = anySelected || isSelected;
   return (
-    <div data-row-id={rowId} className="flex items-center justify-center">
+    <div data-row-id={rowId} className="flex items-center justify-center gap-px">
+      {dragHandle}
       <span
         className={
           alwaysShow

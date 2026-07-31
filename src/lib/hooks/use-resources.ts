@@ -60,6 +60,8 @@ export interface ResourceCaptureUrlInput {
   /** Skip appending a link to today's daily page — set when the caller lives
    *  on a daily page (the append would race the journal editor's autosave). */
   skipDailyLog?: boolean;
+  /** Re-fetch metadata for an existing resource after explicit user action. */
+  refresh?: boolean;
 }
 
 export function useAllResources() {
@@ -120,6 +122,7 @@ export function useResourceMutations() {
           published: input.published ?? null,
           highlights: input.highlights ?? [],
           skipDailyLog: input.skipDailyLog ?? false,
+          refresh: input.refresh ?? false,
         },
       });
       if (!captured) throw new Error("Tauri runtime missing");
@@ -186,7 +189,7 @@ export function useResourceMutations() {
   const remove = useMutation<
     void,
     Error,
-    { id: string },
+    { id: string; retainDetail?: boolean },
     { snapshots: Map<readonly unknown[], unknown> }
   >({
     mutationFn: async ({ id }) => {
@@ -195,13 +198,13 @@ export function useResourceMutations() {
       // day's journal — refresh any cached daily page so it clears.
       void qc.invalidateQueries({ queryKey: ["dailyJournal"] });
     },
-    onMutate: async ({ id }) => {
+    onMutate: async ({ id, retainDetail }) => {
       const snapshots = new Map<readonly unknown[], unknown>();
 
       const prevSingle = qc.getQueryData<ResourceDto | null>(["resource", id]);
       if (prevSingle !== undefined) {
         snapshots.set(["resource", id], prevSingle);
-        qc.setQueryData(["resource", id], null);
+        if (!retainDetail) qc.setQueryData(["resource", id], null);
       }
 
       qc.getQueriesData<ResourceDto[]>({ queryKey: ["resources"] }).forEach(

@@ -140,6 +140,45 @@ function setDomCursorAfterText(root: HTMLElement, text: string) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("DailyContent notes editor", () => {
+  it("renders saved timestamps as quiet metadata in the left gutter", async () => {
+    const { container } = renderDailyContent("- [09:30] A journal entry\n- ");
+
+    await waitFor(() => {
+      expect(container.querySelector(".tiptap-content")).toBeTruthy();
+    });
+
+    const timestamp = container.querySelector<HTMLElement>(
+      "[data-daily-timestamp]",
+    );
+    expect(timestamp?.hidden).toBe(false);
+    expect(timestamp?.getAttribute("data-time")).toBe("09:30");
+    expect(container.querySelectorAll("[data-daily-timestamp]")).toHaveLength(1);
+    expect(styles).toMatch(
+      /\[data-daily-timestamp\]\s*\{[^}]*position:\s*absolute;[^}]*right:\s*calc\(100% \+ 1\.75rem\);[^}]*font-variant-numeric:\s*tabular-nums;/s,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
+    );
+    expect(styles).toMatch(
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*> \[data-daily-timestamp\],[\s\S]*top:\s*1rem;/,
+    );
+    expect(styles).not.toMatch(
+      /> p\s*> \[data-daily-timestamp\]\s*\{\s*top:\s*1rem;/,
+    );
+  });
+
+  it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
+    expect(styles).toContain(
+      ":has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))",
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*> p:empty:not\([\s\S]*div\.react-renderer[\s\S]*\)[\s\S]*display:\s*block;/,
+    );
+  });
+
   it("covers the sticky header inset so scrolled notes cannot bleed above it", async () => {
     const { container } = renderDailyContent("- [09:30] A journal entry");
 

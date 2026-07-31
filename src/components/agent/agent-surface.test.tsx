@@ -114,6 +114,30 @@ describe("AgentSurface voice controls", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the main composer radius while removing only the inner fill", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(
+      "How can I help you today?",
+    );
+    const composer = textarea.closest("form");
+
+    expect(composer).toHaveClass(
+      "rounded-[14px]",
+      "[&>[data-slot=input-group]]:!bg-transparent",
+    );
+    expect(composer).not.toHaveClass("rounded-full");
+  });
+
   it("asks the transport to reconnect after hydrating an existing chat", async () => {
     window.localStorage.setItem(
       "woodshed:agent:last-chat-id",

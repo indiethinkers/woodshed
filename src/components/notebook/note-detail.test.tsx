@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NoteDto } from "@/lib/hooks/use-notes";
 
@@ -98,8 +98,10 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
     <div>{children}</div>
   ),
-  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
+  DropdownMenuItem: ({ children, ...props }: React.ComponentProps<"button">) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
   ),
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => (
     <div>{children}</div>
@@ -131,5 +133,29 @@ describe("NoteDetail", () => {
     expect(screen.getByTestId("editor")).toHaveTextContent("Body beta");
     expect(mocks.mounts).toEqual(["Body alpha", "Body beta"]);
     expect(mocks.unmounts).toEqual(["Body alpha"]);
+  });
+
+  it("keeps the detail on failure and routes to the notebook only after delete succeeds", () => {
+    render(<NoteDetail id="alpha" />);
+
+    fireEvent.click(screen.getByText("Delete note…"));
+    fireEvent.click(screen.getByText("Yes, delete"));
+
+    expect(mocks.remove.mutate).toHaveBeenCalledWith(
+      { id: "alpha", retainDetail: true },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("editor")).toHaveTextContent("Body alpha");
+
+    const callbacks = mocks.remove.mutate.mock.calls[0]?.[1] as {
+      onSuccess: () => void;
+    };
+    callbacks.onSuccess();
+
+    expect(mocks.navigate).toHaveBeenCalledWith({
+      replace: true,
+      to: "/notebook",
+    });
   });
 });

@@ -149,8 +149,8 @@ function EventDetailInner({ event }: { event: EventDto }) {
     const dateStr = event.date.slice(0, 10);
     const href = dateStr === today ? "/" : `/cadence/${dateStr}`;
     remove.mutate(
-      { id: event.id },
-      { onSuccess: () => void navigate({ href }) },
+      { id: event.id, retainDetail: true },
+      { onSuccess: () => void navigate({ href, replace: true }) },
     );
   }
 

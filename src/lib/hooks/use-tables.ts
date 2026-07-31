@@ -100,6 +100,7 @@ export interface RowDto {
   path: string;
   table: string;
   created: string;
+  sortKey?: number | null;
   cells: Record<string, CellValue>;
   body: string;
 }
@@ -443,7 +444,7 @@ export function useRowMutations(tableId: string) {
   const remove = useMutation<
     void,
     Error,
-    { rowId: string },
+    { rowId: string; retainDetail?: boolean },
     { snapshots: Map<readonly unknown[], unknown> }
   >({
     mutationFn: async ({ rowId }) => {
@@ -451,7 +452,7 @@ export function useRowMutations(tableId: string) {
       // Cache writes inside mutationFn so they survive mid-flight unmount.
       qc.invalidateQueries({ queryKey: ["tables"] });
     },
-    onMutate: async ({ rowId }) => {
+    onMutate: async ({ rowId, retainDetail }) => {
       const snapshots = new Map<readonly unknown[], unknown>();
       const list = qc.getQueryData<RowDto[]>(["rows", tableId]);
       if (Array.isArray(list)) {
@@ -464,7 +465,7 @@ export function useRowMutations(tableId: string) {
       const prevSingle = qc.getQueryData<RowDto | null>(["row", tableId, rowId]);
       if (prevSingle !== undefined) {
         snapshots.set(["row", tableId, rowId], prevSingle);
-        qc.setQueryData(["row", tableId, rowId], null);
+        if (!retainDetail) qc.setQueryData(["row", tableId, rowId], null);
       }
       return { snapshots };
     },
@@ -474,7 +475,20 @@ export function useRowMutations(tableId: string) {
     },
   });
 
-  return { create, update, remove };
+  const reorder = useMutation<RowDto[], Error, { rowIds: string[] }>({
+    mutationFn: async ({ rowIds }) => {
+      const updated = await tauriInvoke<RowDto[]>("row_reorder", {
+        tableId,
+        input: { rowIds },
+      });
+      if (!updated) throw new Error("Tauri runtime missing");
+      qc.setQueryData(["rows", tableId], updated);
+      for (const row of updated) qc.setQueryData(["row", tableId, row.id], row);
+      return updated;
+    },
+  });
+
+  return { create, update, remove, reorder };
 }
 
 function applyTablePatch(table: TableDto, patch: TableUpdateInput): TableDto {

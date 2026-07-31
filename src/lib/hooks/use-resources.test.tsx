@@ -228,6 +228,7 @@ describe("useResourceMutations.capture", () => {
         published: "2026-04-30",
         highlights: [],
         skipDailyLog: false,
+        refresh: false,
       },
     });
   });

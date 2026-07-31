@@ -43,7 +43,6 @@ export const DailyTimestamp = Node.create({
         "data-daily-timestamp": "",
         "aria-hidden": "true",
         contenteditable: "false",
-        hidden: "",
       }),
     ];
   },
@@ -64,8 +63,6 @@ export const DailyTimestamp = Node.create({
           const timestampType = newState.schema.nodes.dailyTimestamp;
           if (!timestampType) return null;
 
-          const cursor = newState.selection.from;
-
           const inserts: number[] = [];
           newState.doc.descendants((node, pos) => {
             if (node.type.name !== "listItem") return true;
@@ -80,28 +77,25 @@ export const DailyTimestamp = Node.create({
             if (paragraph.firstChild?.type === timestampType) return false;
 
             const oldNode = safeNodeAt(oldState.doc, pos);
+            const gainedEmbed =
+              containsTimestampedEmbed(node) &&
+              !containsTimestampedEmbed(oldNode);
 
-            // Case A: brand-new empty list item with the cursor inside.
-            // Happens when the user hits Enter to split a bullet — stamp
-            // immediately so the timestamp shows before any content. The
-            // cursor guard prevents stamping pre-existing empty bullets
-            // when a doc first loads (no selection inside them).
-            if (oldNode?.type.name !== "listItem") {
-              if (paragraph.textContent.trim().length !== 0) return false;
-              const itemEnd = pos + node.nodeSize;
-              if (cursor <= pos || cursor >= itemEnd) return false;
-              inserts.push(pos + 2);
+            // Empty blocks are intentional spacing and remain bare Markdown
+            // bullets. A pasted embed is the exception: its required empty
+            // lead paragraph carries the card's durable gutter timestamp.
+            if (
+              paragraph.textContent.trim().length === 0 &&
+              !gainedEmbed
+            ) {
               return false;
             }
-
-            // Case B: existing empty list item that just received text.
-            // Covers paths that don't go through split-on-Enter, including
-            // typing into the initial empty bullet on a blank day.
-            if (paragraph.textContent.trim().length === 0) return false;
-            const oldParagraph = oldNode.firstChild;
-            if (oldParagraph?.type.name !== "paragraph") return false;
-            if (oldParagraph.firstChild?.type === timestampType) return false;
-            if (oldParagraph.textContent.trim().length !== 0) return false;
+            const oldParagraph = oldNode?.firstChild;
+            if (!gainedEmbed) {
+              if (oldParagraph?.type.name !== "paragraph") return false;
+              if (oldParagraph.firstChild?.type === timestampType) return false;
+              if (oldParagraph.textContent.trim().length !== 0) return false;
+            }
 
             inserts.push(pos + 2);
             return false;
@@ -203,4 +197,12 @@ function safeNodeAt(doc: PMNode, pos: number): PMNode | null {
   } catch {
     return null;
   }
+}
+
+function containsTimestampedEmbed(node: PMNode | null): boolean {
+  if (!node) return false;
+  return node.content.content.some(
+    (child) =>
+      child.type.name === "twitter" || child.type.name === "youtubeResource",
+  );
 }

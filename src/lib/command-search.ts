@@ -34,6 +34,7 @@ export type CommandKind =
   | "daily"
   | "area"
   | "mail"
+  | "table"
   | "row"
   | "agent_chat";
 
@@ -71,6 +72,7 @@ const KIND_LABEL: Record<CommandKind, string> = {
   daily: "Daily pages",
   area: "Areas",
   mail: "Mail",
+  table: "Databases",
   row: "Rows",
   agent_chat: "Agent chats",
 };
@@ -93,6 +95,7 @@ const ICON_BY_KIND: Record<string, LucideIcon> = {
   resource: Library,
   area: Layers,
   mail: Mail,
+  table: Database,
   row: Database,
   agent_chat: Bot,
 };
@@ -486,6 +489,8 @@ function normalizeHitKind(kind: string): CommandKind {
       return "area";
     case "mail":
       return "mail";
+    case "table":
+      return "table";
     case "row":
       return "row";
     case "agent_chat":

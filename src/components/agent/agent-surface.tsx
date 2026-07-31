@@ -2180,7 +2180,7 @@ function AgentComposer({
           // !ring-0 beats InputGroup's focus-visible ring-3. A modest 14px
           // radius reads as a text field (not a search pill); the full surface
           // stays opaque while the compact sidebar variant blends into bg-list.
-          "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:border-0 [&>[data-slot=input-group]]:bg-transparent [&>[data-slot=input-group]]:!ring-0",
+          "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:border-0 [&>[data-slot=input-group]]:!bg-transparent [&>[data-slot=input-group]]:!ring-0",
           compact
             ? "rounded-[16px] border-foreground/25 bg-muted/45 p-2 shadow-none hover:border-foreground/30 focus-within:border-foreground/35 focus-within:shadow-none"
             : "rounded-[14px]",

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  Database,
   FileText,
   User,
   Plus,
@@ -51,6 +52,8 @@ const KIND_ICON: Record<string, LucideIcon> = {
   resource: FileText,
   task: FileText,
   area: FileText,
+  table: Database,
+  row: Database,
 };
 
 // Only types we can create with sensible defaults at picker time.
@@ -67,7 +70,7 @@ const CREATE_OPTIONS: Array<{ type: WikilinkType; label: string; icon: LucideIco
  *
  * Two row groups:
  *   - **Existing** — FTS5 hits for the typed query, across all wikilink-able
- *     types (notes, people, events, resources, tasks, areas)
+ *     types (notes, people, events, resources, tasks, areas, databases, rows)
  *   - **Create** — only shown when the user has typed something. One row per
  *     possible target type. Selecting one eagerly creates the file (via
  *     `person_create` / `note_create`) and inserts a wikilink tagged with

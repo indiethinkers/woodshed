@@ -434,6 +434,37 @@
 .tiptap-content[data-daily-timestamps] > ul > li::before {
   content: none;
 }
+/* Capture time is durable Markdown metadata, rendered out of flow so the
+   journal prose keeps the same measure and wrapping. The restrained mono type
+   reads as a gutter annotation rather than another bullet or badge. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p
+  > [data-daily-timestamp] {
+  position: absolute;
+  top: 0.25rem;
+  right: calc(100% + 1.75rem);
+  width: 3rem;
+  color: color-mix(in srgb, var(--muted-foreground) 62%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1rem;
+  letter-spacing: 0.025em;
+  text-align: right;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p
+  > [data-daily-timestamp]::before {
+  content: attr(data-time);
+}
 .tiptap-content[data-daily-timestamps] ul ul > li::before {
   content: "•";
   position: absolute;
@@ -741,10 +772,10 @@
   max-width: 550px;
   margin: 0.75rem 0;
 }
-.twitter-embed-shell:first-child {
+.tiptap-content > [data-tweet-id]:first-child > .twitter-embed-shell {
   margin-top: 0;
 }
-.twitter-embed-shell:last-child {
+.tiptap-content > [data-tweet-id]:last-child > .twitter-embed-shell {
   margin-bottom: 0;
 }
 .twitter-embed-shell iframe {
@@ -775,6 +806,25 @@
 .twitter-embed-hit-target:focus-visible {
   outline: 2px solid var(--ring, var(--foreground));
   outline-offset: 2px;
+}
+.twitter-embed-refresh {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.65rem;
+  z-index: 3;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.3rem 0.4rem;
+}
+.twitter-embed-refresh:hover,
+.twitter-embed-refresh:focus-visible {
+  color: var(--foreground);
+  outline: 1px solid var(--border);
 }
 .twitter-embed-fallback {
   display: grid;
@@ -885,14 +935,16 @@
    next to a stray dot. The <li> stays in the markdown (cursor + outline
    structure preserved); only the visual chrome is hidden. */
 .tiptap-content li:has(> img.tiptap-image),
-.tiptap-content li:has(> div[data-youtube-resource]),
-.tiptap-content:not([data-daily-timestamps]) li:has(> div[data-tweet-id]) {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]),
+.tiptap-content:not([data-daily-timestamps])
+  li:has(> div.react-renderer > [data-tweet-id]) {
   padding-left: 0;
   list-style: none;
 }
 .tiptap-content li:has(> img.tiptap-image)::before,
-.tiptap-content li:has(> div[data-youtube-resource])::before,
-.tiptap-content:not([data-daily-timestamps]) li:has(> div[data-tweet-id])::before {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource])::before,
+.tiptap-content:not([data-daily-timestamps])
+  li:has(> div.react-renderer > [data-tweet-id])::before {
   display: none;
 }
 /* Daily journal exception: a pasted tweet reads as a journal entry, so the
@@ -909,10 +961,47 @@
    rendering; the moment the user types on that line the trailing break goes
    away and the rule disengages. */
 .tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
-  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]:only-child),
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
   height: 0;
   min-height: 0;
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]:only-child)
+  > [data-daily-timestamp],
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+  > [data-daily-timestamp] {
+  top: 1rem;
 }
 /* Suppress ProseMirror's empty cursor-landing paragraph that sits next
    to a block embed inside a list item. ProseMirror leaves a
@@ -925,11 +1014,37 @@
    automatically. */
 .tiptap-content li:has(> img.tiptap-image) > p:empty,
 .tiptap-content li:has(> img.tiptap-image) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div[data-youtube-resource]) > p:empty,
-.tiptap-content li:has(> div[data-youtube-resource]) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div[data-tweet-id]) > p:empty,
-.tiptap-content li:has(> div[data-tweet-id]) > p:has(> br.ProseMirror-trailingBreak:only-child) {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]) > p:empty,
+.tiptap-content
+  li:has(> div.react-renderer > [data-youtube-resource])
+  > p:has(> br.ProseMirror-trailingBreak:only-child),
+.tiptap-content li:has(> div.react-renderer > [data-tweet-id]) > p:empty,
+.tiptap-content
+  li:has(> div.react-renderer > [data-tweet-id])
+  > p:has(> br.ProseMirror-trailingBreak:only-child) {
   display: none;
+}
+
+/* In Cadence, Enter above an embed creates an intentional blank line. Show
+   those earlier paragraphs, but keep the paste placeholder immediately before
+   the embed collapsed so the card occupies the cursor's original line. */
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:empty:not(
+    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
+  ),
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
+    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
+  ) {
+  display: block;
 }
 
 .tiptap-content hr {
@@ -939,6 +1054,29 @@
 }
 .tiptap-content hr.ProseMirror-selectednode {
   border-top-color: var(--foreground);
+}
+
+.tiptap-content table {
+  width: max-content;
+  min-width: min(100%, 24rem);
+  max-width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.tiptap-content th,
+.tiptap-content td {
+  min-width: 7rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+.tiptap-content th {
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-weight: 600;
+  text-align: left;
 }
 /* Placeholder text on the first empty paragraph. The second selector
    covers outline mode, where the first child is `ul > li > p` instead of
