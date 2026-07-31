@@ -160,10 +160,13 @@ describe("DailyContent notes editor", () => {
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> :is\(\[data-tweet-id\], \[data-youtube-resource\]\)[\s\S]*> p:has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> :is\(\[data-tweet-id\], \[data-youtube-resource\]\)[\s\S]*> p[\s\S]*> \[data-daily-timestamp\][\s\S]*top:\s*1rem;/,
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*> \[data-daily-timestamp\],[\s\S]*top:\s*1rem;/,
+    );
+    expect(styles).not.toMatch(
+      /> p\s*> \[data-daily-timestamp\]\s*\{\s*top:\s*1rem;/,
     );
   });
 

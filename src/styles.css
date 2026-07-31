@@ -965,13 +965,19 @@
     > div.react-renderer
       > :is([data-tweet-id], [data-youtube-resource])
   )
-  > p:has(> [data-daily-timestamp]:only-child),
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]:only-child),
 .tiptap-content[data-daily-timestamps]
   li:has(
     > div.react-renderer
       > :is([data-tweet-id], [data-youtube-resource])
   )
-  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
   height: 0;
   min-height: 0;
 }
@@ -980,7 +986,20 @@
     > div.react-renderer
       > :is([data-tweet-id], [data-youtube-resource])
   )
-  > p
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]:only-child)
+  > [data-daily-timestamp],
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(
+    + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
   > [data-daily-timestamp] {
   top: 1rem;
 }
