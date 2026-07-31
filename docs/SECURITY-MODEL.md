@@ -86,6 +86,13 @@ Public resource, calendar, oEmbed, and remote-image fetches:
   a shared eight-request workload concurrency limit;
 - redact credentials, query strings, and fragments from logs.
 
+When a user captures or explicitly refreshes an X URL whose oEmbed response
+marks the post text as incomplete, Woodshed sends only the public numeric post
+id to `api.fxtwitter.com` to retrieve the complete long-form text. This request
+uses the same public-host validation, DNS pinning, redirect, timeout, response
+size, and concurrency limits as other resource-capture fetches. A failure keeps
+the X oEmbed teaser and does not block capture.
+
 YouTube player frames are the documented exception to these Rust fetch limits.
 The main webview CSP permits YouTube-owned frame origins. The iframe sends the
 full Woodshed page URL as both referrer data and an explicit `widget_referrer`.

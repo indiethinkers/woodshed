@@ -20,7 +20,9 @@ export function TwitterEmbed({ tweetId, url, handle }: TwitterEmbedProps) {
   const { capture } = useResourceMutations();
   const resource = url ? resources.find((entry) => entry.url === url) : undefined;
   const preview = resource?.title;
-  const canRefreshPreview = Boolean(resource && preview?.endsWith("…"));
+  const canRefreshPreview = Boolean(
+    resource && preview && /(?:…|\.\.\.)\s*$/.test(preview),
+  );
   if (!tweetId || !url) {
     return (
       <div className="twitter-embed-fallback">

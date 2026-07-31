@@ -71,4 +71,12 @@ describe("TwitterEmbed", () => {
       "Refresh full preview",
     );
   });
+
+  it("offers to refresh provider teasers ending in three dots", () => {
+    renderEmbed("Author on X: A provider teaser...");
+
+    expect(document.querySelector(".twitter-embed-refresh")).toHaveTextContent(
+      "Refresh full preview",
+    );
+  });
 });

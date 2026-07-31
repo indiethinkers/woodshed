@@ -434,6 +434,37 @@
 .tiptap-content[data-daily-timestamps] > ul > li::before {
   content: none;
 }
+/* Capture time is durable Markdown metadata, rendered out of flow so the
+   journal prose keeps the same measure and wrapping. The restrained mono type
+   reads as a gutter annotation rather than another bullet or badge. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p
+  > [data-daily-timestamp] {
+  position: absolute;
+  top: 0.25rem;
+  right: calc(100% + 0.75rem);
+  width: 3rem;
+  color: color-mix(in srgb, var(--muted-foreground) 62%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1rem;
+  letter-spacing: 0.025em;
+  text-align: right;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p
+  > [data-daily-timestamp]::before {
+  content: attr(data-time);
+}
 .tiptap-content[data-daily-timestamps] ul ul > li::before {
   content: "•";
   position: absolute;

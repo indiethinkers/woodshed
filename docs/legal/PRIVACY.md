@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** July 30, 2026
+**Effective:** July 26, 2026 · **Last updated:** July 31, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -49,7 +49,10 @@ embeds and remote email images are the exceptions described below.
 - **Google Calendar or another iCal host:** an explicit Sync downloads the
   configured read-only calendar feed and writes a derived local cache.
 - **Resource capture:** saving a URL downloads that public page and, for
-  supported providers, an oEmbed response. Public fetches reject private/local
+  supported providers, an oEmbed response. If an X oEmbed response contains an
+  incomplete long-form preview, Woodshed sends the public numeric post id to
+  `api.fxtwitter.com` to retrieve its complete text. FxTwitter receives your IP
+  address, time of access, and that post id. Public fetches reject private/local
   destinations and enforce redirect, timeout, size, and concurrency limits.
 - **YouTube embeds:** displaying a YouTube embed loads the standard
   `youtube.com` player. YouTube receives your IP address, time of access, the

@@ -43,7 +43,6 @@ export const DailyTimestamp = Node.create({
         "data-daily-timestamp": "",
         "aria-hidden": "true",
         contenteditable: "false",
-        hidden: "",
       }),
     ];
   },

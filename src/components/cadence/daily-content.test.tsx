@@ -140,6 +140,27 @@ function setDomCursorAfterText(root: HTMLElement, text: string) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("DailyContent notes editor", () => {
+  it("renders saved timestamps as quiet metadata in the left gutter", async () => {
+    const { container } = renderDailyContent("- [09:30] A journal entry\n- ");
+
+    await waitFor(() => {
+      expect(container.querySelector(".tiptap-content")).toBeTruthy();
+    });
+
+    const timestamp = container.querySelector<HTMLElement>(
+      "[data-daily-timestamp]",
+    );
+    expect(timestamp?.hidden).toBe(false);
+    expect(timestamp?.getAttribute("data-time")).toBe("09:30");
+    expect(container.querySelectorAll("[data-daily-timestamp]")).toHaveLength(1);
+    expect(styles).toMatch(
+      /\[data-daily-timestamp\]\s*\{[^}]*position:\s*absolute;[^}]*right:\s*calc\(100% \+ 0\.75rem\);[^}]*font-variant-numeric:\s*tabular-nums;/s,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
+    );
+  });
+
   it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
     expect(styles).toContain(`.tiptap-content[data-daily-timestamps]
   li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))

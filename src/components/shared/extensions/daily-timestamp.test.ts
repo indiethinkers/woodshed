@@ -61,14 +61,14 @@ describe("DailyTimestamp extension", () => {
     expect(getMarkdown(editor)).toBe("- [16:04] First note");
   });
 
-  it("keeps timestamps in markdown while hiding them from the editor UI", () => {
+  it("keeps timestamps visible in the editor gutter and readable in markdown", () => {
     editor = makeEditor("- [16:04] First note");
 
     const timestamp = editor.view.dom.querySelector<HTMLElement>(
       "[data-daily-timestamp]",
     );
 
-    expect(timestamp?.hidden).toBe(true);
+    expect(timestamp?.hidden).toBe(false);
     expect(timestamp?.getAttribute("data-time")).toBe("16:04");
     expect(getMarkdown(editor)).toBe("- [16:04] First note");
   });

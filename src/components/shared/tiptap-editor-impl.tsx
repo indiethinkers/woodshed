@@ -801,7 +801,7 @@ export function TiptapEditor({
         // are scoped to `[data-outline]` so freeform editors stay clean.
         // Timestamped daily notes are the exception: they're an outline too,
         // but they own a combined treatment under `[data-daily-timestamps]`
-        // (hidden capture metadata + nested bullets), so we keep
+        // (gutter timestamp metadata + nested bullets), so we keep
         // `data-outline` off them to avoid two style layers fighting.
         ...(mode === "outline" && !timestampedListItems
           ? { "data-outline": "" }

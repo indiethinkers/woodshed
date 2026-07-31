@@ -249,7 +249,9 @@ fn oembed_endpoint_for(url: &reqwest::Url) -> Option<reqwest::Url> {
 /// Resolve title / author / published via oEmbed — no AI, just the
 /// provider's own metadata. YouTube answers with the real video title; X
 /// has no title field, so one is assembled from the author name plus the
-/// complete tweet text embedded in the `html` payload.
+/// tweet text embedded in the `html` payload. X deliberately shortens
+/// long-form posts there, so an incomplete response gets one bounded lookup
+/// through FxTwitter's public status API for the complete text.
 /// None (unknown host, network failure, unusable payload) falls back to
 /// the generic HTML scrape.
 async fn fetch_oembed_article(url: &reqwest::Url) -> Option<ExtractedArticle> {
@@ -268,7 +270,75 @@ async fn fetch_oembed_article(url: &reqwest::Url) -> Option<ExtractedArticle> {
     .await
     .ok()?;
     let payload: JsonValue = serde_json::from_slice(&response.bytes).ok()?;
-    oembed_article(&payload, url)
+    let article = oembed_article(&payload, url)?;
+    if article
+        .title
+        .as_deref()
+        .is_some_and(tweet_text_is_incomplete)
+    {
+        return fetch_fxtwitter_article(url).await.or(Some(article));
+    }
+    Some(article)
+}
+
+async fn fetch_fxtwitter_article(url: &reqwest::Url) -> Option<ExtractedArticle> {
+    let endpoint = fxtwitter_endpoint_for(url)?;
+    let response = network::fetch_public(
+        endpoint.as_str(),
+        &PublicFetchOptions {
+            max_bytes: 1024 * 1024,
+            max_redirects: 2,
+            timeout: FETCH_TIMEOUT,
+            user_agent: CAPTURE_USER_AGENT,
+            accept: Some("application/json"),
+            https_only: true,
+        },
+    )
+    .await
+    .ok()?;
+    let payload: JsonValue = serde_json::from_slice(&response.bytes).ok()?;
+    fxtwitter_article(&payload, url)
+}
+
+fn fxtwitter_endpoint_for(url: &reqwest::Url) -> Option<reqwest::Url> {
+    let host = url.host_str()?.trim_start_matches("www.");
+    if !matches!(host, "x.com" | "twitter.com" | "mobile.twitter.com") {
+        return None;
+    }
+    let segments = url.path_segments()?.collect::<Vec<_>>();
+    let status_index = segments.iter().position(|segment| *segment == "status")?;
+    let id = segments.get(status_index + 1)?;
+    if id.is_empty() || id.len() > 40 || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    reqwest::Url::parse(&format!("https://api.fxtwitter.com/status/{id}")).ok()
+}
+
+fn fxtwitter_article(payload: &JsonValue, url: &reqwest::Url) -> Option<ExtractedArticle> {
+    let tweet = payload.get("tweet").or_else(|| payload.get("status"))?;
+    let text = normalize_tweet_text(&json_str(tweet, "text")?);
+    if text.is_empty() || tweet_text_is_incomplete(&text) {
+        return None;
+    }
+    let author = tweet
+        .get("author")
+        .and_then(|value| json_str(value, "name"));
+    let published = json_str(tweet, "created_at").and_then(|raw| {
+        chrono::DateTime::parse_from_str(&raw, "%a %b %e %H:%M:%S %z %Y")
+            .or_else(|_| chrono::DateTime::parse_from_rfc2822(&raw))
+            .or_else(|_| chrono::DateTime::parse_from_rfc3339(&raw))
+            .ok()
+            .map(|date| date.format("%Y-%m-%d").to_string())
+    });
+    let title = format!("{} on X: {text}", author.as_deref().unwrap_or("Post"));
+
+    Some(ExtractedArticle {
+        title: Some(title),
+        canonical_url: Some(url.to_string()),
+        source: Some("x.com".to_string()),
+        author,
+        published,
+    })
 }
 
 fn oembed_article(payload: &JsonValue, url: &reqwest::Url) -> Option<ExtractedArticle> {
@@ -299,7 +369,7 @@ fn tweet_text_and_date(payload: &JsonValue) -> Option<(String, Option<String>)> 
     let html = json_str(payload, "html")?;
     let document = kuchikiki::parse_html().one(html.as_str()).document_node;
     let text = document.select_first("blockquote p").ok()?.text_contents();
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = normalize_tweet_text(&text);
     if text.is_empty() {
         return None;
     }
@@ -311,6 +381,15 @@ fn tweet_text_and_date(payload: &JsonValue) -> Option<(String, Option<String>)> 
         .and_then(|raw| chrono::NaiveDate::parse_from_str(raw.trim(), "%B %e, %Y").ok())
         .map(|date| date.format("%Y-%m-%d").to_string());
     Some((text, published))
+}
+
+fn normalize_tweet_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tweet_text_is_incomplete(text: &str) -> bool {
+    let text = text.trim_end();
+    text.ends_with('…') || text.ends_with("...")
 }
 
 fn json_str(payload: &JsonValue, key: &str) -> Option<String> {
@@ -1226,6 +1305,21 @@ mod tests {
     }
 
     #[test]
+    fn fxtwitter_endpoint_accepts_only_numeric_x_status_ids() {
+        let tweet = reqwest::Url::parse("https://x.com/alexrivera/status/123456?s=20").unwrap();
+        assert_eq!(
+            fxtwitter_endpoint_for(&tweet).unwrap().as_str(),
+            "https://api.fxtwitter.com/status/123456"
+        );
+
+        let article = reqwest::Url::parse("https://example.com/status/123456").unwrap();
+        assert!(fxtwitter_endpoint_for(&article).is_none());
+
+        let malformed = reqwest::Url::parse("https://x.com/alexrivera/status/not-an-id").unwrap();
+        assert!(fxtwitter_endpoint_for(&malformed).is_none());
+    }
+
+    #[test]
     fn oembed_article_builds_tweet_title_from_html_payload() {
         let payload = serde_json::json!({
             "author_name": "Alex Rivera",
@@ -1254,6 +1348,36 @@ mod tests {
         let title = article.title.unwrap();
         assert_eq!(title, format!("Alex Rivera on X: {}", text.trim()));
         assert!(!title.ends_with('…'));
+    }
+
+    #[test]
+    fn fxtwitter_article_uses_complete_longform_text() {
+        let text = "A complete synthetic long-form post with its real final sentence.";
+        let payload = serde_json::json!({
+            "tweet": {
+                "text": text,
+                "created_at": "Fri Jul 31 19:12:00 +0000 2026",
+                "author": { "name": "Alex Rivera" }
+            }
+        });
+        let url = reqwest::Url::parse("https://x.com/alexrivera/status/123456").unwrap();
+
+        let article = fxtwitter_article(&payload, &url).unwrap();
+
+        assert_eq!(
+            article.title.as_deref(),
+            Some("Alex Rivera on X: A complete synthetic long-form post with its real final sentence.")
+        );
+        assert_eq!(article.source.as_deref(), Some("x.com"));
+        assert_eq!(article.author.as_deref(), Some("Alex Rivera"));
+        assert_eq!(article.published.as_deref(), Some("2026-07-31"));
+    }
+
+    #[test]
+    fn only_incomplete_tweet_text_uses_the_longform_fallback() {
+        assert!(tweet_text_is_incomplete("A provider teaser…"));
+        assert!(tweet_text_is_incomplete("A provider teaser..."));
+        assert!(!tweet_text_is_incomplete("A complete post."));
     }
 
     #[test]
