@@ -43,6 +43,44 @@ export function insertTopLevelItemAfterChildren(editor: Editor): boolean {
   return true;
 }
 
+/**
+ * When an atom embed follows an empty lead paragraph in one daily list item,
+ * splitting that paragraph can fail because the atom must stay in place.
+ * Enter instead inserts a second paragraph above the embed and moves the
+ * cursor there, so users can write multiple lines before the card.
+ */
+export function insertParagraphAboveTrailingEmbed(editor: Editor): boolean {
+  const { state } = editor;
+  const { $from, empty } = state.selection;
+  if (!empty || !$from.parent.isTextblock || $from.parent.content.size !== 0) {
+    return false;
+  }
+
+  let itemDepth: number | null = null;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name === "listItem") {
+      itemDepth = depth;
+      break;
+    }
+  }
+  if (itemDepth === null) return false;
+
+  const item = $from.node(itemDepth);
+  const paragraphIndex = $from.index(itemDepth);
+  const trailingBlock = item.maybeChild(paragraphIndex + 1);
+  if (!trailingBlock || !trailingBlock.isAtom || trailingBlock.isInline) {
+    return false;
+  }
+
+  const paragraph = state.schema.nodes.paragraph?.createAndFill();
+  if (!paragraph) return false;
+  const insertPos = $from.before($from.depth);
+  const tr = state.tr.insert(insertPos, paragraph);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1), 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
 export function deleteEmptyListItem(editor: Editor): boolean {
   const { state } = editor;
   const { selection } = state;

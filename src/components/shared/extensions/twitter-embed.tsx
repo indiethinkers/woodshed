@@ -1,5 +1,5 @@
 import { openExternalUrl } from "@/lib/open-external";
-import { useAllResources } from "@/lib/hooks/use-resources";
+import { useAllResources, useResourceMutations } from "@/lib/hooks/use-resources";
 
 interface TwitterEmbedProps {
   tweetId: string | null;
@@ -17,9 +17,10 @@ export function TwitterEmbed({ tweetId, url, handle }: TwitterEmbedProps) {
   // the vault. That gives an embed its actual post text without loading X
   // scripts, frames, or trackers every time a note opens.
   const { data: resources = [] } = useAllResources();
-  const preview = url
-    ? resources.find((resource) => resource.url === url)?.title
-    : undefined;
+  const { capture } = useResourceMutations();
+  const resource = url ? resources.find((entry) => entry.url === url) : undefined;
+  const preview = resource?.title;
+  const canRefreshPreview = Boolean(resource && preview?.endsWith("…"));
   if (!tweetId || !url) {
     return (
       <div className="twitter-embed-fallback">
@@ -31,6 +32,28 @@ export function TwitterEmbed({ tweetId, url, handle }: TwitterEmbedProps) {
   return (
     <div className="twitter-embed-shell" contentEditable={false}>
       <TwitterFallback preview={preview} url={url} handle={handle} />
+      {canRefreshPreview && (
+        <button
+          type="button"
+          className="twitter-embed-refresh"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            capture.mutate({
+              url,
+              tags: ["twitter"],
+              skipDailyLog: true,
+              refresh: true,
+            });
+          }}
+        >
+          {capture.isPending ? "Refreshing…" : "Refresh full preview"}
+        </button>
+      )}
       <button
         type="button"
         className="twitter-embed-hit-target"

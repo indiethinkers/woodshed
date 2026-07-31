@@ -776,6 +776,25 @@
   outline: 2px solid var(--ring, var(--foreground));
   outline-offset: 2px;
 }
+.twitter-embed-refresh {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.65rem;
+  z-index: 3;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.3rem 0.4rem;
+}
+.twitter-embed-refresh:hover,
+.twitter-embed-refresh:focus-visible {
+  color: var(--foreground);
+  outline: 1px solid var(--border);
+}
 .twitter-embed-fallback {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

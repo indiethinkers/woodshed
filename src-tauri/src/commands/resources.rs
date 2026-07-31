@@ -130,6 +130,11 @@ pub struct ResourceCaptureUrlInput {
     /// editor's autosave.
     #[serde(default)]
     pub skip_daily_log: bool,
+    /// Re-fetch metadata for an existing resource. This is only set by the
+    /// explicit refresh control on an embed card; normal captures stay
+    /// deduplicated and never create background network traffic.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -894,7 +899,8 @@ pub fn resource_create(
 /// NOT scraped; the resource body stays the user's own notes. The captured
 /// author becomes a linked person: an existing match is reused, an unknown
 /// byline is created as a minimal person record. Re-capturing a URL already
-/// in the vault just returns the saved resource.
+/// in the vault returns the saved resource unless the caller explicitly asks
+/// to refresh its provider metadata.
 #[tauri::command]
 pub async fn resource_capture_url(
     app: AppHandle,
@@ -906,8 +912,11 @@ pub async fn resource_capture_url(
 
     let requested_url = validate_http_url(&input.url)?;
     let requested_url_string = requested_url.to_string();
-    if let Some((existing, existing_path)) = find_resource_by_url(&vault, &requested_url_string)? {
-        return Ok(ResourceDto::from_parsed(existing, &vault, &existing_path));
+    let existing = find_resource_by_url(&vault, &requested_url_string)?;
+    if let Some((resource, path)) = &existing {
+        if !input.refresh {
+            return Ok(ResourceDto::from_parsed(resource.clone(), &vault, path));
+        }
     }
 
     let now = chrono::Local::now().to_rfc3339();
@@ -959,6 +968,18 @@ pub async fn resource_capture_url(
     let author_byline = clean_optional(input.author.clone()).or(article.author.clone());
     let author = people::resolve_or_create_author(&app, &state, &vault, author_byline.as_deref())?;
     let published = clean_optional(input.published.clone()).or(article.published.clone());
+
+    if let Some((mut resource, path)) = existing {
+        resource.title = title;
+        resource.url = canonical;
+        resource.source = source;
+        resource.author = author;
+        resource.published = published;
+        resource.captured_at = Some(now);
+        write_resource(&state, &path, &resource)?;
+        index_resource(&app, &state, &vault, &path, &resource);
+        return Ok(ResourceDto::from_parsed(resource, &vault, &path));
+    }
 
     // Tweets and videos *are* their embed — seed the body with the media URL
     // on its own line so the editor's URL-paragraph transform renders the

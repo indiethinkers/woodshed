@@ -68,6 +68,7 @@ import { handleListIndentShortcut } from "./list-indent-shortcut";
 import {
   deleteEmptyListItem,
   deleteListItemTextBeforeCursor,
+  insertParagraphAboveTrailingEmbed,
   insertTimestampedHorizontalRule,
   insertTopLevelItemAfterChildren,
   listItemHasVisibleContent,
@@ -1481,6 +1482,11 @@ function handleTimestampedListEnter(
     return false;
   }
   if (!selectionIsInsideNode(editor, "listItem")) return false;
+
+  if (insertParagraphAboveTrailingEmbed(editor)) {
+    event.preventDefault();
+    return true;
+  }
 
   // A blank row is already ready for the next thought. It gets stamped
   // when the user types, so repeated Enter presses should not create a
