@@ -240,6 +240,52 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     expect(reopened.container.textContent).not.toContain(tweetUrl);
   }, 20000);
 
+  it("reopens an autosaved Cadence YouTube URL as an embed after an app refresh", async () => {
+    const commits: string[] = [];
+    const lead = "Synthetic entry with an attached video:";
+    const youtubeUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    const mounted = mountOutlineEditor(`- [09:30] ${lead}`, (next) =>
+      commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, lead);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? youtubeUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector("[data-youtube-resource]")).toBeTruthy();
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(saved).toContain(youtubeUrl);
+
+    mounted.unmount();
+    const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
+    const reopened = mountOutlineEditor(persisted, () => undefined);
+    await waitFor(() => {
+      expect(reopened.container.querySelector("[data-youtube-resource]")).toBeTruthy();
+    });
+    expect(reopened.container.textContent).not.toContain(youtubeUrl);
+  }, 20000);
+
   it("renders a pasted embed on the cursor's current empty line", async () => {
     const tweetUrl = "https://x.com/sample_account/status/987654321";
     const { container } = mountFreeformEditor(
