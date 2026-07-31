@@ -77,14 +77,25 @@ export const DailyTimestamp = Node.create({
             if (paragraph.firstChild?.type === timestampType) return false;
 
             const oldNode = safeNodeAt(oldState.doc, pos);
+            const gainedEmbed =
+              containsTimestampedEmbed(node) &&
+              !containsTimestampedEmbed(oldNode);
 
             // Empty blocks are intentional spacing and remain bare Markdown
-            // bullets. Add the timestamp only when one receives text.
-            if (paragraph.textContent.trim().length === 0) return false;
+            // bullets. A pasted embed is the exception: its required empty
+            // lead paragraph carries the card's durable gutter timestamp.
+            if (
+              paragraph.textContent.trim().length === 0 &&
+              !gainedEmbed
+            ) {
+              return false;
+            }
             const oldParagraph = oldNode?.firstChild;
-            if (oldParagraph?.type.name !== "paragraph") return false;
-            if (oldParagraph.firstChild?.type === timestampType) return false;
-            if (oldParagraph.textContent.trim().length !== 0) return false;
+            if (!gainedEmbed) {
+              if (oldParagraph?.type.name !== "paragraph") return false;
+              if (oldParagraph.firstChild?.type === timestampType) return false;
+              if (oldParagraph.textContent.trim().length !== 0) return false;
+            }
 
             inserts.push(pos + 2);
             return false;
@@ -186,4 +197,12 @@ function safeNodeAt(doc: PMNode, pos: number): PMNode | null {
   } catch {
     return null;
   }
+}
+
+function containsTimestampedEmbed(node: PMNode | null): boolean {
+  if (!node) return false;
+  return node.content.content.some(
+    (child) =>
+      child.type.name === "twitter" || child.type.name === "youtubeResource",
+  );
 }

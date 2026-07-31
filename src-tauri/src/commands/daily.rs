@@ -170,13 +170,32 @@ fn is_empty_timestamp_bullet(line: &str) -> bool {
 /// line and the original ordering. Returns the body untouched when there's
 /// nothing to strip so unrelated saves don't churn the file's formatting.
 pub(crate) fn strip_empty_timestamp_bullets(body: &str) -> String {
-    if !body.lines().any(is_empty_timestamp_bullet) {
+    let lines = body.lines().collect::<Vec<_>>();
+    if !lines.iter().any(|line| is_empty_timestamp_bullet(line)) {
         return body.to_string();
     }
-    body.lines()
-        .filter(|line| !is_empty_timestamp_bullet(line))
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            !is_empty_timestamp_bullet(line) || owns_indented_continuation(&lines, *index)
+        })
+        .map(|(_, line)| *line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn owns_indented_continuation(lines: &[&str], index: usize) -> bool {
+    let base_indent = leading_whitespace_len(lines[index]);
+    lines
+        .iter()
+        .skip(index + 1)
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| leading_whitespace_len(line) > base_indent)
+}
+
+fn leading_whitespace_len(line: &str) -> usize {
+    line.chars().take_while(|char| char.is_whitespace()).count()
 }
 
 pub(crate) fn body_contains_wikilink(body: &str, label: &str) -> bool {
@@ -550,6 +569,10 @@ mod tests {
         // Nothing to strip → returned untouched (no formatting churn).
         let clean = "- [06:54] good morning.\n- [07:00] ship it";
         assert_eq!(strip_empty_timestamp_bullets(clean), clean);
+
+        let embed =
+            "- [06:54] note\n- [07:00]\n  https://x.com/sample_account/status/1234567890123456789";
+        assert_eq!(strip_empty_timestamp_bullets(embed), embed);
     }
 
     #[test]

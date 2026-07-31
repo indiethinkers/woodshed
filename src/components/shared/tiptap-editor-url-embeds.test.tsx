@@ -229,7 +229,8 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     );
     const saved = commits.at(-1)!;
     expect(saved).toContain(tweetUrl);
-    expect(saved).toMatch(/^-\s*$/m);
+    expect(saved).toMatch(/^- \[\d{2}:\d{2}\]\s*$/m);
+    expect(saved.split("\n").filter((line) => line.trim() === "-")).toEqual([]);
 
     mounted.unmount();
     const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
@@ -237,6 +238,15 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     await waitFor(() => {
       expect(reopened.container.querySelector("[data-tweet-id]")).toBeTruthy();
     });
+    const embedItem = reopened.container
+      .querySelector("[data-tweet-id]")
+      ?.closest("li");
+    expect(
+      embedItem?.querySelector(
+        ":scope > div.react-renderer > [data-tweet-id]",
+      ),
+    ).toBeTruthy();
+    expect(embedItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
     expect(reopened.container.textContent).not.toContain(tweetUrl);
   }, 20000);
 
@@ -276,6 +286,8 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     );
     const saved = commits.at(-1)!;
     expect(saved).toContain(youtubeUrl);
+    expect(saved).toMatch(/^- \[\d{2}:\d{2}\]\s*$/m);
+    expect(saved.split("\n").filter((line) => line.trim() === "-")).toEqual([]);
 
     mounted.unmount();
     const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
@@ -283,6 +295,15 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     await waitFor(() => {
       expect(reopened.container.querySelector("[data-youtube-resource]")).toBeTruthy();
     });
+    const embedItem = reopened.container
+      .querySelector("[data-youtube-resource]")
+      ?.closest("li");
+    expect(
+      embedItem?.querySelector(
+        ":scope > div.react-renderer > [data-youtube-resource]",
+      ),
+    ).toBeTruthy();
+    expect(embedItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
     expect(reopened.container.textContent).not.toContain(youtubeUrl);
   }, 20000);
 

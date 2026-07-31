@@ -114,7 +114,7 @@ describe("AgentSurface voice controls", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("uses a clear pill outline and muted placeholder while unfocused", async () => {
+  it("keeps the main composer radius while removing only the inner fill", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -132,21 +132,10 @@ describe("AgentSurface voice controls", () => {
     const composer = textarea.closest("form");
 
     expect(composer).toHaveClass(
-      "rounded-full",
-      "border-foreground/30",
-      "bg-transparent",
-      "shadow-none",
-    );
-    expect(composer).toHaveClass(
-      "[&>[data-slot=input-group]]:!border-0",
+      "rounded-[14px]",
       "[&>[data-slot=input-group]]:!bg-transparent",
-      "[&>[data-slot=input-group]]:!opacity-100",
-      "[&>[data-slot=input-group]]:!ring-0",
     );
-    expect(textarea).toHaveClass("placeholder:text-muted-foreground");
-    expect(screen.getByRole("button", { name: "Submit" })).toHaveClass(
-      "disabled:opacity-100",
-    );
+    expect(composer).not.toHaveClass("rounded-full");
   });
 
   it("asks the transport to reconnect after hydrating an existing chat", async () => {

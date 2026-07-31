@@ -935,14 +935,16 @@
    next to a stray dot. The <li> stays in the markdown (cursor + outline
    structure preserved); only the visual chrome is hidden. */
 .tiptap-content li:has(> img.tiptap-image),
-.tiptap-content li:has(> div[data-youtube-resource]),
-.tiptap-content:not([data-daily-timestamps]) li:has(> div[data-tweet-id]) {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]),
+.tiptap-content:not([data-daily-timestamps])
+  li:has(> div.react-renderer > [data-tweet-id]) {
   padding-left: 0;
   list-style: none;
 }
 .tiptap-content li:has(> img.tiptap-image)::before,
-.tiptap-content li:has(> div[data-youtube-resource])::before,
-.tiptap-content:not([data-daily-timestamps]) li:has(> div[data-tweet-id])::before {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource])::before,
+.tiptap-content:not([data-daily-timestamps])
+  li:has(> div.react-renderer > [data-tweet-id])::before {
   display: none;
 }
 /* Daily journal exception: a pasted tweet reads as a journal entry, so the
@@ -959,10 +961,28 @@
    rendering; the moment the user types on that line the trailing break goes
    away and the rule disengages. */
 .tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p:has(> [data-daily-timestamp]:only-child),
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
   > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
   height: 0;
   min-height: 0;
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  > p
+  > [data-daily-timestamp] {
+  top: 1rem;
 }
 /* Suppress ProseMirror's empty cursor-landing paragraph that sits next
    to a block embed inside a list item. ProseMirror leaves a
@@ -975,10 +995,14 @@
    automatically. */
 .tiptap-content li:has(> img.tiptap-image) > p:empty,
 .tiptap-content li:has(> img.tiptap-image) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div[data-youtube-resource]) > p:empty,
-.tiptap-content li:has(> div[data-youtube-resource]) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div[data-tweet-id]) > p:empty,
-.tiptap-content li:has(> div[data-tweet-id]) > p:has(> br.ProseMirror-trailingBreak:only-child) {
+.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]) > p:empty,
+.tiptap-content
+  li:has(> div.react-renderer > [data-youtube-resource])
+  > p:has(> br.ProseMirror-trailingBreak:only-child),
+.tiptap-content li:has(> div.react-renderer > [data-tweet-id]) > p:empty,
+.tiptap-content
+  li:has(> div.react-renderer > [data-tweet-id])
+  > p:has(> br.ProseMirror-trailingBreak:only-child) {
   display: none;
 }
 
@@ -986,14 +1010,20 @@
    those earlier paragraphs, but keep the paste placeholder immediately before
    the embed collapsed so the card occupies the cursor's original line. */
 .tiptap-content[data-daily-timestamps]
-  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
   > p:empty:not(
-    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
   ),
 .tiptap-content[data-daily-timestamps]
-  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  li:has(
+    > div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
   > p:has(> br.ProseMirror-trailingBreak:only-child):not(
-    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
   ) {
   display: block;
 }

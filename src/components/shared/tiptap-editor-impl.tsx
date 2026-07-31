@@ -1630,5 +1630,6 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
   // Leave ProseMirror's mapped selection alone. Forcing the selection to the
   // end of the document makes a lower embed conversion steal the caret from
   // text the user is editing above it.
+  tr.setMeta("skipDailyTimestamp", true);
   editor.view.dispatch(tr);
 }

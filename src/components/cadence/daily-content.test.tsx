@@ -159,21 +159,21 @@ describe("DailyContent notes editor", () => {
     expect(styles).toMatch(
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
     );
+    expect(styles).toMatch(
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> :is\(\[data-tweet-id\], \[data-youtube-resource\]\)[\s\S]*> p:has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> :is\(\[data-tweet-id\], \[data-youtube-resource\]\)[\s\S]*> p[\s\S]*> \[data-daily-timestamp\][\s\S]*top:\s*1rem;/,
+    );
   });
 
   it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
-    expect(styles).toContain(`.tiptap-content[data-daily-timestamps]
-  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
-  > p:empty:not(
-    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
-  ),
-.tiptap-content[data-daily-timestamps]
-  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
-  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
-    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
-  ) {
-  display: block;
-}`);
+    expect(styles).toContain(
+      ":has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))",
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*> p:empty:not\([\s\S]*div\.react-renderer[\s\S]*\)[\s\S]*display:\s*block;/,
+    );
   });
 
   it("covers the sticky header inset so scrolled notes cannot bleed above it", async () => {
