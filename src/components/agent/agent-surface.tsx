@@ -2182,7 +2182,7 @@ function AgentComposer({
           // stays opaque while the compact sidebar variant blends into bg-list.
           "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:border-0 [&>[data-slot=input-group]]:bg-transparent [&>[data-slot=input-group]]:!ring-0",
           compact
-            ? "rounded-[16px] border-foreground/25 bg-muted/45 p-2 shadow-none hover:border-foreground/30 focus-within:border-foreground/35 focus-within:shadow-none"
+            ? "rounded-[16px] border-foreground/35 bg-input/80 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-foreground/45 focus-within:border-foreground/55 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_10%,transparent)]"
             : "rounded-[14px]",
           className,
         )}
@@ -2217,7 +2217,7 @@ function AgentComposer({
           </PromptInputButton>
           <PromptInputTextarea
             className={cn(
-              "max-h-32 bg-transparent leading-6",
+              "max-h-32 bg-transparent leading-6 text-foreground placeholder:text-muted-foreground",
               compact
                 ? "order-1 min-h-[36px] basis-full px-2 py-1.5 text-[13.5px]"
                 : "min-h-[32px] flex-1 px-1.5 py-1.5 text-[14px]",

@@ -741,10 +741,10 @@
   max-width: 550px;
   margin: 0.75rem 0;
 }
-.twitter-embed-shell:first-child {
+.tiptap-content > [data-tweet-id]:first-child > .twitter-embed-shell {
   margin-top: 0;
 }
-.twitter-embed-shell:last-child {
+.tiptap-content > [data-tweet-id]:last-child > .twitter-embed-shell {
   margin-bottom: 0;
 }
 .twitter-embed-shell iframe {

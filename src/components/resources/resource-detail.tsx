@@ -104,10 +104,8 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
   }
 
   function handleDelete() {
-    remove.mutate(
-      { id: resource.id },
-      { onSuccess: () => navigate({ replace: true, to: "/resources" }) },
-    );
+    remove.mutate({ id: resource.id });
+    void navigate({ replace: true, to: "/resources" });
   }
 
   const capturedValue = resource.capturedAt ?? resource.saved;

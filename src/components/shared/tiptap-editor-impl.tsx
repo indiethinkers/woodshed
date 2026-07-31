@@ -1029,6 +1029,14 @@ export function TiptapEditor({
             }
           }
         }
+        // Rich clipboard content carries a text/html flavor. Let Tiptap's
+        // normal ProseMirror parser own it so headings, emphasis, lists,
+        // links, and tables survive a copy/paste. The custom paths below are
+        // deliberately plain-text normalization for terminal/email wrapping.
+        const hasRichText = Boolean(
+          event.clipboardData?.getData("text/html").trim(),
+        );
+        if (hasRichText) return false;
         const text = event.clipboardData?.getData("text/plain") ?? "";
         const liveEditor = editorRef.current;
         // Paste a URL while text is selected → turn the selection into an

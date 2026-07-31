@@ -370,6 +370,10 @@ pub struct Row {
     pub id: String,
     pub table: String,
     pub created: String,
+    /// User-managed ordering inside an unsorted table view. Legacy rows omit
+    /// this and retain their creation-time order until they are manually
+    /// reordered.
+    pub sort_key: Option<f64>,
     pub cells: BTreeMap<String, serde_yaml::Value>,
     pub body: String,
 }
@@ -665,6 +669,8 @@ struct RowFrontmatter {
     id: String,
     table: String,
     created: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sort_key: Option<f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     cells: BTreeMap<String, serde_yaml::Value>,
 }
@@ -1103,6 +1109,7 @@ pub fn parse_row(content: &str) -> Result<Row> {
         id: fm.id,
         table: fm.table,
         created: fm.created,
+        sort_key: fm.sort_key,
         cells: fm.cells,
         body: normalize_body(&parsed.content),
     })
@@ -1114,6 +1121,7 @@ pub fn serialize_row(row: &Row) -> Result<String> {
         id: row.id.clone(),
         table: row.table.clone(),
         created: row.created.clone(),
+        sort_key: row.sort_key,
         cells: row.cells.clone(),
     };
     let yaml = serde_yaml::to_string(&fm).context("serialize row frontmatter")?;
@@ -1808,6 +1816,7 @@ mod tests {
             id: "row_001".to_string(),
             table: "budget".to_string(),
             created: "2026-04-27T10:05:00".to_string(),
+            sort_key: Some(1000.0),
             cells,
             body: String::new(),
         }

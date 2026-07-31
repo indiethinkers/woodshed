@@ -100,6 +100,7 @@ export interface RowDto {
   path: string;
   table: string;
   created: string;
+  sortKey?: number | null;
   cells: Record<string, CellValue>;
   body: string;
 }
@@ -474,7 +475,20 @@ export function useRowMutations(tableId: string) {
     },
   });
 
-  return { create, update, remove };
+  const reorder = useMutation<RowDto[], Error, { rowIds: string[] }>({
+    mutationFn: async ({ rowIds }) => {
+      const updated = await tauriInvoke<RowDto[]>("row_reorder", {
+        tableId,
+        input: { rowIds },
+      });
+      if (!updated) throw new Error("Tauri runtime missing");
+      qc.setQueryData(["rows", tableId], updated);
+      for (const row of updated) qc.setQueryData(["row", tableId, row.id], row);
+      return updated;
+    },
+  });
+
+  return { create, update, remove, reorder };
 }
 
 function applyTablePatch(table: TableDto, patch: TableUpdateInput): TableDto {

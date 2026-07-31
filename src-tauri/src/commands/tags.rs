@@ -1103,6 +1103,7 @@ mod tests {
             id: "row_1".to_string(),
             table: "prospects".to_string(),
             created: "2026-06-08T12:00:00".to_string(),
+            sort_key: None,
             cells,
             body: "Next step #outreach".to_string(),
         };

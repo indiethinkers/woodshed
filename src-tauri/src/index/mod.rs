@@ -2199,6 +2199,7 @@ mod tests {
             id: "row_001".to_string(),
             table: "budget".to_string(),
             created: "2026-04-27T10:05:00".to_string(),
+            sort_key: None,
             cells,
             body: "Related to [[Acme launch notes]].".to_string(),
         };

@@ -178,6 +178,39 @@ function setDomCursorInside(element: Element) {
 }
 
 describe("TiptapEditor URL embeds (daily journal)", () => {
+  it("keeps rich clipboard structure instead of flattening it to plain text", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <TiptapEditor value="" onCommit={vi.fn()} mode="freeform" />
+      </QueryClientProvider>,
+    );
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+    editorEl.focus();
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<h2>Release notes</h2><p><strong>Keep this emphasis.</strong></p><ul><li>One</li><li>Two</li></ul>";
+          }
+          return "Release notes\nKeep this emphasis.\nOne\nTwo";
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(editorEl.querySelector("h2")).toHaveTextContent("Release notes");
+      expect(editorEl.querySelector("strong")).toHaveTextContent("Keep this emphasis.");
+      expect(editorEl.querySelectorAll("li")).toHaveLength(2);
+    });
+  });
+
   it("loads a journal without mangling bullets or committing anything", async () => {
     vi.stubGlobal(
       "fetch",

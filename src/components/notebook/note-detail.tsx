@@ -119,10 +119,8 @@ function NoteDetailInner({ note }: { note: NoteDto }) {
   }
 
   function handleDelete() {
-    remove.mutate(
-      { id: note.id },
-      { onSuccess: () => navigate({ replace: true, to: "/notebook" }) },
-    );
+    remove.mutate({ id: note.id });
+    void navigate({ replace: true, to: "/notebook" });
   }
 
   const createdLabel = new Date(note.created).toLocaleDateString("en-US", {

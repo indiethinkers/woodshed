@@ -148,10 +148,8 @@ function EventDetailInner({ event }: { event: EventDto }) {
     // app convention: today canonicalizes to "/", any other date to /cadence/<date>.
     const dateStr = event.date.slice(0, 10);
     const href = dateStr === today ? "/" : `/cadence/${dateStr}`;
-    remove.mutate(
-      { id: event.id },
-      { onSuccess: () => void navigate({ href }) },
-    );
+    remove.mutate({ id: event.id });
+    void navigate({ href, replace: true });
   }
 
   return (

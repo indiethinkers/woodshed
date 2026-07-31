@@ -545,6 +545,7 @@ pub fn run() {
             tables::row_get,
             tables::row_update,
             tables::row_delete,
+            tables::row_reorder,
             tables::rows_all,
             tags::tag_table,
             tags::tags_with_counts,

@@ -1,6 +1,20 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TwitterEmbed } from "./twitter-embed";
+
+function renderEmbed() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <TwitterEmbed
+        tweetId="20"
+        url="https://twitter.com/jack/status/20"
+        handle="jack"
+      />
+    </QueryClientProvider>,
+  );
+}
 
 describe("TwitterEmbed", () => {
   afterEach(() => {
@@ -9,13 +23,7 @@ describe("TwitterEmbed", () => {
   });
 
   it("renders a static card without loading remote scripts", () => {
-    render(
-      <TwitterEmbed
-        tweetId="20"
-        url="https://twitter.com/jack/status/20"
-        handle="jack"
-      />,
-    );
+    renderEmbed();
 
     expect(document.querySelector("iframe")).toBeNull();
     expect(
@@ -27,13 +35,7 @@ describe("TwitterEmbed", () => {
   it("opens the original tweet URL when clicked", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
 
-    render(
-      <TwitterEmbed
-        tweetId="20"
-        url="https://twitter.com/jack/status/20"
-        handle="jack"
-      />,
-    );
+    renderEmbed();
 
     fireEvent.click(document.querySelector(".twitter-embed-hit-target")!);
 
