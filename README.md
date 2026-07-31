@@ -1,5 +1,7 @@
 # Woodshed
 
+![Woodshed Cadence view](docs/images/woodshed-cadence.png)
+
 **A desktop-first knowledge workspace where your files remain yours.**
 
 Woodshed brings your calendar, email, notes, tasks, saved links, databases,
