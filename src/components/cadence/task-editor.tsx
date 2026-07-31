@@ -22,6 +22,7 @@ import { RichText } from "@/components/shared/rich-text";
 import { TiptapEditor } from "@/components/shared/tiptap-editor";
 import { defaultAreas } from "@/lib/areas";
 import { formatDuration, liveTimeSpent } from "@/lib/format-duration";
+import { useDisplayNow } from "@/lib/demo-clock";
 import { StatusPill, SpaceLabel } from "./task-sidebar";
 import {
   CalendarGrid,
@@ -401,13 +402,7 @@ function DateField({
 
 function TimeSpent({ task }: { task: TaskDto }) {
   const isLive = task.status === "in-progress" && !!task.inProgressStartedAt;
-  // Re-render every second while a run is active so the ticker advances.
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    if (!isLive) return;
-    const id = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(id);
-  }, [isLive]);
+  const now = useDisplayNow(isLive ? 1000 : null);
   const seconds = liveTimeSpent(
     task.timeSpentSeconds,
     task.inProgressStartedAt,

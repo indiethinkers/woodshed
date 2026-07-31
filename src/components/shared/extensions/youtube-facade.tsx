@@ -1,23 +1,27 @@
-import { useEffect, useState } from "react";
-import { Check, Copy, ExternalLink, Play } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { openExternalUrl } from "@/lib/open-external";
 
-/// Shared click-to-load YouTube facade. It makes no request to YouTube until
-/// the user hits play, at which point the privacy-enhanced player iframe is
-/// created.
+/// A native YouTube player shell shared by editable and read-only Markdown.
 ///
-/// No surrounding card chrome (title / tag pills) — the video stands on its
-/// own, in both the Tiptap editor (`YoutubeResourceView`) and the read-only
-/// `Markdown` renderer (sidebar / mail).
+/// Uses YouTube's standard player directly. The page URL is supplied as the
+/// widget referrer because native webviews do not consistently attach an HTTP
+/// Referer header when the app itself uses a custom URL scheme.
 export function YoutubeFacade({
   url,
   videoId,
+  controls,
+  controlsVisible = false,
 }: {
   url: string;
   videoId: string;
+  controls?: ReactNode;
+  controlsVisible?: boolean;
 }) {
-  const [playing, setPlaying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const embedUrl = new URL(`https://www.youtube.com/embed/${videoId}`);
+  embedUrl.searchParams.set("rel", "0");
+  embedUrl.searchParams.set("widget_referrer", window.location.href);
 
   useEffect(() => {
     if (!copied) return;
@@ -45,10 +49,26 @@ export function YoutubeFacade({
 
   return (
     <div className="group/youtube relative my-3 aspect-video w-full overflow-hidden rounded-md bg-black first:mt-0 last:mb-0">
+      <iframe
+        src={embedUrl.toString()}
+        title={`YouTube video ${videoId}`}
+        loading="lazy"
+        referrerPolicy="unsafe-url"
+        className="absolute inset-0 h-full w-full"
+        frameBorder={0}
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowFullScreen
+      />
       <div
-        className="absolute right-2 top-2 z-20 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/youtube:opacity-100 focus-within:opacity-100"
+        className={`absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-md border border-black/10 bg-white/90 p-0.5 text-zinc-700 shadow-sm backdrop-blur transition-opacity duration-150 group-hover/youtube:pointer-events-auto group-hover/youtube:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 ${
+          controlsVisible
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0"
+        }`}
         contentEditable={false}
       >
+        {controls}
+        {controls && <span aria-hidden className="mx-0.5 h-4 w-px bg-black/10" />}
         <button
           type="button"
           aria-label={copied ? "Copied YouTube link" : "Copy YouTube link"}
@@ -58,7 +78,7 @@ export function YoutubeFacade({
             event.stopPropagation();
           }}
           onClick={copyUrl}
-          className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/70 text-white/90 backdrop-blur transition-colors hover:bg-black/85 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+          className="inline-flex size-7 items-center justify-center rounded-[5px] transition-colors hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
         >
           {copied ? (
             <Check className="size-3.5" strokeWidth={2.2} />
@@ -75,41 +95,15 @@ export function YoutubeFacade({
             event.stopPropagation();
           }}
           onClick={(event) => {
-            void openUrl(event).catch((error) => {
-              console.error("Failed to open YouTube link", url, error);
+            void openUrl(event).catch(() => {
+              console.error("Failed to open YouTube link");
             });
           }}
-          className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/70 text-white/90 backdrop-blur transition-colors hover:bg-black/85 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+          className="inline-flex size-7 items-center justify-center rounded-[5px] transition-colors hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
         >
           <ExternalLink className="size-3.5" strokeWidth={2} />
         </button>
       </div>
-      {playing ? (
-        <iframe
-          src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`}
-          className="absolute inset-0 h-full w-full"
-          frameBorder={0}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-        />
-      ) : (
-        <button
-          type="button"
-          aria-label="Play video"
-          // stopPropagation so the click toggles play rather than letting
-          // ProseMirror turn it into an atom-node selection.
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => setPlaying(true)}
-          className="group absolute inset-0 h-full w-full cursor-pointer"
-        >
-          <span
-            aria-hidden
-            className="absolute left-1/2 top-1/2 flex h-[44px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl bg-black/60 shadow-lg transition-colors duration-150 group-hover:bg-[#ff0000]"
-          >
-            <Play className="h-5 w-5 translate-x-px fill-white text-white" />
-          </span>
-        </button>
-      )}
     </div>
   );
 }

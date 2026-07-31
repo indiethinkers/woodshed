@@ -67,8 +67,10 @@ of truth; the application is a native lens over those files.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
 - **Bounded network actions.** Configured integrations send data only when the
-  user invokes them. Opening an HTML email may also load remote images through
-  Woodshed's bounded cache; sender HTML never fetches URLs directly.
+  user invokes them. The documented exception is a displayed YouTube embed,
+  whose frame is restricted to `youtube-nocookie.com`. Opening an HTML email
+  may load remote images through Woodshed's bounded cache; untrusted HTML never
+  fetches URLs directly.
 - **Narrow privilege.** The webview has no general shell or filesystem access.
   Rust exposes scoped commands for specific operations.
 - **Derived state is disposable.** Search indexes and calendar caches can be
@@ -263,8 +265,10 @@ and not necessarily beside the vault.
 <app_data_dir>/
 ├── config.json                 Non-secret settings and account metadata
 ├── secrets.json                Owner-only Gmail and custom Hermes secrets
+├── demo-clock.json             Optional local demo clock scoped to one vault
 ├── index.db                    Derived FTS5 index
 ├── gcal-cache/<account>.json   Derived iCal event caches
+├── agent-runs/<run>.json       Durable Agent job state and progress
 └── woodshed.log                Rotating application log
 ```
 
@@ -422,8 +426,15 @@ bounded cache by default; never let sender HTML fetch remote URLs directly.
 
 ### Agent and Sweep
 
-Agent chats are durable vault records. Requests go directly to the configured
-Hermes-compatible endpoint only after explicit user action.
+Agent chats are durable vault records. Each submitted turn also creates a
+durable job under `<app_data_dir>/agent-runs/`; a process-owned task executes it
+and finalizes one stable assistant message in the transcript. The Agent UI polls
+that record so navigation and reload only detach the view, not the request.
+Queued or running records without a live process owner are marked failed on the
+next read after restart. Retry never resets that record; it creates a new run
+whose `retryOf` field points to the failed run. Requests go
+directly to the configured Hermes-compatible endpoint only after explicit user
+action.
 
 A loopback endpoint authenticates without a pasted token: Woodshed resolves the
 key from the local Hermes profile that owns the configured API port, reading

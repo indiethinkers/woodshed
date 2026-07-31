@@ -856,6 +856,8 @@ mod tests {
             vault_generation: Arc::new(AtomicU64::new(0)),
             tag_table_cache: Mutex::new(std::collections::HashMap::new()),
             tags_counts_cache: Mutex::new(None),
+            agent_run_mutations: Mutex::new(()),
+            agent_run_cancellations: Mutex::new(std::collections::HashMap::new()),
         }
     }
 

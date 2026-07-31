@@ -1,4 +1,5 @@
 pub mod key;
+pub mod runs;
 
 use anyhow::{anyhow, Context};
 use gray_matter::{engine::YAML, Matter};
@@ -125,7 +126,7 @@ pub struct AgentChatStreamEvent {
     pub event: AgentStreamEvent,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStreamEvent {
     pub kind: String,
@@ -258,7 +259,7 @@ impl AgentStreamEvent {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentChatMessage {
     pub role: String,

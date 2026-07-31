@@ -15,7 +15,7 @@ export interface AreaRecord {
 // Colors are the dataviz reference palette's categorical slots, validated
 // with scripts/validate_palette.js in light and dark. Area colours become
 // chart segments on the Areas overview, so they have to survive CVD and
-// contrast checks — the previous zinc/green pair sat at ΔE 10.9, below the
+// contrast checks: the previous zinc/green pair sat at ΔE 10.9, below the
 // normal-vision floor, i.e. hard to tell apart even with full colour vision.
 export function buildAreas(w: VaultWriter, cal: Calendar): AreaRecord[] {
   const created = cal.atNaive(-63, "09:00");
@@ -31,7 +31,7 @@ export function buildAreas(w: VaultWriter, cal: Calendar): AreaRecord[] {
         "Everything about the round lives here: the memo, the target list, partner",
         "meeting notes, diligence requests, and the pipeline table.",
         "",
-        "Rule for this area — every conversation gets written up the same day, even",
+        "Rule for this area: every conversation gets written up the same day, even",
         "the bad ones. The passes are the most useful notes in the vault.",
       ].join("\n"),
     },
@@ -64,7 +64,7 @@ export function buildAreas(w: VaultWriter, cal: Calendar): AreaRecord[] {
       name: "Personal",
       color: "#c98500",
       body: [
-        "Life outside the raise. Kept in the same vault deliberately — the whole",
+        "Life outside the raise. Kept in the same vault deliberately: the whole",
         "premise is one graph, not a work tool and a separate personal tool.",
       ].join("\n"),
     },

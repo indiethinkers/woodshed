@@ -3,7 +3,7 @@
 // Each writer mirrors one frontmatter struct in `src-tauri/src/parsers/` (or,
 // for mail/sweep/agent, the hand-rolled renderers in their own modules). Where
 // the Rust side declares `skip_serializing_if`, the corresponding field here is
-// `undefined` when empty so the key is omitted entirely — writing
+// `undefined` when empty so the key is omitted entirely. Writing
 // `favorite: false` or `role: ""` would be re-serialized away by the app on
 // first edit and produce spurious diffs.
 
@@ -42,6 +42,9 @@ export class VaultWriter {
   }
 
   write(relPath: string, contents: string): void {
+    if (contents.includes("\u2014")) {
+      throw new Error(`demo content must not contain an em dash: ${relPath}`);
+    }
     const abs = join(this.root, relPath);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, contents, "utf8");
@@ -62,7 +65,7 @@ export class VaultWriter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Area — parsers/mod.rs:569
+// Area: parsers/mod.rs:569
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface AreaInput {
@@ -90,7 +93,7 @@ export function writeArea(w: VaultWriter, area: AreaInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Person — parsers/mod.rs:484
+// Person: parsers/mod.rs:484
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface PersonInput {
@@ -130,7 +133,7 @@ export function writePerson(w: VaultWriter, person: PersonInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Note — parsers/mod.rs:525
+// Note: parsers/mod.rs:525
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface NoteInput {
@@ -153,7 +156,7 @@ export function writeNote(w: VaultWriter, note: NoteInput): void {
         title: note.title,
         area: note.area,
         created: note.created,
-        // `tags` carries no skip_serializing_if — always emitted, even empty.
+        // `tags` carries no skip_serializing_if, so it is always emitted.
         tags: note.tags ?? [],
         favorite: omitFalse(note.favorite),
       },
@@ -163,12 +166,12 @@ export function writeNote(w: VaultWriter, note: NoteInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resource — parsers/mod.rs:540
+// Resource: parsers/mod.rs:540
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Note the absence of `area`. Resources deliberately do not belong to one area
- * — `serialize_resource` hardcodes `area: None` (parsers/mod.rs:974), so a
+ * Note the absence of `area`. Resources deliberately do not belong to one area.
+ * `serialize_resource` hardcodes `area: None` (parsers/mod.rs:974), so a
  * generated `area:` key would silently vanish the first time the app saved the
  * record. Leaving it off the input type makes that unrepresentable.
  */
@@ -209,7 +212,7 @@ export function writeResource(w: VaultWriter, resource: ResourceInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task — parsers/mod.rs:376
+// Task: parsers/mod.rs:376
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface TaskInput {
@@ -249,7 +252,7 @@ export function writeTask(w: VaultWriter, task: TaskInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Event — parsers/mod.rs:399
+// Event: parsers/mod.rs:399
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface EventInput {
@@ -277,7 +280,7 @@ export function writeEvent(w: VaultWriter, event: EventInput): void {
         date: event.date,
         duration: event.duration,
         area: event.area,
-        // `attendees` has no skip_serializing_if — always emitted.
+        // `attendees` has no skip_serializing_if, so it is always emitted.
         attendees: event.attendees ?? [],
         recurring: event.recurring ?? "none",
         tags: omitEmptyList(event.tags),
@@ -288,7 +291,7 @@ export function writeEvent(w: VaultWriter, event: EventInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Daily journal — parsers/mod.rs:446
+// Daily journal: parsers/mod.rs:446
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface DailyInput {
@@ -309,7 +312,7 @@ export function writeDaily(w: VaultWriter, daily: DailyInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tables — parsers/mod.rs:581 (schema) and :657 (rows)
+// Tables: parsers/mod.rs:581 (schema) and :657 (rows)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type ColumnType =
@@ -417,7 +420,7 @@ function viewToYaml(view: ViewInput): YamlValue {
 }
 
 export function writeTable(w: VaultWriter, table: TableInput): void {
-  // Table schemas have no body — `serialize_table_schema` emits frontmatter
+  // Table schemas have no body. `serialize_table_schema` emits frontmatter
   // only (parsers/mod.rs:1051).
   w.write(
     `tables/${table.id}/_schema.md`,
@@ -461,7 +464,7 @@ export function writeRow(w: VaultWriter, row: RowInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mail — commands/mail.rs:1410 (email) and :1477 (draft)
+// Mail: commands/mail.rs:1410 (email) and :1477 (draft)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type MailFolder = "inbox" | "sent" | "archive";
@@ -552,7 +555,7 @@ export function writeDraft(w: VaultWriter, draft: DraftInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sweep cards — sweep/mod.rs:166 (frontmatter) and :665 (body)
+// Sweep cards: sweep/mod.rs:166 (frontmatter) and :665 (body)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type SweepStatus = "to_review" | "queued" | "working" | "done";
@@ -644,7 +647,7 @@ export function writeSweepCard(w: VaultWriter, card: SweepCardInput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agent transcripts — agent/mod.rs:365 (frontmatter) and :1294 (message blocks)
+// Agent transcripts: agent/mod.rs:365 (frontmatter) and :1294 (message blocks)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface AgentMessageInput {

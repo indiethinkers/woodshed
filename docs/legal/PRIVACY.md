@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** July 28, 2026
+**Effective:** July 26, 2026 · **Last updated:** July 30, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -11,14 +11,18 @@ build is responsible for documenting any behavior it adds or changes.
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
-requests when you invoke them; opening an HTML email also loads its remote
-images through Woodshed's bounded cache by default.
+requests when you invoke them. Displaying a YouTube embed loads YouTube's
+standard player, and opening an HTML email loads its remote images by default
+through Woodshed's bounded cache.
 
 ## Data stored on your device
 
 - The selected vault contains Markdown records, synced mail, and attachments.
 - The application-data directory contains non-secret preferences, a rebuildable
-  SQLite search index, a rebuildable iCal event cache, and rotating local logs.
+  SQLite search index, a rebuildable iCal event cache, durable Agent run records,
+  and rotating local logs. Agent run records include submitted message context,
+  progress events, final responses, and errors so a request can survive page
+  navigation or reload.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. Local Hermes keys are
@@ -36,8 +40,8 @@ encryption and a backup strategy appropriate for the sensitivity of your data.
 ## Direct integrations
 
 Woodshed communicates directly with the following services. Most network
-actions require a configured integration and an explicit command; remote image
-requests are the exception described below.
+actions require a configured integration and an explicit command. YouTube
+embeds and remote email images are the exceptions described below.
 
 - **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
   sends mail, replies, and user-selected attachments. Synced messages and
@@ -47,6 +51,11 @@ requests are the exception described below.
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. Public fetches reject private/local
   destinations and enforce redirect, timeout, size, and concurrency limits.
+- **YouTube embeds:** displaying a YouTube embed loads the standard
+  `youtube.com` player. YouTube receives your IP address, time of access, the
+  full Woodshed page URL, and any identifiers or cookies its standard player
+  uses. Player content and player requests are handled by YouTube under its own
+  terms.
 - **Remote email images:** opening an HTML email requests its remote images by
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and
@@ -68,7 +77,8 @@ sharing them publicly.
 
 ## Retention and deletion
 
-Vault records persist until you remove them. In-app record deletion moves files
+Vault records persist until you remove them. Agent run records currently persist
+in the application-data directory until that directory is removed. In-app record deletion moves files
 to `.woodshed/trash/` inside the vault so they can be recovered or permanently
 removed by you. Uninstalling the app does not delete the vault.
 

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   gcalAccounts: [] as { id: string; color?: string }[],
   sync: { mutate: vi.fn(), isPending: false },
   isLoading: false,
+  fixedNowMs: null as number | null,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -44,6 +45,10 @@ vi.mock("@/lib/hooks/use-today", () => ({
   useToday: () => "2026-05-18",
 }));
 
+vi.mock("@/lib/demo-clock", () => ({
+  useFixedNowMs: () => mocks.fixedNowMs,
+}));
+
 import { ScheduleBlock } from "./schedule-block";
 
 function makeEvent(overrides: Partial<EventDto>): EventDto {
@@ -71,6 +76,7 @@ beforeEach(() => {
   mocks.sync.mutate.mockClear();
   mocks.sync.isPending = false;
   mocks.isLoading = false;
+  mocks.fixedNowMs = null;
   window.localStorage.clear();
 });
 
@@ -106,10 +112,7 @@ describe("ScheduleBlock event rows", () => {
     const past = screen.getByRole("link", { name: "Past sync" });
     expect(past).toHaveClass("line-through");
     expect(past).toHaveClass("text-muted-foreground/60");
-    expect(past.closest("li")).toHaveAttribute(
-      "data-event-state",
-      "completed",
-    );
+    expect(past.closest("li")).toHaveAttribute("data-event-state", "completed");
 
     const active = screen.getByRole("link", { name: "Active meeting" });
     expect(active).not.toHaveClass("line-through");
@@ -158,6 +161,34 @@ describe("ScheduleBlock event rows", () => {
       "completed",
     );
   });
+
+  it("keeps demo event states fixed even when the system clock moves on", () => {
+    vi.setSystemTime(new Date("2026-05-20T17:00:00-07:00"));
+    mocks.fixedNowMs = Date.parse("2026-05-18T10:00:00-07:00");
+    mocks.events = [
+      makeEvent({
+        id: "past",
+        title: "Past sync",
+        date: "2026-05-18T08:00:00-07:00",
+        duration: 30,
+      }),
+      makeEvent({
+        id: "future",
+        title: "Future review",
+        date: "2026-05-18T11:00:00-07:00",
+        duration: 30,
+      }),
+    ];
+
+    render(<ScheduleBlock date="2026-05-18" />);
+
+    expect(screen.getByRole("link", { name: "Past sync" })).toHaveClass(
+      "line-through",
+    );
+    expect(screen.getByRole("link", { name: "Future review" })).not.toHaveClass(
+      "line-through",
+    );
+  });
 });
 
 describe("ScheduleBlock loading state", () => {
@@ -172,10 +203,7 @@ describe("ScheduleBlock loading state", () => {
   });
 
   it("does not replay the enter animation for a restored expanded schedule", () => {
-    window.localStorage.setItem(
-      "woodshed:cadence:schedule-collapsed",
-      "false",
-    );
+    window.localStorage.setItem("woodshed:cadence:schedule-collapsed", "false");
     mocks.events = [
       makeEvent({
         id: "finished",

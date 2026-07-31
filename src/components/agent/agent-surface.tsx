@@ -137,7 +137,15 @@ import {
   toolStatusFromPart,
   type AgentToolPart,
 } from "@/lib/agent/message-parts";
-import { createAgentChatTransport } from "@/lib/agent/transport";
+import {
+  attachmentContextFromFiles,
+  attachmentLabel,
+  parsePersistedAttachmentContext,
+} from "@/lib/agent/attachment-context";
+import {
+  type AgentRun,
+  createAgentChatTransport,
+} from "@/lib/agent/transport";
 import {
   captureAgentPageContext,
   formatAgentPageContext,
@@ -263,13 +271,14 @@ function AgentSurfaceInner({
   const [chats, setChats] = useState<AgentChatSummary[]>([]);
   const [activeChat, setActiveChat] = useState<AgentChatRecord | null>(null);
   const [activeId, setActiveId] = useState<string | null>(urlChatId);
+  const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const hydratedSignatureRef = useRef("");
   const hydratingRef = useRef(false);
   const messageTimesRef = useRef<Map<string, string>>(new Map());
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
   const pageContextRef = useRef({
     pathname: contextPathname,
     title: contextTitle,
@@ -297,6 +306,11 @@ function AgentSurfaceInner({
             { vaultRoot: context.vaultRoot },
           );
         },
+        onRunChange: (run) => {
+          if (!run || run.conversationId === activeIdRef.current) {
+            setActiveRun(run);
+          }
+        },
       }),
     [pageMode],
   );
@@ -305,9 +319,11 @@ function AgentSurfaceInner({
     addToolApprovalResponse,
     messages,
     sendMessage,
+    regenerate,
     setMessages,
     status,
     stop,
+    resumeStream,
     error,
   } = useChat({
     id: activeId ?? "agent-draft",
@@ -317,6 +333,8 @@ function AgentSurfaceInner({
       setLastError(error.message);
     },
   });
+  const messagesRef = useRef<UIMessage[]>(messages);
+  messagesRef.current = messages;
 
   const displayName = config?.displayName?.trim() || activeChat?.agent || "Agent";
   // `config` is null until agent_config_get resolves. Until then we don't know
@@ -326,7 +344,12 @@ function AgentSurfaceInner({
   // and the input visibly shifts when the real config lands.
   const configResolved = config !== null;
   const configured = Boolean(config?.hasApiKey);
-  const busy = status === "submitted" || status === "streaming";
+  const runActive =
+    activeRun?.status === "queued" || activeRun?.status === "running";
+  const effectiveStatus: ChatStatus =
+    runActive && status === "ready" ? "submitted" : status;
+  const busy =
+    effectiveStatus === "submitted" || effectiveStatus === "streaming";
   const canSubmit = configured && !busy;
 
   useEffect(() => {
@@ -373,14 +396,15 @@ function AgentSurfaceInner({
 
   useEffect(() => {
     if (!activeId) {
+      setActiveRun(null);
       setActiveChat(null);
-      hydratedSignatureRef.current = "";
       messageTimesRef.current = new Map();
       setMessages([]);
       return;
     }
     if (activeChat?.id === activeId) return;
     let cancelled = false;
+    setActiveRun(null);
     hydratingRef.current = true;
     tauriInvoke<AgentChatRecord>("agent_chat_get", { id: activeId })
       .then((chat) => {
@@ -398,8 +422,12 @@ function AgentSurfaceInner({
           chat.messages.map((message) => [message.id, message.createdAt]),
         );
         const nextMessages = toUiMessages(chat.messages);
-        hydratedSignatureRef.current = signatureFromVaultMessages(chat.messages);
         setMessages(nextMessages);
+        void resumeStream().catch((error) => {
+          if (!cancelled) {
+            setLastError(error instanceof Error ? error.message : String(error));
+          }
+        });
       })
       .catch((error) => {
         if (!cancelled) {
@@ -414,7 +442,7 @@ function AgentSurfaceInner({
     return () => {
       cancelled = true;
     };
-  }, [activeChat?.id, activeId, navigate, pageMode, setMessages]);
+  }, [activeChat?.id, activeId, navigate, pageMode, resumeStream, setMessages]);
 
   useEffect(() => {
     if (!pendingSend || !activeId || hydratingRef.current) return;
@@ -428,21 +456,39 @@ function AgentSurfaceInner({
   }, [error]);
 
   useEffect(() => {
-    if (!activeChat || hydratingRef.current) return;
-    const vaultMessages = toVaultMessages(messages, messageTimesRef.current);
-    const signature = signatureFromVaultMessages(vaultMessages);
-    if (signature === hydratedSignatureRef.current) return;
-    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      void saveActiveChat(activeChat, vaultMessages);
-    }, busy ? 900 : 250);
+    if (!activeRun || activeRun.status === "queued" || activeRun.status === "running") {
+      return;
+    }
+    let cancelled = false;
+    tauriInvoke<AgentChatRecord>("agent_chat_get", {
+      id: activeRun.conversationId,
+    })
+      .then((chat) => {
+        if (cancelled || !chat || chat.id !== activeIdRef.current) return;
+        setActiveChat(chat);
+        setChats((current) => upsertSummary(current, recordToSummary(chat)));
+        if (
+          activeRun.status === "completed" &&
+          status === "ready" &&
+          !messagesRef.current.some(
+            (message) => message.id === activeRun.assistantMessageId,
+          )
+        ) {
+          messageTimesRef.current = new Map(
+            chat.messages.map((message) => [message.id, message.createdAt]),
+          );
+          setMessages(toUiMessages(chat.messages));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLastError(error instanceof Error ? error.message : String(error));
+        }
+      });
     return () => {
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
+      cancelled = true;
     };
-  }, [activeChat, busy, messages]);
+  }, [activeRun, setMessages, status]);
 
   async function saveActiveChat(
     chat: AgentChatRecord,
@@ -460,7 +506,6 @@ function AgentSurfaceInner({
         },
       });
       if (!next) return;
-      hydratedSignatureRef.current = signatureFromVaultMessages(next.messages);
       setActiveChat(next);
       setChats((current) => upsertSummary(current, recordToSummary(next)));
     } catch (error) {
@@ -470,6 +515,7 @@ function AgentSurfaceInner({
 
   async function startNewChat() {
     setLastError(null);
+    setActiveRun(null);
     forgetRecentAgentChatId();
     setActiveId(null);
     setActiveChat(null);
@@ -504,12 +550,19 @@ function AgentSurfaceInner({
       messageTimesRef.current = new Map(
         [...messageTimesRef.current].filter(([id]) => nextIds.has(id)),
       );
+      if (activeChat) {
+        void saveActiveChat(
+          activeChat,
+          toVaultMessages(next, messageTimesRef.current),
+        );
+      }
       return next;
     });
   }
 
   function selectChat(id: string) {
     setLastError(null);
+    setActiveRun(null);
     rememberRecentAgentChatId(id);
     if (pageMode) {
       void navigate({ href: `/agent?chat=${id}` });
@@ -622,6 +675,29 @@ function AgentSurfaceInner({
     textInput.clear();
   }
 
+  function cancelRun() {
+    const run = activeRun;
+    if (run && (run.status === "queued" || run.status === "running")) {
+      void tauriInvoke<AgentRun>("agent_run_cancel", { runId: run.id })
+        .then((cancelled) => {
+          if (cancelled && cancelled.conversationId === activeIdRef.current) {
+            setActiveRun(cancelled);
+          }
+        })
+        .catch((error) => {
+          setLastError(error instanceof Error ? error.message : String(error));
+        });
+    }
+    stop();
+  }
+
+  function retryRun() {
+    setLastError(null);
+    void regenerate().catch((error) => {
+      setLastError(error instanceof Error ? error.message : String(error));
+    });
+  }
+
   async function createChatAndSend(
     text: string,
     files: FileUIPart[],
@@ -706,7 +782,7 @@ function AgentSurfaceInner({
             configured={configured}
             context={activeChat?.context}
             displayName={displayName}
-            status={status}
+            status={effectiveStatus}
           />
         ) : (
           <AgentSidebarHeader
@@ -716,6 +792,12 @@ function AgentSurfaceInner({
             onNewChat={startNewChat}
             onSelectChat={selectChat}
             pageChats={sidebarPageChats}
+          />
+        )}
+        {activeRun && (
+          <AgentRunBanner
+            onRetry={configured ? retryRun : undefined}
+            run={activeRun}
           />
         )}
         {messages.length === 0 ? (
@@ -728,8 +810,8 @@ function AgentSurfaceInner({
             compact={!pageMode}
             contextTitle={contextTitle}
             onSubmit={handleSubmit}
-            status={status}
-            stop={stop}
+            status={effectiveStatus}
+            stop={cancelRun}
           />
         ) : (
           <AgentConversationView
@@ -743,8 +825,8 @@ function AgentSurfaceInner({
             compact={!pageMode}
             onSubmit={handleSubmit}
             onToolApprovalResponse={addToolApprovalResponse}
-            status={status}
-            stop={stop}
+            status={effectiveStatus}
+            stop={cancelRun}
           />
         )}
       </section>
@@ -1188,6 +1270,61 @@ function AgentSidebarHeader({
         <SquarePen className="size-4" strokeWidth={1.8} />
       </button>
     </header>
+  );
+}
+
+export function AgentRunBanner({
+  onRetry,
+  run,
+}: {
+  onRetry?: () => void;
+  run: AgentRun;
+}) {
+  const active = run.status === "queued" || run.status === "running";
+  const label =
+    run.status === "queued"
+      ? "Queued"
+      : run.status === "running"
+        ? "Running in the background"
+        : run.status === "completed"
+          ? "Completed"
+          : run.status === "cancelled"
+            ? "Cancelled"
+            : "Failed";
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        "flex min-h-8 shrink-0 items-center gap-2 border-b border-border/50 px-6 text-[12px]",
+        run.status === "failed"
+          ? "bg-destructive/5 text-destructive"
+          : "bg-muted/20 text-muted-foreground",
+      )}
+    >
+      {run.status === "completed" ? (
+        <CheckCircle2 className="size-3.5" />
+      ) : run.status === "failed" || run.status === "cancelled" ? (
+        <X className="size-3.5" />
+      ) : (
+        <Circle
+          className={cn("size-2.5", active && "animate-pulse")}
+          fill="currentColor"
+        />
+      )}
+      <span className="font-medium text-foreground/80">{label}</span>
+      {run.status === "failed" && run.error && (
+        <span className="min-w-0 truncate">{run.error}</span>
+      )}
+      {run.status === "failed" && onRetry && (
+        <button
+          className="ml-auto shrink-0 rounded-md px-2 py-1 font-medium text-foreground transition-colors hover:bg-muted"
+          onClick={onRetry}
+          type="button"
+        >
+          Retry
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -2141,12 +2278,26 @@ function AgentComposer({
   );
 }
 
-function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
-  return messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    parts: [{ type: "text", text: message.content }],
-  }));
+export function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "user") {
+      return {
+        id: message.id,
+        role: message.role,
+        parts: [{ type: "text" as const, text: message.content }],
+      };
+    }
+
+    const { files, text } = parsePersistedAttachmentContext(message.content);
+    return {
+      id: message.id,
+      role: message.role,
+      parts: [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...files,
+      ],
+    };
+  });
 }
 
 function toVaultMessages(
@@ -2196,21 +2347,10 @@ function isFilePart(
   return part.type === "file";
 }
 
-function attachmentContextFromFiles(files: FileUIPart[]): string {
-  if (files.length === 0) return "";
-  return `Attachments:\n${files
-    .map((file) => `- ${attachmentLabel(file)}${file.mediaType ? ` (${file.mediaType})` : ""}`)
-    .join("\n")}`;
-}
-
 function attachmentTitleFromFiles(files: FileUIPart[]): string {
   if (files.length === 0) return "";
   if (files.length === 1) return attachmentLabel(files[0]);
   return `${files.length} attachments`;
-}
-
-function attachmentLabel(file: FileUIPart): string {
-  return file.filename?.trim() || "Attachment";
 }
 
 function reasoningTextFromMessage(message: UIMessage): string {
@@ -2299,10 +2439,6 @@ function agentArtifactFromResponse(text: string): AgentResponseArtifactData | nu
     description: `${bulletCount} structured items from this response`,
     body,
   };
-}
-
-function signatureFromVaultMessages(messages: AgentVaultMessage[]): string {
-  return JSON.stringify(messages.map(({ id, role, content }) => ({ id, role, content })));
 }
 
 function recordToSummary(chat: AgentChatRecord): AgentChatSummary {

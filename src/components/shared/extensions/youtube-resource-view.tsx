@@ -4,9 +4,8 @@ import { GripVertical, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { YoutubeFacade } from "./youtube-facade";
 
-/// React NodeView for `youtubeResource`: a bare, responsive nocookie embed
-/// rendered as a click-to-load facade via the shared `YoutubeFacade`. The same
-/// facade renders in the read-only `Markdown` path so the editor and the
+/// React NodeView for `youtubeResource`: a bare, responsive YouTube player.
+/// The same player renders in the read-only `Markdown` path so the editor and
 /// sidebar/mail views look identical.
 ///
 /// No surrounding card chrome (title / tag pills) — the video stands on its
@@ -58,37 +57,37 @@ export function YoutubeResourceView(props: NodeViewProps) {
         selected && "is-selected",
       )}
     >
-      <div
-        className={cn(
-          "absolute left-2 top-2 z-30 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/editor-youtube:opacity-100 focus-within:opacity-100",
-          selected && "opacity-100",
-        )}
-        contentEditable={false}
-      >
-        <button
-          type="button"
-          aria-label="Select YouTube embed"
-          title="Select YouTube embed"
-          onMouseDown={handleSelect}
-          className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/70 text-white/90 backdrop-blur transition-colors hover:bg-black/85 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-        >
-          <GripVertical className="size-3.5" strokeWidth={2} />
-        </button>
-        <button
-          type="button"
-          aria-label="Delete YouTube embed"
-          title="Delete YouTube embed"
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={handleDelete}
-          className="inline-flex size-7 items-center justify-center rounded-md border border-white/15 bg-black/70 text-white/90 backdrop-blur transition-colors hover:bg-black/85 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-        >
-          <Trash2 className="size-3.5" strokeWidth={2} />
-        </button>
-      </div>
-      <YoutubeFacade url={url} videoId={videoId} />
+      <YoutubeFacade
+        url={url}
+        videoId={videoId}
+        controlsVisible={selected}
+        controls={
+          <>
+            <button
+              type="button"
+              aria-label="Select YouTube embed"
+              title="Select YouTube embed"
+              onMouseDown={handleSelect}
+              className="inline-flex size-7 items-center justify-center rounded-[5px] transition-colors hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
+            >
+              <GripVertical className="size-3.5" strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              aria-label="Delete YouTube embed"
+              title="Delete YouTube embed"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={handleDelete}
+              className="inline-flex size-7 items-center justify-center rounded-[5px] transition-colors hover:bg-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-black/20"
+            >
+              <Trash2 className="size-3.5" strokeWidth={2} />
+            </button>
+          </>
+        }
+      />
     </NodeViewWrapper>
   );
 }

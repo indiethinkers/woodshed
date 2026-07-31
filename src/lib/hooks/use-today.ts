@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useFixedNowMs } from "@/lib/demo-clock";
 
 // Returns today's date as YYYY-MM-DD in the user's local timezone.
 // Recomputes when the document becomes visible (catches the case where
@@ -9,9 +10,17 @@ import { useEffect, useState } from "react";
 // Replaces the hardcoded `TODAY_DATE = "2026-04-25"` constants in
 // task-sidebar.tsx and (cadence)/page.tsx — see plan Phase 2 step 12.
 export function useToday(): string {
-  const [today, setToday] = useState<string>(() => formatLocalDate(new Date()));
+  const fixedNowMs = useFixedNowMs();
+  const [today, setToday] = useState<string>(() =>
+    formatLocalDate(fixedNowMs === null ? new Date() : new Date(fixedNowMs)),
+  );
 
   useEffect(() => {
+    if (fixedNowMs !== null) {
+      setToday(formatLocalDate(new Date(fixedNowMs)));
+      return;
+    }
+
     function refresh() {
       setToday(formatLocalDate(new Date()));
     }
@@ -42,7 +51,7 @@ export function useToday(): string {
       document.removeEventListener("visibilitychange", onVisibility);
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [fixedNowMs]);
 
   return today;
 }

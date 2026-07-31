@@ -103,6 +103,14 @@ pub struct AppState {
     /// Memoized `tags_with_counts` output, keyed on generation only (the
     /// command takes no per-tag argument). See `commands::tags::tags_with_counts`.
     pub tags_counts_cache: Mutex<Option<(u64, Vec<commands::tags::TagCount>)>>,
+    /// Serializes durable Agent run records with their transcript writes.
+    /// Network work never holds this lock.
+    pub agent_run_mutations: Mutex<()>,
+    /// Process-local cancellation signals for jobs owned by this app process.
+    /// Persisted queued/running jobs absent from this map are stale after a
+    /// restart and are surfaced as recoverable failures.
+    pub agent_run_cancellations:
+        Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
 impl AppState {
@@ -319,8 +327,8 @@ pub fn run() {
                                 .header("Cache-Control", "public, max-age=31536000, immutable")
                                 .body(bytes)
                                 .unwrap_or_else(|_| empty_response(500)),
-                            Err(e) => {
-                                eprintln!("wsmail img fetch error: {e}");
+                            Err(_) => {
+                                eprintln!("wsmail image fetch failed");
                                 empty_response(502)
                             }
                         }
@@ -450,12 +458,15 @@ pub fn run() {
             vault_generation: Arc::new(AtomicU64::new(0)),
             tag_table_cache: Mutex::new(std::collections::HashMap::new()),
             tags_counts_cache: Mutex::new(None),
+            agent_run_mutations: Mutex::new(()),
+            agent_run_cancellations: Mutex::new(std::collections::HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             ping,
             config::vault_path_get,
             config::vault_path_set,
             config::vault_path_default,
+            config::demo_clock_get,
             config::profile_get,
             config::profile_set,
             config::warning_dismissed_get,
@@ -465,6 +476,10 @@ pub fn run() {
             agent_cmd::agent_config_clear,
             agent_cmd::agent_connection_test,
             agent_cmd::agent_chat_stream,
+            agent_cmd::agent_run_create,
+            agent_cmd::agent_run_get,
+            agent_cmd::agent_runs_for_conversation,
+            agent_cmd::agent_run_cancel,
             agent_cmd::agent_chats_all,
             agent_cmd::agent_chat_get,
             agent_cmd::agent_chat_create,

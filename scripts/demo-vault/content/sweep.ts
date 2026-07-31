@@ -34,18 +34,18 @@ interface CardSeed {
 
 const CARDS: CardSeed[] = [
   {
-    id: "sweep-northwind-retention",
-    emailSlug: "northwind-partner-meeting",
+    id: "sweep-cedargrove-retention",
+    emailSlug: "cedargrove-partner-meeting",
     status: "to_review",
-    headline: "Priya needs the retention cut before Thursday",
+    headline: "Amara needs the retention cut before Thursday",
     summary:
-      "Northwind's partner meeting is Thursday. Priya wants the retention breakdown by acquisition source and a direct answer on collaboration — both before the discussion, both rough is fine.",
+      "Cedar Grove's partner meeting is Thursday. Amara wants the retention breakdown by acquisition source and a direct answer on collaboration: both before the discussion, both rough is fine.",
     whatHappened:
-      "Priya confirmed Thursday 2pm with the full partnership and listed two things she wants in front of the room. She notes she has been describing the retention cut secondhand since your first call, and that Halyard's pass on the collaboration question is known to the partnership.",
+      "Amara confirmed Thursday 2pm with the full partnership and listed two things she wants in front of the room. She notes she has been describing the retention cut secondhand since your first call, and that Halyard's pass on the collaboration question is known to the partnership.",
     actionKind: "reply",
     actionLabel: "Draft reply",
     draft: [
-      "Both make sense — I'll have the retention cut with you Wednesday and the",
+      "Both make sense: I'll have the retention cut with you Wednesday and the",
       "collaboration answer written up before Thursday rather than improvised in",
       "the room.",
     ].join("\n"),
@@ -70,11 +70,12 @@ const CARDS: CardSeed[] = [
     id: "sweep-jonas-rollout",
     emailSlug: "jonas-security-approved",
     status: "to_review",
-    headline: "Ostrich passed security review — 60 seats, wants a failure-mode call",
+    headline:
+      "Ostrich passed security review: 60 seats, wants a failure-mode call",
     summary:
       "Jonas's reviewer signed off and they are rolling out to all 60 engineers. He wants an hour before the rollout to work through failure modes.",
     whatHappened:
-      "The security document cleared the review — the reviewer specifically noted it enumerated network calls rather than describing a posture. Jonas is asking about vaults on network shares and the recovery story for a corrupted file.",
+      "The security document cleared the review: the reviewer specifically noted it enumerated network calls rather than describing a posture. Jonas is asking about vaults on network shares and the recovery story for a corrupted file.",
     actionKind: "task",
     actionLabel: "Create task",
     actionTarget: "Prepare the Ostrich rollout checklist",
@@ -96,18 +97,19 @@ const CARDS: CardSeed[] = [
     ],
   },
   {
-    id: "sweep-ravi-revision",
-    emailSlug: "ravi-index-latency",
+    id: "sweep-elliot-revision",
+    emailSlug: "elliot-index-latency",
     status: "queued",
-    headline: "Ravi confirms the latency fix, asks about revision-before-write",
+    headline:
+      "Elliot confirms the latency fix, asks about revision-before-write",
     summary:
       "Index warmup verified at 940 files. He wants to know whether the revision-before-direct-write follow-up is tracked.",
     whatHappened:
-      "Ravi updated and could not reproduce the first-query pause. Separately he raised the open follow-up from the iCloud fix — writing a revision before the direct write, so a crash mid-write leaves a recoverable copy.",
+      "Elliot updated and could not reproduce the first-query pause. Separately he raised the open follow-up from the iCloud fix: writing a revision before the direct write, so a crash mid-write leaves a recoverable copy.",
     actionKind: "reply",
     actionLabel: "Send reply",
     draft: [
-      "Confirmed on the latency — glad it held up at your vault size.",
+      "Confirmed on the latency: glad it held up at your vault size.",
       "",
       "The revision-before-write follow-up is tracked and not scheduled. Honest",
       "answer: it matters most on exactly your setup, so I'll move it up.",
@@ -136,17 +138,17 @@ const CARDS: CardSeed[] = [
     ],
   },
   {
-    id: "sweep-lena-yc",
-    emailSlug: "lena-yc-answers",
+    id: "sweep-lena-launchpad",
+    emailSlug: "lena-launchpad-answers",
     status: "working",
-    headline: "Lena's edit: cut \"why now\" to one falsifiable sentence",
+    headline: 'Lena\'s edit: cut "what changed" to one falsifiable sentence',
     summary:
-      "Detailed edit on the YC draft. The \"why did you pick this idea\" answer should stay untouched; \"why now\" is three unfalsifiable claims and should become one.",
+      'Detailed edit on the Launchpad draft. The origin answer should stay untouched; "what changed" is three unfalsifiable claims and should become one.',
     whatHappened:
       "Lena read the full draft and returned line-level feedback. She also flagged that the competitors answer is too polite about why Obsidian will not ship first-party calendar and mail.",
     actionKind: "task",
     actionLabel: "Create task",
-    actionTarget: "Cut the YC \"why now\" answer by a third",
+    actionTarget: 'Cut the Launchpad "what changed" answer by a third',
     why: [
       "Application deadline is in 4 days",
       "Matches the in-progress task already on today's list",
@@ -200,8 +202,9 @@ const CARDS: CardSeed[] = [
     id: "sweep-invoice",
     emailSlug: "invoice-hosting",
     status: "done",
-    headline: "Hosting invoice — $88.00",
-    summary: "Monthly invoice for the marketing site and docs hosting. Due on receipt.",
+    headline: "Hosting invoice: $88.00",
+    summary:
+      "Monthly invoice for the marketing site and docs hosting. Due on receipt.",
     whatHappened:
       "Routine recurring invoice, same amount as the previous eleven months.",
     actionKind: "snooze",

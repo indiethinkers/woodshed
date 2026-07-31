@@ -17,7 +17,7 @@ interface PersonSeed {
   company: string;
   email: string;
   area: string;
-  /** Free text the user maintains by hand — the field that makes People a CRM. */
+  /** Free text the user maintains by hand: the field that makes People a CRM. */
   relationship: string;
   favorite?: boolean;
   /** Days before demo day this person was added. */
@@ -36,11 +36,11 @@ function initials(name: string): string {
 const PEOPLE: PersonSeed[] = [
   // ── Investors ──────────────────────────────────────────────────────────────
   {
-    id: "priya-raman",
-    name: "Priya Raman",
+    id: "amara-okafor",
+    name: "Amara Okafor",
     role: "Partner",
-    company: FIRMS.northwind,
-    email: "priya@northwind.example",
+    company: FIRMS.cedargrove,
+    email: "amara@cedargrove.example",
     area: AREA.fundraise,
     relationship: "Lead candidate. Warm intro from Lena.",
     favorite: true,
@@ -69,7 +69,7 @@ const PEOPLE: PersonSeed[] = [
       "Ex-operator. Ran infrastructure at a company that shipped a sync engine and",
       "regretted it, so he is unusually specific about what breaks.",
       "",
-      "Wants a design partner reference call before moving. Suggested [[Ravi Menon]]",
+      "Wants a design partner reference call before moving. Suggested [[Elliot Park]]",
       "himself after seeing the Cartogram logo on the deck.",
     ].join("\n"),
   },
@@ -86,7 +86,7 @@ const PEOPLE: PersonSeed[] = [
       "Runs the diligence process at Foundry Line. Every data request comes through",
       "her, not Daniel.",
       "",
-      "Fast, organized, and honest about where the process stands — worth keeping",
+      "Fast, organized, and honest about where the process stands: worth keeping",
       "warm regardless of how this round lands.",
     ].join("\n"),
   },
@@ -104,7 +104,7 @@ const PEOPLE: PersonSeed[] = [
       "he does not believe single-player tools reach venture scale without a",
       "collaboration story, and did not want to underwrite one being added later.",
       "",
-      "Disagreed but did not argue — the whole product thesis is that single-player",
+      "Disagreed but did not argue: the whole product thesis is that single-player",
       "is the point. Right call for both of us.",
       "",
       "Said to come back when there is a team plan with real usage behind it.",
@@ -123,7 +123,7 @@ const PEOPLE: PersonSeed[] = [
       "Committed on the first call without a second meeting. Writes small checks",
       "quickly and does not ask for information rights.",
       "",
-      "Useful as a forcing function — having a committed check made the Northwind",
+      "Useful as a forcing function: having a committed check made the Cedar Grove",
       "conversation noticeably more concrete.",
     ].join("\n"),
   },
@@ -155,7 +155,7 @@ const PEOPLE: PersonSeed[] = [
     addedOffset: -35,
     body: [
       "Former design lead at a collaborative design tool. The most useful critic of",
-      "the onboarding flow so far — pointed out that the vault picker asks for a",
+      "the onboarding flow so far: pointed out that the vault picker asks for a",
       "commitment before the user has any idea what a vault is.",
       "",
       "That feedback became the onboarding RFC.",
@@ -165,14 +165,14 @@ const PEOPLE: PersonSeed[] = [
     id: "oskar-lindqvist",
     name: "Oskar Lindqvist",
     role: "Scout",
-    company: FIRMS.northwind,
-    email: "oskar@northwind.example",
+    company: FIRMS.cedargrove,
+    email: "oskar@cedargrove.example",
     area: AREA.fundraise,
-    relationship: "Northwind scout. Made the Priya intro.",
+    relationship: "Cedar Grove scout. Made the Amara intro.",
     addedOffset: -55,
     body: [
-      "Scout for Northwind. Found the project through the local-first essay and",
-      "sent an unprompted intro to [[Priya Raman]] the same week.",
+      "Scout for Cedar Grove. Found the project through the local-first essay and",
+      "sent an unprompted intro to [[Amara Okafor]] the same week.",
       "",
       "Owed a real thank-you regardless of how the round ends.",
     ].join("\n"),
@@ -180,11 +180,11 @@ const PEOPLE: PersonSeed[] = [
 
   // ── Design partners and customers ─────────────────────────────────────────
   {
-    id: "ravi-menon",
-    name: "Ravi Menon",
+    id: "elliot-park",
+    name: "Elliot Park",
     role: "Staff Engineer",
     company: COMPANIES.cartogram,
-    email: "ravi@cartogram.example",
+    email: "elliot@cartogram.example",
     area: AREA.product,
     relationship: "First design partner. Most demanding, most valuable.",
     favorite: true,
@@ -194,7 +194,7 @@ const PEOPLE: PersonSeed[] = [
       "Found the rename-across-sync-boundary bug within a week of installing.",
       "",
       "Runs a 40-person platform team. Uses the vault for RFC drafts and incident",
-      "notes, which is a heavier workload than the product was designed for — every",
+      "notes, which is a heavier workload than the product was designed for: every",
       "performance problem shows up in his vault first.",
       "",
       "Agreed to be a reference for [[Daniel Osei]].",
@@ -230,7 +230,7 @@ const PEOPLE: PersonSeed[] = [
       "CTO at a 60-person company in a regulated market. Cares about exactly one",
       "thing: that no vault content leaves the machine unless the user invoked it.",
       "",
-      "The bounded-network-actions design is the answer, and it holds up — but it",
+      "The bounded-network-actions design is the answer, and it holds up, but it",
       "needed to be written down properly before he would circulate it internally.",
     ].join("\n"),
   },
@@ -241,7 +241,7 @@ const PEOPLE: PersonSeed[] = [
     company: COMPANIES.cartogram,
     email: "hana@cartogram.example",
     area: AREA.product,
-    relationship: "Ravi's PM counterpart. Pushes on the Databases surface.",
+    relationship: "Elliot's PM counterpart. Pushes on the Databases surface.",
     addedOffset: -34,
     body: [
       "Uses tag tables the way most people use a spreadsheet. Filed the clearest",
@@ -271,11 +271,11 @@ const PEOPLE: PersonSeed[] = [
 
   // ── Team ──────────────────────────────────────────────────────────────────
   {
-    id: "alex-rivera",
-    name: "Alex Rivera",
+    id: "jordan-lee",
+    name: "Jordan Lee",
     role: "Founding Engineer",
     company: "Woodshed",
-    email: "alex@woodshed.example",
+    email: "jordan@woodshed.example",
     area: AREA.product,
     relationship: "Founding engineer. Owns the Rust side end to end.",
     favorite: true,
@@ -284,7 +284,7 @@ const PEOPLE: PersonSeed[] = [
       "Founding engineer. Owns the vault helpers, the watcher, and the search index.",
       "",
       "Wrote the atomic-write path and the iCloud direct-write fallback. If a record",
-      "gets corrupted, Alex finds out before the user does.",
+      "gets corrupted, Jordan finds out before the user does.",
       "",
       "Wants to know the runway number honestly rather than optimistically. Fair.",
     ].join("\n"),
@@ -318,7 +318,7 @@ const PEOPLE: PersonSeed[] = [
       "Owns the SQLite index and the normalized tag/wikilink edges.",
       "",
       "Rebuilt tag queries to read from edge tables instead of rescanning every",
-      "collection — the change that made large vaults usable.",
+      "collection: the change that made large vaults usable.",
     ].join("\n"),
   },
   {
@@ -346,7 +346,8 @@ const PEOPLE: PersonSeed[] = [
     company: "Independent",
     email: "lena@fischer.example",
     area: AREA.fundraise,
-    relationship: "Advisor. Made the Northwind intro. Talk to her before decisions.",
+    relationship:
+      "Advisor. Made the Cedar Grove intro. Talk to her before decisions.",
     favorite: true,
     addedOffset: -70,
     body: [
@@ -356,7 +357,7 @@ const PEOPLE: PersonSeed[] = [
       'Her framing, worth keeping: "You are not selling a note app. You are selling',
       'the claim that the files outlive the company. Lead with that or do not raise."',
       "",
-      "Made the [[Priya Raman]] introduction.",
+      "Made the [[Amara Okafor]] introduction.",
     ].join("\n"),
   },
   {
@@ -373,7 +374,7 @@ const PEOPLE: PersonSeed[] = [
       "claim against before it goes in a deck.",
       "",
       "Talked me out of promising conflict-free multi-device editing in the memo.",
-      "The honest version — last-write-wins with visible revisions — is a weaker",
+      "The honest version, last-write-wins with visible revisions, is a weaker",
       "claim and a defensible one.",
     ].join("\n"),
   },
@@ -482,4 +483,3 @@ export function buildPeople(w: VaultWriter, cal: Calendar): PersonRecord[] {
     role,
   }));
 }
-

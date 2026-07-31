@@ -1,8 +1,9 @@
 // Anchor-relative date arithmetic.
 //
 // Nothing in the demo dataset writes a literal date. Every timestamp is derived
-// from an anchor — demo day — so the vault is always current when it is
-// generated. This is the whole reason the built-in seed
+// from one demo-day anchor, so the dataset stays internally consistent and can
+// be frozen for repeatable presentations. This is the whole reason the built-in
+// seed
 // (`src-tauri/src/commands/seed.rs`, SEED_DATE = 2026-04-25) can't be used for
 // a live demo: it opens on an empty Cadence.
 //
@@ -24,7 +25,7 @@ const MS_PER_DAY = 86_400_000;
 function localOffset(isoDate: string, hours: number, minutes: number): string {
   const [year, month, day] = isoDate.split("-").map(Number);
   // Constructed in local time, so getTimezoneOffset() reports the offset in
-  // force on that date — DST included.
+  // force on that date, including DST.
   const local = new Date(year, month - 1, day, hours, minutes, 0, 0);
   const eastOfUtc = -local.getTimezoneOffset();
   const sign = eastOfUtc < 0 ? "-" : "+";
@@ -52,15 +53,6 @@ function parseIsoDate(iso: string): Date {
     throw new Error(`invalid calendar date: "${iso}"`);
   }
   return date;
-}
-
-/** Today in the machine's local timezone, as YYYY-MM-DD. */
-export function todayLocal(): string {
-  const now = new Date();
-  const local = new Date(
-    now.getTime() - now.getTimezoneOffset() * 60 * 1000,
-  );
-  return local.toISOString().slice(0, 10);
 }
 
 /**
@@ -106,7 +98,7 @@ export class Calendar {
     return cursor;
   }
 
-  /** Same, but searching backward — for "the last working day before X". */
+  /** Same, but searching backward for "the last working day before X". */
   toWeekdayBefore(offset: number): number {
     let cursor = offset;
     while (this.isWeekend(cursor)) cursor -= 1;
@@ -130,7 +122,7 @@ export class Calendar {
   }
 
   /**
-   * Local-style timestamp with no zone suffix, e.g. 2026-07-27T09:30:00.
+   * Local-style timestamp with no zone suffix, e.g. 2026-10-12T09:30:00.
    * Notes and table rows use this shape (see `seed.rs` note/table `created`).
    */
   atNaive(offset: number, time: string): string {
@@ -150,7 +142,8 @@ export class Calendar {
   }
 
   /**
-   * Offsets in `[from, to]` landing on a specific weekday — the backbone of
+   * Offsets in `[from, to]` landing on a specific weekday. This is the backbone
+   * of
    * recurring meetings (every Monday, every other Thursday…).
    */
   everyWeekdayNamed(from: number, to: number, target: Weekday): number[] {

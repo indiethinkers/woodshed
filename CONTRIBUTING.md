@@ -36,6 +36,10 @@ email fixtures containing real messages, credentials, generated `dist/`, or
 - Do not expose generic shell or filesystem permissions to the webview.
 - Route public URL fetches through `src-tauri/src/network.rs` and set explicit
   time, redirect, and response-size limits.
+- Keep interactive frame exceptions explicit. YouTube players may load from
+  YouTube-owned domains and send the current page URL as widget and HTTP
+  referrer data for native-webview compatibility. Disclose this behavior in
+  the security model and privacy notice.
 - Route Gmail and Hermes secrets through `CredentialBroker`; route iCal secrets
   through the operating-system credential store. Configuration files may contain
   only non-secret metadata and migration-only deserialization fields.

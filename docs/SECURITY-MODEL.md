@@ -28,8 +28,12 @@ The rendered body is additionally served under `default-src 'none'`, so no
 sender markup or CSS can reach the network even if sanitization is wrong. Remote
 image URLs are rewritten to Woodshed's bounded cache and load when the user
 opens a message; sender HTML never fetches them directly. The main webview also
-blocks arbitrary HTTP(S) image loads; YouTube embeds make no request until the
-user presses Play.
+blocks arbitrary HTTP(S) image loads. YouTube embeds are the exception: the
+webview CSP permits YouTube-owned frame origins and lazily loads YouTube's
+standard player when an embed is displayed. The frame uses `unsafe-url` and
+also supplies the current page URL as `widget_referrer` so YouTube can identify
+the player inside a native webview. YouTube controls the frame document and its
+subrequests; they do not pass through Woodshed's bounded Rust fetcher.
 
 ## Storage
 
@@ -49,6 +53,15 @@ list transport is backed by paginated SQLite summary rows; it neither scans the
 inbox nor crosses IPC with the whole corpus. Message bodies and HTML load only
 for an opened message, and thread lookup selects bounded indexed paths before
 opening matching records.
+
+Agent turns are process-owned background jobs recorded as bounded JSON files in
+`agent-runs/` under the application-data directory. A run stores its stable id,
+conversation id, submitted message context, streamed progress, terminal result,
+and error state. The webview can poll or cancel through narrow commands but does
+not own the network request. Completion writes one deterministic assistant
+message id to the vault transcript, and repeat finalization checks that id before
+writing. After an app restart, a queued or running record with no process-local
+owner becomes a recoverable failure when it is next read.
 
 Gmail App Passwords and custom Hermes bearer keys live in an atomic, owner-only
 (`0600`) `secrets.json` file under the application-data directory. It is
@@ -72,6 +85,11 @@ Public resource, calendar, oEmbed, and remote-image fetches:
 - enforce connect/overall timeouts, redirect limits, response-size limits, and
   a shared eight-request workload concurrency limit;
 - redact credentials, query strings, and fragments from logs.
+
+YouTube player frames are the documented exception to these Rust fetch limits.
+The main webview CSP permits YouTube-owned frame origins. The iframe sends the
+full Woodshed page URL as both referrer data and an explicit `widget_referrer`.
+Network activity inside the frame is controlled by YouTube.
 
 Resource budgets are enforced at ingress: text records and rendered email
 bodies are capped at 16 MiB, raw IMAP messages and calendar feed downloads at

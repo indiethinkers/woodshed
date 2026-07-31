@@ -11,6 +11,7 @@ const chatMock = vi.hoisted(() => ({
   setMessages: vi.fn(),
   status: "ready",
   stop: vi.fn(),
+  resumeStream: vi.fn().mockResolvedValue(undefined),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
 
@@ -45,17 +46,50 @@ vi.mock("@/lib/tauri", () => ({
         sessionKey: "",
       };
     }
-    if (command === "agent_chats_all") return [];
+    if (command === "agent_chats_all") {
+      return [
+        {
+          id: "agent-conversation-1",
+          path: "agent/agent-conversation-1.md",
+          title: "Reference review",
+          agent: "Hermes",
+          model: "synthetic-model",
+          created: "2031-02-03T12:00:00Z",
+          updated: "2031-02-03T12:00:00Z",
+          lastMessageCreated: null,
+          pinned: false,
+          messageCount: 0,
+          preview: "",
+        },
+      ];
+    }
+    if (command === "agent_chat_get") {
+      return {
+        id: "agent-conversation-1",
+        path: "agent/agent-conversation-1.md",
+        title: "Reference review",
+        agent: "Hermes",
+        model: "synthetic-model",
+        created: "2031-02-03T12:00:00Z",
+        updated: "2031-02-03T12:00:00Z",
+        pinned: false,
+        tags: ["agent"],
+        messages: [],
+      };
+    }
     return null;
   }),
 }));
 
 import {
   AgentSurface,
+  AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
+  toUiMessages,
 } from "./agent-surface";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
+import type { AgentRun } from "@/lib/agent/transport";
 
 describe("AgentSurface voice controls", () => {
   it("does not expose dictation or voice conversation controls", async () => {
@@ -79,6 +113,28 @@ describe("AgentSurface voice controls", () => {
       screen.queryByRole("button", { name: "Start voice conversation" }),
     ).not.toBeInTheDocument();
   });
+
+  it("asks the transport to reconnect after hydrating an existing chat", async () => {
+    window.localStorage.setItem(
+      "woodshed:agent:last-chat-id",
+      JSON.stringify({ id: "agent-conversation-1", at: Date.now() }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(chatMock.resumeStream).toHaveBeenCalled();
+    });
+    window.localStorage.removeItem("woodshed:agent:last-chat-id");
+  });
 });
 
 describe("AgentWorkIndicator", () => {
@@ -90,6 +146,104 @@ describe("AgentWorkIndicator", () => {
     expect(screen.queryByText("3 steps")).not.toBeInTheDocument();
     expect(screen.queryByText("Remote agent work")).not.toBeInTheDocument();
     expect(screen.queryByText("Response stream")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentRunBanner", () => {
+  it("offers an explicit retry for a failed durable run", () => {
+    const onRetry = vi.fn();
+    const failedRun: AgentRun = {
+      id: "agent-run-failed",
+      conversationId: "agent-conversation-1",
+      sessionId: "agent-conversation-1",
+      assistantMessageId: "agent-response-failed",
+      status: "failed",
+      createdAt: "2031-02-03T12:00:00Z",
+      updatedAt: "2031-02-03T12:00:02Z",
+      startedAt: "2031-02-03T12:00:01Z",
+      finishedAt: "2031-02-03T12:00:02Z",
+      inputMessage: {
+        id: "message-1",
+        role: "user",
+        createdAt: "2031-02-03T12:00:00Z",
+        content: "Review the reference.",
+      },
+      events: [],
+      finalResponse: null,
+      error: "The local agent was unavailable.",
+      retryOf: null,
+    };
+
+    render(<AgentRunBanner onRetry={onRetry} run={failedRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(screen.getByText("The local agent was unavailable.")).toBeInTheDocument();
+  });
+});
+
+describe("persisted agent attachments", () => {
+  it("restores attachment context as a file part instead of message text", () => {
+    const [message] = toUiMessages([
+      {
+        id: "message-1",
+        role: "user",
+        createdAt: "2031-02-03T12:00:00Z",
+        content:
+          "Review this reference.\n\nAttachments:\n- sample-diagram.png (image/png)",
+      },
+    ]);
+
+    expect(message.parts).toEqual([
+      { type: "text", text: "Review this reference." },
+      {
+        type: "file",
+        filename: "sample-diagram.png",
+        mediaType: "image/png",
+        url: "",
+      },
+    ]);
+  });
+
+  it("restores attachment-only messages with multiple file shapes", () => {
+    const [message] = toUiMessages([
+      {
+        id: "message-2",
+        role: "user",
+        createdAt: "2031-02-03T12:05:00Z",
+        content:
+          "Attachments:\n- sample-photo.jpg (image/jpeg)\n- reference-notes.txt",
+      },
+    ]);
+
+    expect(message.parts).toEqual([
+      {
+        type: "file",
+        filename: "sample-photo.jpg",
+        mediaType: "image/jpeg",
+        url: "",
+      },
+      {
+        type: "file",
+        filename: "reference-notes.txt",
+        mediaType: undefined,
+        url: "",
+      },
+    ]);
+  });
+
+  it("leaves malformed attachment-like prose as message text", () => {
+    const content = "Review these notes.\n\nAttachments:\nnot a file entry";
+    const [message] = toUiMessages([
+      {
+        id: "message-3",
+        role: "user",
+        createdAt: "2031-02-03T12:10:00Z",
+        content,
+      },
+    ]);
+
+    expect(message.parts).toEqual([{ type: "text", text: content }]);
   });
 });
 

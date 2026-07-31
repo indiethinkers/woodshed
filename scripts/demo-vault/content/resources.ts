@@ -17,8 +17,8 @@ interface ResourceSeed {
 }
 
 // Real URLs here are public, widely-linked documents (essays, project docs,
-// specifications). Everything else — anything resembling a private post, an
-// investor memo, a competitor's internal writing — is fictional and uses the
+// specifications). Everything else: anything resembling a private post, an
+// investor memo, a competitor's internal writing: is fictional and uses the
 // reserved `.example` TLD.
 const RESOURCES: ResourceSeed[] = [
   {
@@ -32,7 +32,7 @@ const RESOURCES: ResourceSeed[] = [
     tags: [TAGS.localFirst, "philosophy"],
     favorite: true,
     body: [
-      "The foundational text. The seven ideals are a genuinely useful checklist —",
+      "The foundational text. The seven ideals are a genuinely useful checklist.",
       "we fail two of them (real-time collaboration, seamless multi-device) and I",
       "would rather name that than pretend otherwise.",
       "",
@@ -75,9 +75,9 @@ const RESOURCES: ResourceSeed[] = [
     ],
     body: [
       "Reference for the search index. The prefix-index section is the part that",
-      "matters for as-you-type search — worth re-reading before touching the schema.",
+      "matters for as-you-type search: worth re-reading before touching the schema.",
       "",
-      "Relevant to [[RFC — warm the search index at launch]].",
+      "Relevant to [[RFC: warm the search index at launch]].",
     ].join("\n"),
   },
   {
@@ -89,8 +89,8 @@ const RESOURCES: ResourceSeed[] = [
     time: "11:20",
     tags: ["engineering", TAGS.dd],
     body: [
-      "The capability model — frontend treated as untrusted, permissions granted",
-      "explicitly per window — is why our webview has no general filesystem access.",
+      "The capability model treats the frontend as untrusted and grants permissions",
+      "explicitly per window. That is why our webview has no general filesystem access.",
       "",
       "Cited directly in [[When does data leave the machine?]].",
     ].join("\n"),
@@ -130,7 +130,7 @@ const RESOURCES: ResourceSeed[] = [
       "",
       "The private-draft-then-publish model is closer to what a shared vault should",
       "feel like than real-time multiplayer is. Directly relevant to",
-      "[[RFC — shared vaults (sketch)]].",
+      "[[RFC: shared vaults (sketch)]].",
     ].join("\n"),
   },
   {
@@ -169,16 +169,16 @@ const RESOURCES: ResourceSeed[] = [
       "Sent by [[Mei Watanabe]] before the Foundry Line diligence call. Read it",
       "before agreeing to any second cap.",
       "",
-      "Ran our own numbers against this — the current stack is clean because every",
+      "Ran our own numbers against this: the current stack is clean because every",
       `commit is at the same cap. Keep it that way.`,
     ].join("\n"),
   },
   {
     id: "what-partners-actually-read",
     title: "What a partner actually reads in your memo",
-    url: "https://writing.northwind.example/memo-reading",
-    source: "writing.northwind.example",
-    author: "Priya Raman",
+    url: "https://writing.cedargrove.example/memo-reading",
+    source: "writing.cedargrove.example",
+    author: "Amara Okafor",
     offset: -51,
     time: "06:40",
     tags: [TAGS.fundraise, TAGS.positioning],
@@ -186,8 +186,8 @@ const RESOURCES: ResourceSeed[] = [
       "I read the traction section first, then I go looking for the paragraph where you admit what is not working. If there isn't one, I stop reading.",
     ],
     body: [
-      "[[Priya Raman]]'s own writing, found before the first call. The highlight is",
-      "why [[Seed investor memo]] has an explicit objection section — it is not",
+      "[[Amara Okafor]]'s own writing, found before the first call. The highlight is",
+      "why [[Seed investor memo]] has an explicit objection section: it is not",
       "candour for its own sake, it is what this reader is looking for.",
     ].join("\n"),
   },
@@ -242,7 +242,7 @@ const RESOURCES: ResourceSeed[] = [
       "Willingness to pay for a daily-use desktop tool clusters at $8-12/month and again at $18-25/month, with almost nothing between.",
     ],
     body: [
-      "The bimodal distribution is interesting and slightly reassuring — $20/month",
+      "The bimodal distribution is interesting and slightly reassuring: $20/month",
       "sits in the upper cluster rather than in the dead zone.",
       "",
       "Still a guess though. See point 4 of [[Questions I still cannot answer well]].",
@@ -261,7 +261,7 @@ const RESOURCES: ResourceSeed[] = [
     ],
     body: [
       "Relevant to the competitors question. A mature plugin ecosystem is a real",
-      "moat against newcomers and a real constraint on first-party features — which",
+      "moat against newcomers and a real constraint on first-party features, which",
       "is the narrow gap this product lives in.",
       "",
       "Feeds question 2 of [[Questions I still cannot answer well]].",
@@ -279,17 +279,17 @@ const RESOURCES: ResourceSeed[] = [
     body: [
       "Read this again after the iCloud data-loss bug. Sobering.",
       "",
-      "The survey of what filesystems actually guarantee under crash — as opposed to",
-      "what everyone assumes they guarantee — is the part to reread.",
+      "The survey of what filesystems actually guarantee during a crash, rather than",
+      "what everyone assumes they guarantee, is the part to reread.",
       "",
-      "The direct-write fallback in [[RFC — iCloud direct-write fallback]] has a",
-      "crash window this article describes precisely. The mitigation — write a",
-      "revision first — is still not done.",
+      "The direct-write fallback in [[RFC: iCloud direct-write fallback]] has a",
+      "crash window this article describes precisely. The mitigation is to write a",
+      "revision first, and it is still not done.",
     ].join("\n"),
   },
   {
     id: "tanstack-query-docs",
-    title: "TanStack Query — query invalidation",
+    title: "TanStack Query: query invalidation",
     url: "https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation",
     source: "tanstack.com",
     offset: -55,
@@ -315,7 +315,7 @@ const RESOURCES: ResourceSeed[] = [
     ],
     body: [
       "[[Ana Ferreira]]'s writing on updates. This is where the rule in",
-      "[[Investor update — format]] came from — never swap the headline metric for",
+      "[[Investor update: format]] came from: never swap the headline metric for",
       "whichever one moved.",
     ].join("\n"),
   },
@@ -351,7 +351,7 @@ const RESOURCES: ResourceSeed[] = [
       "Ask what they did last Tuesday. Feature requests are hypotheses about their own behaviour, and people are bad at those.",
     ],
     body: [
-      "[[Sofia Duarte]] on interview technique. Changed how I run these — the",
+      "[[Sofia Duarte]] on interview technique. Changed how I run these: the",
       "backlinks-as-CRM insight in her own interview only surfaced because I asked",
       "what she actually did before a 1:1 rather than what she wanted.",
     ].join("\n"),
@@ -370,13 +370,13 @@ const RESOURCES: ResourceSeed[] = [
     ],
     body: [
       "[[Theo Almeida]]'s piece. He wants to cover the launch and this is a good",
-      "signal of the angle he would take — trust rather than performance.",
+      "signal of the angle he would take: trust rather than performance.",
       "",
       "Time the outreach to the round closing.",
     ].join("\n"),
   },
   {
-    id: "yc-application-advice",
+    id: "launchpad-application-advice",
     title: "Notes on writing a strong accelerator application",
     url: "https://advice.fischer.example/applications",
     source: "advice.fischer.example",
@@ -390,8 +390,8 @@ const RESOURCES: ResourceSeed[] = [
     body: [
       "[[Lena Fischer]]'s advice, sent unprompted when she heard I was applying.",
       "",
-      "Used it to cut the first draft of [[YC W27 application — draft answers]] hard.",
-      "The \"why now\" answer still fails this test and needs another pass.",
+      "Used it to cut the first draft of [[Launchpad Fall application: draft answers]] hard.",
+      'The "what changed" answer still fails this test and needs another pass.',
     ].join("\n"),
   },
   {
@@ -407,7 +407,7 @@ const RESOURCES: ResourceSeed[] = [
       "Any transport the participants already trust is a valid sync layer. The hard part was never transport.",
     ],
     body: [
-      "Underpins the transport-agnostic part of [[RFC — shared vaults (sketch)]].",
+      "Underpins the transport-agnostic part of [[RFC: shared vaults (sketch)]].",
       "",
       "The point that stuck: the hard problem is conflict presentation, not moving",
       "bytes. We keep wanting it to be the other way round because moving bytes is",
@@ -483,7 +483,7 @@ const RESOURCES: ResourceSeed[] = [
       "[[Hana Sato]] arguing against the thing she is currently asking me for, which",
       "is why it is worth reading.",
       "",
-      "Relevant to the Databases scope fight — every request is reasonable in",
+      "Relevant to the Databases scope fight: every request is reasonable in",
       "isolation and the aggregate is a different product.",
     ].join("\n"),
   },

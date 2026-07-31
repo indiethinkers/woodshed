@@ -80,7 +80,9 @@ const PIPELINE_VIEWS: ViewInput[] = [
     sorts: [{ column: "col_check", direction: "desc" }],
     filters: {
       op: "and",
-      conditions: [{ column: "col_stage", op: "is_not", value: "stage_passed" }],
+      conditions: [
+        { column: "col_stage", op: "is_not", value: "stage_passed" },
+      ],
     },
     hidden: ["col_conviction"],
     calculations: { col_check: "sum" },
@@ -101,17 +103,17 @@ interface PipelineRow {
 
 const PIPELINE_ROWS: PipelineRow[] = [
   {
-    id: "row_northwind",
-    firm: FIRMS.northwind,
+    id: "row_cedargrove",
+    firm: FIRMS.cedargrove,
     stage: "stage_dd",
     check: 1_500_000,
-    contact: "Priya Raman",
-    next: "Partner meeting — decision",
+    contact: "Amara Okafor",
+    next: "Partner meeting: decision",
     conviction: "conv_high",
     lastOffset: -30,
     body: [
       "Lead candidate. Needs the retention cut by acquisition source, still not",
-      "sent. See [[Retention — what the number actually says]].",
+      "sent. See [[Retention: what the number actually says]].",
     ].join("\n"),
   },
   {
@@ -123,7 +125,7 @@ const PIPELINE_ROWS: PipelineRow[] = [
     next: "Terms conversation",
     conviction: "conv_high",
     lastOffset: -18,
-    body: "References done — [[Ravi Menon]] and [[Sofia Duarte]] both landed well.",
+    body: "References done: [[Elliot Park]] and [[Sofia Duarte]] both landed well.",
   },
   {
     id: "row_ridgeline",
@@ -165,15 +167,15 @@ const PIPELINE_ROWS: PipelineRow[] = [
     next: "Re-approach at Series A with a team plan",
     conviction: "conv_low",
     lastOffset: -21,
-    body: "[[Halyard passed — postmortem]]. Clean reason, delivered on a call.",
+    body: "[[Halyard passed: postmortem]]. Clean reason, delivered on a call.",
   },
   {
     id: "row_brightwater",
     firm: "Brightwater",
     stage: "stage_first",
     check: 500_000,
-    contact: "—",
-    next: "Follow up after Northwind decision",
+    contact: "Maya Brooks",
+    next: "Follow up after Cedar Grove decision",
     conviction: "conv_medium",
     lastOffset: -24,
     body: "Warm but slow. Deliberately not pushing until the lead is settled.",
@@ -183,7 +185,7 @@ const PIPELINE_ROWS: PipelineRow[] = [
     firm: "Kestrel Fund",
     stage: "stage_intro",
     check: 400_000,
-    contact: "—",
+    contact: "Owen Grant",
     next: "Intro made, no call booked",
     conviction: "conv_medium",
     lastOffset: -26,
@@ -193,7 +195,7 @@ const PIPELINE_ROWS: PipelineRow[] = [
     firm: "Lanternfield Partners",
     stage: "stage_target",
     check: 0,
-    contact: "—",
+    contact: "Avery Morgan",
     next: "Only if the round needs filling",
     conviction: "conv_low",
     lastOffset: -50,
@@ -203,7 +205,7 @@ const PIPELINE_ROWS: PipelineRow[] = [
     firm: "Stonebridge",
     stage: "stage_target",
     check: 0,
-    contact: "—",
+    contact: "Taylor Reed",
     next: "Not approached",
     conviction: "conv_low",
     lastOffset: -50,
@@ -213,8 +215,8 @@ const PIPELINE_ROWS: PipelineRow[] = [
     firm: "Marrow Capital",
     stage: "stage_passed",
     check: 0,
-    contact: "—",
-    next: "Passed at intro — thesis mismatch",
+    contact: "Devon Price",
+    next: "Passed at intro: thesis mismatch",
     conviction: "conv_low",
     lastOffset: -45,
     body: "Passed before a call. Writes only infrastructure. Correctly filtered.",
@@ -282,7 +284,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_cartogram",
     company: COMPANIES.cartogram,
-    champion: "Ravi Menon",
+    champion: "Elliot Park",
     seats: 40,
     tier: "tier_anchor",
     activatedOffset: -60,
@@ -290,7 +292,7 @@ const PARTNER_ROWS: PartnerRow[] = [
     signals: ["sig_reference", "sig_large_vault"],
     body: [
       "First design partner and the source of the iCloud data-loss bug. Roughly 900",
-      "files — every performance problem shows up here first.",
+      "files: every performance problem shows up here first.",
     ].join("\n"),
   },
   {
@@ -332,7 +334,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_quarry",
     company: "Quarry Labs",
-    champion: "—",
+    champion: "Riley Moss",
     seats: 8,
     tier: "tier_active",
     activatedOffset: -33,
@@ -342,7 +344,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_havershore",
     company: "Havershore",
-    champion: "—",
+    champion: "Cameron Ward",
     seats: 5,
     tier: "tier_trial",
     activatedOffset: -20,
@@ -353,7 +355,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_pinegrove",
     company: "Pinegrove Studio",
-    champion: "—",
+    champion: "Noah Bennett",
     seats: 4,
     tier: "tier_trial",
     activatedOffset: -16,
@@ -363,7 +365,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_ashfield",
     company: "Ashfield Research",
-    champion: "—",
+    champion: "Mina Patel",
     seats: 6,
     tier: "tier_active",
     activatedOffset: -28,
@@ -373,7 +375,7 @@ const PARTNER_ROWS: PartnerRow[] = [
   {
     id: "row_wrenly",
     company: "Wrenly",
-    champion: "—",
+    champion: "Leo Martin",
     seats: 3,
     tier: "tier_trial",
     activatedOffset: -11,
@@ -396,7 +398,13 @@ const METRIC_COLUMNS: ColumnInput[] = [
     format: "percent",
     precision: 0,
   },
-  { id: "col_mrr", name: "MRR", type: "number", format: "us_dollar", precision: 0 },
+  {
+    id: "col_mrr",
+    name: "MRR",
+    type: "number",
+    format: "us_dollar",
+    precision: 0,
+  },
   { id: "col_note", name: "Note", type: "text", width: 320 },
 ];
 
@@ -416,7 +424,7 @@ const METRIC_NOTES = [
   "Local-first essay picked up in two newsletters.",
   "Cartogram expanded to 40 seats.",
   "iCloud data-loss bug found and fixed.",
-  "Paid beta opened quietly — no announcement.",
+  "Paid beta opened quietly: no announcement.",
   "Meridian rollout. First reference call.",
   "Index warmup shipped; first-query latency gone.",
   "Security document unblocked the Ostrich review.",
@@ -499,7 +507,9 @@ export function buildTables(w: VaultWriter, cal: Calendar): void {
         col_week: cal.day(weekOffset),
         col_wau: wau,
         // Retention climbs toward the current figure rather than being flat.
-        col_retention: Math.round(METRICS.weekFourRetention * (0.72 + 0.28 * share)),
+        col_retention: Math.round(
+          METRICS.weekFourRetention * (0.72 + 0.28 * share),
+        ),
         col_mrr: Math.round((METRICS.mrr * share) / 50) * 50,
         col_note: METRIC_NOTES[index],
       },
