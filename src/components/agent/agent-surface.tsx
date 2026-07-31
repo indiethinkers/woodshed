@@ -2177,13 +2177,13 @@ function AgentComposer({
           // className lands on the form; the visible box + border come from the
           // inner InputGroup (data-slot="input-group"), so neutralize its border,
           // bg, and focus ring there and let the form provide the surface.
-          // !ring-0 beats InputGroup's focus-visible ring-3. A modest 14px
-          // radius reads as a text field (not a search pill); the full surface
-          // stays opaque while the compact sidebar variant blends into bg-list.
-          "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:border-0 [&>[data-slot=input-group]]:bg-transparent [&>[data-slot=input-group]]:!ring-0",
+          // !ring-0 beats InputGroup's focus-visible ring-3. The full Agent
+          // uses one transparent outlined pill; the compact sidebar variant
+          // keeps its denser filled treatment.
+          "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:!border-0 [&>[data-slot=input-group]]:!bg-transparent [&>[data-slot=input-group]]:!ring-0",
           compact
             ? "rounded-[16px] border-foreground/35 bg-input/80 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-foreground/45 focus-within:border-foreground/55 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_10%,transparent)]"
-            : "rounded-full border-foreground/30 shadow-none hover:border-foreground/40 focus-within:border-foreground/50 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_8%,transparent)]",
+            : "rounded-full border-foreground/30 bg-transparent shadow-none hover:border-foreground/40 focus-within:border-foreground/50 focus-within:shadow-none [&>[data-slot=input-group]]:!opacity-100",
           className,
         )}
         maxFiles={4}
@@ -2239,7 +2239,7 @@ function AgentComposer({
               </PromptInputSubmit>
             ) : (
               <PromptInputSubmit
-                className="size-8 shrink-0 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
+                className="size-8 shrink-0 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90 disabled:opacity-100"
                 disabled={!hasText || (configResolved && !canSubmit)}
                 onStop={stop}
                 status={status}

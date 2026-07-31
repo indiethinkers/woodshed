@@ -134,9 +134,19 @@ describe("AgentSurface voice controls", () => {
     expect(composer).toHaveClass(
       "rounded-full",
       "border-foreground/30",
+      "bg-transparent",
       "shadow-none",
     );
+    expect(composer).toHaveClass(
+      "[&>[data-slot=input-group]]:!border-0",
+      "[&>[data-slot=input-group]]:!bg-transparent",
+      "[&>[data-slot=input-group]]:!opacity-100",
+      "[&>[data-slot=input-group]]:!ring-0",
+    );
     expect(textarea).toHaveClass("placeholder:text-muted-foreground");
+    expect(screen.getByRole("button", { name: "Submit" })).toHaveClass(
+      "disabled:opacity-100",
+    );
   });
 
   it("asks the transport to reconnect after hydrating an existing chat", async () => {

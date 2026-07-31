@@ -15,7 +15,7 @@ import Typography from "@tiptap/extension-typography";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { TextSelection } from "@tiptap/pm/state";
-import type { Node as PMNode, NodeType } from "prosemirror-model";
+import { Fragment, type Node as PMNode, type NodeType } from "prosemirror-model";
 import {
   YoutubeResource,
   YOUTUBE_URL_RE,
@@ -1486,6 +1486,7 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     from: number;
     to: number;
     text: string;
+    node: PMNode;
     parent: PMNode | null;
     /** Child index within `parent`, for schema-validity checks. */
     index: number;
@@ -1508,6 +1509,7 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
       from: pos,
       to: pos + child.nodeSize,
       text: child.textContent.trim(),
+      node: child,
       parent: parent ?? null,
       index: doc.resolve(pos).index(),
     });
@@ -1527,8 +1529,43 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     return parent.canReplaceWith(fromIndex, p.index + 1, type);
   };
 
-  type Repl = { from: number; to: number; node: PMNode };
+  type Repl = { from: number; to: number; content: PMNode | Fragment };
   const replacements: Repl[] = [];
+
+  const replacementForUrlParagraph = (
+    paragraph: Para,
+    embed: PMNode,
+  ): Repl | null => {
+    if (canHostEmbed(paragraph, paragraph.index, embed.type)) {
+      return { from: paragraph.from, to: paragraph.to, content: embed };
+    }
+
+    // A list item must start with a paragraph, so a URL-only Cadence row
+    // cannot be replaced by a block atom directly. Keep the required lead
+    // paragraph (and its timestamp, when present), then put the card after
+    // it. This preserves the list schema while reconstructing the embed that
+    // was visible before the Markdown round trip.
+    if (
+      paragraph.parent?.type.name !== "listItem" ||
+      paragraph.index !== 0 ||
+      paragraph.node.type.name !== "paragraph"
+    ) {
+      return null;
+    }
+    const timestamp =
+      paragraph.node.firstChild?.type.name === "dailyTimestamp"
+        ? paragraph.node.firstChild
+        : null;
+    const lead = paragraph.node.type.create(
+      paragraph.node.attrs,
+      timestamp ?? undefined,
+    );
+    const content = Fragment.fromArray([lead, embed]);
+    if (!paragraph.parent.canReplace(paragraph.index, paragraph.index + 1, content)) {
+      return null;
+    }
+    return { from: paragraph.from, to: paragraph.to, content };
+  };
 
   for (let i = 0; i < paragraphs.length; i++) {
     const p = paragraphs[i];
@@ -1553,14 +1590,14 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
           replacements.push({
             from: prev!.from,
             to: p.to,
-            node: ytType.create({ url: p.text, videoId: yt[1] }),
+            content: ytType.create({ url: p.text, videoId: yt[1] }),
           });
-        } else if (canHostEmbed(p, p.index, ytType)) {
-          replacements.push({
-            from: p.from,
-            to: p.to,
-            node: ytType.create({ url: p.text, videoId: yt[1] }),
-          });
+        } else {
+          const replacement = replacementForUrlParagraph(
+            p,
+            ytType.create({ url: p.text, videoId: yt[1] }),
+          );
+          if (replacement) replacements.push(replacement);
         }
       }
       continue;
@@ -1569,12 +1606,12 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
     const tw = p.text.match(TWEET_URL_RE);
     if (tw && tw[0] === p.text) {
       const twType = schema.nodes.twitter;
-      if (twType && canHostEmbed(p, p.index, twType)) {
-        replacements.push({
-          from: p.from,
-          to: p.to,
-          node: twType.create({ url: p.text, tweetId: tw[2], handle: tw[1] }),
-        });
+      if (twType) {
+        const replacement = replacementForUrlParagraph(
+          p,
+          twType.create({ url: p.text, tweetId: tw[2], handle: tw[1] }),
+        );
+        if (replacement) replacements.push(replacement);
       }
       continue;
     }
@@ -1587,7 +1624,7 @@ function replaceUrlParagraphsWithEmbeds(editor: Editor) {
   // splices we already performed.
   for (let i = replacements.length - 1; i >= 0; i--) {
     const r = replacements[i];
-    tr = tr.replaceWith(r.from, r.to, r.node);
+    tr = tr.replaceWith(r.from, r.to, r.content);
   }
   if (!tr.docChanged) return;
   // Leave ProseMirror's mapped selection alone. Forcing the selection to the

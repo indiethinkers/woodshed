@@ -154,7 +154,7 @@ describe("DailyContent notes editor", () => {
     expect(timestamp?.getAttribute("data-time")).toBe("09:30");
     expect(container.querySelectorAll("[data-daily-timestamp]")).toHaveLength(1);
     expect(styles).toMatch(
-      /\[data-daily-timestamp\]\s*\{[^}]*position:\s*absolute;[^}]*right:\s*calc\(100% \+ 0\.75rem\);[^}]*font-variant-numeric:\s*tabular-nums;/s,
+      /\[data-daily-timestamp\]\s*\{[^}]*position:\s*absolute;[^}]*right:\s*calc\(100% \+ 1\.75rem\);[^}]*font-variant-numeric:\s*tabular-nums;/s,
     );
     expect(styles).toMatch(
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,

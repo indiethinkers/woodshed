@@ -3,8 +3,8 @@
 // the list item couldn't legally host, ProseMirror's slice-fitter mangled
 // the list (timestamp destroyed, bullet emptied), and the editor's autosave
 // rewrote the whole file from the mangled doc. These tests pin down the two
-// fixes: (1) the URL→embed transform only fires where the embed is
-// schema-legal, and (2) loading or ingesting a file never produces a commit.
+// fixes: (1) the URL→embed transform always produces schema-legal list
+// content, and (2) loading or ingesting a file never produces a commit.
 import { beforeAll, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -192,6 +192,54 @@ function setDomCursorInside(element: Element) {
 }
 
 describe("TiptapEditor URL embeds (daily journal)", () => {
+  it("reopens an autosaved Cadence tweet as an embed after an app refresh", async () => {
+    const commits: string[] = [];
+    const lead = "Synthetic entry with an attached post:";
+    const tweetUrl =
+      "https://x.com/sample_account/status/1234567890123456789";
+    const mounted = mountOutlineEditor(`- [09:30] ${lead}`, (next) =>
+      commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, lead);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? tweetUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(mounted.container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(saved).toContain(tweetUrl);
+    expect(saved).toMatch(/^-\s*$/m);
+
+    mounted.unmount();
+    const persisted = stripEmptyTimestampBulletsFromMarkdown(saved);
+    const reopened = mountOutlineEditor(persisted, () => undefined);
+    await waitFor(() => {
+      expect(reopened.container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    expect(reopened.container.textContent).not.toContain(tweetUrl);
+  }, 20000);
+
   it("renders a pasted embed on the cursor's current empty line", async () => {
     const tweetUrl = "https://x.com/sample_account/status/987654321";
     const { container } = mountFreeformEditor(
@@ -454,14 +502,14 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     // Loading a file is not an edit: nothing may be written back.
     expect(commits).toEqual([]);
 
-    // The URL inside the timestamped bullet stays plain text — converting
-    // it would destroy the bullet (listItem can't host a block atom first).
-    expect(container.textContent).toContain(BULLET_URL);
+    // URL-only list rows retain their required lead paragraph and timestamp,
+    // then render the card as the next block inside that same list item.
+    expect(container.textContent).not.toContain(BULLET_URL);
 
     // The top-level `#resource #youtube` + URL block still converts.
     expect(
-      container.querySelectorAll("[data-youtube-resource], iframe").length,
-    ).toBeGreaterThan(0);
+      container.querySelectorAll("[data-youtube-resource]").length,
+    ).toBe(2);
     expect(container.textContent).not.toContain(BLOCK_URL);
 
     // All four capture timestamps survive.
@@ -504,7 +552,7 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       "A second note right after the URL.",
     );
     expect(container.textContent).toContain("First note of the day");
-    expect(container.textContent).toContain(BULLET_URL);
+    expect(container.textContent).not.toContain(BULLET_URL);
   }, 20000);
 
   it("deletes a YouTube embed from the editor control", async () => {
@@ -523,15 +571,17 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       ).toBeTruthy();
     });
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete YouTube embed"]',
-    );
+    const deleteButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Delete YouTube embed"]',
+      ),
+    ).at(-1);
     expect(deleteButton).toBeTruthy();
     fireEvent.mouseDown(deleteButton!);
     fireEvent.click(deleteButton!);
 
     await waitFor(() => {
-      expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+      expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     });
     await sleep(SETTLE_MS);
 
@@ -557,14 +607,16 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       ).toBeTruthy();
     });
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete YouTube embed"]',
-    );
+    const deleteButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="Delete YouTube embed"]',
+      ),
+    ).at(-1);
     fireEvent.mouseDown(deleteButton!);
     fireEvent.click(deleteButton!);
 
     await waitFor(() => {
-      expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+      expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     });
 
     const externalAppend =
@@ -572,7 +624,7 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     rerender(ui(externalAppend));
     await sleep(SETTLE_MS);
 
-    expect(container.querySelector("[data-youtube-resource]")).toBeNull();
+    expect(container.querySelectorAll("[data-youtube-resource]")).toHaveLength(1);
     expect(container.textContent).not.toContain("External append while dirty.");
     expect(commits.at(-1)).not.toContain(BLOCK_URL);
     expect(commits.at(-1)).not.toContain("External append while dirty.");

@@ -240,19 +240,13 @@ fn write_row(state: &State<AppState>, abs_path: &Path, row: &ParsedRow) -> Resul
     vault_lib::write_atomic(abs_path, &serialized).map_err(|e| e.to_string())
 }
 
-fn upsert_row_index(
-    app: &AppHandle,
-    state: &State<AppState>,
-    vault: &Path,
-    abs_path: &Path,
-    row: &ParsedRow,
-) {
+fn refresh_index_path(app: &AppHandle, state: &State<AppState>, vault: &Path, abs_path: &Path) {
     let Ok(idx) = state.ensure_index(app) else {
         return;
     };
-    let rel = crate::index::rel_path_str(vault, abs_path);
-    if let Err(e) = idx.upsert(&crate::index::doc_from_row(row, &rel)) {
-        eprintln!("index row {} failed: {}", rel, e);
+    if let Err(e) = idx.refresh_path(vault, abs_path) {
+        let rel = crate::index::rel_path_str(vault, abs_path);
+        eprintln!("index table record {} failed: {}", rel, e);
     }
 }
 
@@ -346,6 +340,7 @@ pub fn table_create(
     };
     let path = schema_path(&vault, &id)?;
     write_schema(&state, &path, &table)?;
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(TableDto::from_parsed(table, &vault, &path))
 }
 
@@ -385,6 +380,7 @@ pub fn table_update(
     }
 
     write_schema(&state, &path, &table)?;
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(TableDto::from_parsed(table, &vault, &path))
 }
 
@@ -398,9 +394,7 @@ pub fn table_delete(app: AppHandle, state: State<AppState>, id: String) -> Resul
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md")
-                && path.file_name().and_then(|s| s.to_str()) != Some(SCHEMA_FILE)
-            {
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 delete_index_path(&app, &state, &vault, &path);
             }
         }
@@ -568,7 +562,7 @@ pub fn row_create(
     };
     let path = row_path(&vault, &table_id, &row_id)?;
     write_row(&state, &path, &row)?;
-    upsert_row_index(&app, &state, &vault, &path, &row);
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(RowDto::from_parsed(row, &vault, &path))
 }
 
@@ -609,7 +603,7 @@ pub fn row_update(
     }
 
     write_row(&state, &path, &row)?;
-    upsert_row_index(&app, &state, &vault, &path, &row);
+    refresh_index_path(&app, &state, &vault, &path);
     Ok(RowDto::from_parsed(row, &vault, &path))
 }
 
@@ -650,7 +644,7 @@ pub fn row_reorder(
         let mut row = parsers::parse_row(&content).map_err(|e| format!("{:#}", e))?;
         row.sort_key = Some((index as f64 + 1.0) * 1000.0);
         write_row(&state, &path, &row)?;
-        upsert_row_index(&app, &state, &vault, &path, &row);
+        refresh_index_path(&app, &state, &vault, &path);
         rows.push(RowDto::from_parsed(row, &vault, &path));
     }
     Ok(rows)

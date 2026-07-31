@@ -444,7 +444,7 @@
   > [data-daily-timestamp] {
   position: absolute;
   top: 0.25rem;
-  right: calc(100% + 0.75rem);
+  right: calc(100% + 1.75rem);
   width: 3rem;
   color: color-mix(in srgb, var(--muted-foreground) 62%, transparent);
   font-family: var(--font-mono);

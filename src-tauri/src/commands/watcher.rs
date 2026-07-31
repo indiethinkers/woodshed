@@ -182,15 +182,13 @@ pub fn watcher_start(
     // UI is interactive immediately and search results trickle in as the
     // scan progresses. Emit start/done events for a quiet UI indicator.
     let index_handle = state.ensure_index(&app)?;
-    let tag_index_stale = index_handle
-        .requires_tag_index_rebuild()
-        .unwrap_or_else(|e| {
-            crate::log_error!("index", "tag index version check failed: {}", e);
-            true
-        });
+    let index_projection_stale = index_handle.requires_index_rebuild().unwrap_or_else(|e| {
+        crate::log_error!("index", "tag index version check failed: {}", e);
+        true
+    });
     let should_rebuild = match index_handle.document_count() {
         Ok(0) => true,
-        Ok(_) => migration_changed || tag_index_stale,
+        Ok(_) => migration_changed || index_projection_stale,
         Err(e) => {
             crate::log_error!("index", "document_count failed: {}", e);
             false
