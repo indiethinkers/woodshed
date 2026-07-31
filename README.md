@@ -142,6 +142,7 @@ data directory:
 | `<app_data_dir>/secrets.json` | Owner-only Gmail and custom Hermes secrets |
 | `<app_data_dir>/index.db` | SQLite FTS5 search and graph indexes |
 | `<app_data_dir>/gcal-cache/` | Parsed read-only iCal event caches |
+| `<app_data_dir>/agent-runs/` | Durable Agent job status, progress, and results |
 | `<app_data_dir>/woodshed.log` | Size-capped diagnostics log |
 
 Deleting the search index or calendar cache does not delete vault records.

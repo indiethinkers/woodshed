@@ -19,7 +19,10 @@ through Woodshed's bounded cache.
 
 - The selected vault contains Markdown records, synced mail, and attachments.
 - The application-data directory contains non-secret preferences, a rebuildable
-  SQLite search index, a rebuildable iCal event cache, and rotating local logs.
+  SQLite search index, a rebuildable iCal event cache, durable Agent run records,
+  and rotating local logs. Agent run records include submitted message context,
+  progress events, final responses, and errors so a request can survive page
+  navigation or reload.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. Local Hermes keys are
@@ -74,7 +77,8 @@ sharing them publicly.
 
 ## Retention and deletion
 
-Vault records persist until you remove them. In-app record deletion moves files
+Vault records persist until you remove them. Agent run records currently persist
+in the application-data directory until that directory is removed. In-app record deletion moves files
 to `.woodshed/trash/` inside the vault so they can be recovered or permanently
 removed by you. Uninstalling the app does not delete the vault.
 

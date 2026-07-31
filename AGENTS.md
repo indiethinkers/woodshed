@@ -268,6 +268,7 @@ and not necessarily beside the vault.
 ├── demo-clock.json             Optional local demo clock scoped to one vault
 ├── index.db                    Derived FTS5 index
 ├── gcal-cache/<account>.json   Derived iCal event caches
+├── agent-runs/<run>.json       Durable Agent job state and progress
 └── woodshed.log                Rotating application log
 ```
 
@@ -425,8 +426,15 @@ bounded cache by default; never let sender HTML fetch remote URLs directly.
 
 ### Agent and Sweep
 
-Agent chats are durable vault records. Requests go directly to the configured
-Hermes-compatible endpoint only after explicit user action.
+Agent chats are durable vault records. Each submitted turn also creates a
+durable job under `<app_data_dir>/agent-runs/`; a process-owned task executes it
+and finalizes one stable assistant message in the transcript. The Agent UI polls
+that record so navigation and reload only detach the view, not the request.
+Queued or running records without a live process owner are marked failed on the
+next read after restart. Retry never resets that record; it creates a new run
+whose `retryOf` field points to the failed run. Requests go
+directly to the configured Hermes-compatible endpoint only after explicit user
+action.
 
 A loopback endpoint authenticates without a pasted token: Woodshed resolves the
 key from the local Hermes profile that owns the configured API port, reading

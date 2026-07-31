@@ -1,3 +1,4 @@
+use crate::agent::runs::{self, AgentRunCreateInput, AgentRunDto, AgentRunRecord};
 use crate::agent::{
     self, AgentChatCreateInput, AgentChatInput, AgentChatRecord, AgentChatStreamEvent,
     AgentChatStreamInput, AgentChatSummary, AgentChatUpdateInput, AgentConfig, AgentConfigInput,
@@ -7,10 +8,19 @@ use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::AppState;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, State};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
+const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+struct AgentRunProgress {
+    response: String,
+    pending_events: Vec<agent::AgentStreamEvent>,
+    last_flush: Instant,
+}
 
 #[tauri::command]
 pub fn agent_config_get(app: AppHandle) -> Result<AgentConfig, String> {
@@ -119,6 +129,94 @@ pub fn agent_chat_stream(app: AppHandle, input: AgentChatStreamInput) -> Result<
     Ok(())
 }
 
+/// Create a persisted run and return before its Hermes request completes.
+/// The process-owned task below, rather than the invoking webview, owns the
+/// request. The UI can therefore reconnect by run id after navigation/reload.
+#[tauri::command]
+pub fn agent_run_create(
+    app: AppHandle,
+    state: State<AppState>,
+    input: AgentRunCreateInput,
+) -> Result<AgentRunDto, String> {
+    let app_data = app_data_dir(&app)?;
+    let now = chrono::Local::now().to_rfc3339();
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let (mut run, created) = runs::create_or_get(&app_data, input.into(), &now)?;
+    if !created {
+        return Ok(AgentRunDto::from(&run));
+    }
+
+    if let Err(error) = ensure_run_user_message(&app, &state, &run) {
+        run = runs::fail(
+            &app_data,
+            &run.id,
+            &error,
+            &chrono::Local::now().to_rfc3339(),
+        )?;
+        return Ok(AgentRunDto::from(&run));
+    }
+
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    state
+        .agent_run_cancellations
+        .lock_recover()
+        .insert(run.id.clone(), cancel_tx);
+    let run_id = run.id.clone();
+    drop(_mutation);
+    tauri::async_runtime::spawn(run_agent_job(app, run_id, cancel_rx));
+    Ok(AgentRunDto::from(&run))
+}
+
+#[tauri::command]
+pub fn agent_run_get(
+    app: AppHandle,
+    state: State<AppState>,
+    run_id: String,
+) -> Result<Option<AgentRunDto>, String> {
+    let app_data = app_data_dir(&app)?;
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let Some(run) = runs::read(&app_data, &run_id)? else {
+        return Ok(None);
+    };
+    let run = reconcile_run(&app, &state, &app_data, run)?;
+    Ok(Some(AgentRunDto::from(&run)))
+}
+
+#[tauri::command]
+pub fn agent_runs_for_conversation(
+    app: AppHandle,
+    state: State<AppState>,
+    conversation_id: String,
+) -> Result<Vec<AgentRunDto>, String> {
+    crate::vault::validate_record_id(conversation_id.trim())?;
+    let app_data = app_data_dir(&app)?;
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let mut output = Vec::new();
+    for run in runs::list_for_conversation(&app_data, &conversation_id, 20)? {
+        let run = reconcile_run(&app, &state, &app_data, run)?;
+        output.push(AgentRunDto::from(&run));
+    }
+    Ok(output)
+}
+
+#[tauri::command]
+pub fn agent_run_cancel(
+    app: AppHandle,
+    state: State<AppState>,
+    run_id: String,
+) -> Result<AgentRunDto, String> {
+    let app_data = app_data_dir(&app)?;
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let cancellations = state.agent_run_cancellations.lock_recover();
+    let run = cancel_persisted_run(
+        &app_data,
+        &run_id,
+        &chrono::Local::now().to_rfc3339(),
+        cancellations.get(&run_id),
+    )?;
+    Ok(AgentRunDto::from(&run))
+}
+
 #[tauri::command]
 pub fn agent_chats_all(app: AppHandle) -> Result<Vec<AgentChatSummary>, String> {
     let vault = vault_root(&app)?;
@@ -137,6 +235,7 @@ pub fn agent_chat_create(
     state: State<AppState>,
     input: AgentChatCreateInput,
 ) -> Result<AgentChatRecord, String> {
+    let _agent_mutation = state.agent_run_mutations.lock_recover();
     let vault = vault_root(&app)?;
     let meta = read_meta(&app)?;
     let mut chat = agent::new_chat_record(&meta, input.title);
@@ -152,6 +251,7 @@ pub fn agent_chat_update(
     state: State<AppState>,
     input: AgentChatUpdateInput,
 ) -> Result<AgentChatRecord, String> {
+    let _agent_mutation = state.agent_run_mutations.lock_recover();
     let vault = vault_root(&app)?;
     let meta = read_meta(&app)?;
     let path = agent::chat_path(&vault, &input.id)?;
@@ -201,6 +301,21 @@ pub fn agent_chat_update(
 
 #[tauri::command]
 pub fn agent_chat_delete(app: AppHandle, state: State<AppState>, id: String) -> Result<(), String> {
+    let _agent_mutation = state.agent_run_mutations.lock_recover();
+    if let Ok(app_data) = app_data_dir(&app) {
+        for run in runs::list_for_conversation(&app_data, &id, usize::MAX)? {
+            if !runs::is_active(run.status) {
+                continue;
+            }
+            let cancellations = state.agent_run_cancellations.lock_recover();
+            cancel_persisted_run(
+                &app_data,
+                &run.id,
+                &chrono::Local::now().to_rfc3339(),
+                cancellations.get(&run.id),
+            )?;
+        }
+    }
     let vault = vault_root(&app)?;
     let path = agent::chat_path(&vault, &id)?;
     if let Some(watcher) = state.watcher.lock_recover().as_ref() {
@@ -251,6 +366,262 @@ fn vault_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(PathBuf::from(path))
 }
 
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("resolve app data directory: {error}"))
+}
+
+async fn run_agent_job(
+    app: AppHandle,
+    run_id: String,
+    mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    let result = run_agent_job_inner(&app, &run_id, &mut cancel_rx).await;
+    if let Err(error) = result {
+        if let Ok(app_data) = app_data_dir(&app) {
+            let state = app.state::<AppState>();
+            let _mutation = state.agent_run_mutations.lock_recover();
+            let _ = runs::fail(
+                &app_data,
+                &run_id,
+                &error,
+                &chrono::Local::now().to_rfc3339(),
+            );
+        }
+    }
+    app.state::<AppState>()
+        .agent_run_cancellations
+        .lock_recover()
+        .remove(&run_id);
+}
+
+async fn run_agent_job_inner(
+    app: &AppHandle,
+    run_id: &str,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<(), String> {
+    let app_data = app_data_dir(app)?;
+    let state = app.state::<AppState>();
+    let run = {
+        let _mutation = state.agent_run_mutations.lock_recover();
+        runs::mark_running(&app_data, run_id, &chrono::Local::now().to_rfc3339())?
+    };
+    if run.status == runs::AgentRunStatus::Cancelled {
+        return Ok(());
+    }
+
+    let meta = read_meta(app)?;
+    let api_key = agent::key::resolve(app, &meta).map_err(|error| error.to_string())?;
+    let chat_input = AgentChatInput {
+        conversation_id: run.session_id.clone(),
+        messages: run.request_messages.clone(),
+    };
+    let progress = Arc::new(Mutex::new(AgentRunProgress {
+        response: String::new(),
+        pending_events: Vec::new(),
+        last_flush: Instant::now(),
+    }));
+    let progress_for_events = progress.clone();
+    let stream = agent::chat_completion_stream(
+        &meta,
+        &api_key,
+        chat_input,
+        || Ok(()),
+        |event| {
+            let pending_events = {
+                let mut progress = progress_for_events.lock_recover();
+                if event.kind == "delta" {
+                    if let Some(delta) = event.delta.as_deref() {
+                        progress.response.push_str(delta);
+                    }
+                }
+                progress.pending_events.push(event);
+                if progress.last_flush.elapsed() < AGENT_RUN_EVENT_FLUSH_INTERVAL {
+                    Vec::new()
+                } else {
+                    progress.last_flush = Instant::now();
+                    std::mem::take(&mut progress.pending_events)
+                }
+            };
+            if pending_events.is_empty() {
+                return Ok(());
+            }
+            let _mutation = state.agent_run_mutations.lock_recover();
+            runs::append_events(
+                &app_data,
+                run_id,
+                pending_events,
+                &chrono::Local::now().to_rfc3339(),
+            )?;
+            Ok(())
+        },
+    );
+    tokio::pin!(stream);
+    let stream_result = tokio::select! {
+        result = &mut stream => Some(result),
+        _ = wait_for_cancel(cancel_rx) => None,
+    };
+    let (final_response, pending_events) = {
+        let mut progress = progress.lock_recover();
+        (
+            progress.response.clone(),
+            std::mem::take(&mut progress.pending_events),
+        )
+    };
+    let _mutation = state.agent_run_mutations.lock_recover();
+    runs::append_events(
+        &app_data,
+        run_id,
+        pending_events,
+        &chrono::Local::now().to_rfc3339(),
+    )?;
+    match stream_result {
+        None => {
+            runs::cancel(&app_data, run_id, &chrono::Local::now().to_rfc3339())?;
+        }
+        Some(Err(error)) => return Err(error),
+        Some(Ok(())) => {
+            finalize_successful_run(
+                &app_data,
+                run_id,
+                &final_response,
+                &chrono::Local::now().to_rfc3339(),
+                |completed| reconcile_completed_chat(app, &state, completed),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+async fn wait_for_cancel(receiver: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+fn cancel_persisted_run(
+    app_data: &Path,
+    run_id: &str,
+    now: &str,
+    sender: Option<&tokio::sync::watch::Sender<bool>>,
+) -> Result<AgentRunRecord, String> {
+    let run = runs::cancel(app_data, run_id, now)?;
+    if let Some(sender) = sender {
+        let _ = sender.send(true);
+    }
+    Ok(run)
+}
+
+fn finalize_successful_run(
+    app_data: &Path,
+    run_id: &str,
+    response: &str,
+    now: &str,
+    finalize_transcript: impl FnOnce(&AgentRunRecord) -> Result<(), String>,
+) -> Result<AgentRunRecord, String> {
+    let completed = runs::complete(app_data, run_id, response, now)?;
+    if completed.status != runs::AgentRunStatus::Completed
+        || completed.transcript_finalized_at.is_some()
+    {
+        return Ok(completed);
+    }
+    finalize_transcript(&completed)?;
+    runs::mark_transcript_finalized(app_data, run_id, now)
+}
+
+fn reconcile_run(
+    app: &AppHandle,
+    state: &State<AppState>,
+    app_data: &Path,
+    run: AgentRunRecord,
+) -> Result<AgentRunRecord, String> {
+    let run = if runs::is_active(run.status) {
+        let is_live = state
+            .agent_run_cancellations
+            .lock_recover()
+            .contains_key(&run.id);
+        runs::recover_stale(
+            app_data,
+            &run.id,
+            is_live,
+            &chrono::Local::now().to_rfc3339(),
+        )?
+    } else {
+        run
+    };
+    if run.status == runs::AgentRunStatus::Completed && run.transcript_finalized_at.is_none() {
+        reconcile_completed_chat(app, state, &run)?;
+        return runs::mark_transcript_finalized(
+            app_data,
+            &run.id,
+            &chrono::Local::now().to_rfc3339(),
+        );
+    }
+    Ok(run)
+}
+
+fn ensure_run_user_message(
+    app: &AppHandle,
+    state: &State<AppState>,
+    run: &AgentRunRecord,
+) -> Result<(), String> {
+    let mut chat = load_or_create_run_chat(app, run)?;
+    if runs::ensure_user_message_once(&mut chat, run) {
+        update_chat_metadata(&mut chat, run.input_message.created_at.as_str());
+        let vault = vault_root(app)?;
+        let path = agent::chat_path(&vault, &chat.id)?;
+        write_chat(app, state, &vault, &path, &chat)?;
+    }
+    Ok(())
+}
+
+fn reconcile_completed_chat(
+    app: &AppHandle,
+    state: &State<AppState>,
+    run: &AgentRunRecord,
+) -> Result<(), String> {
+    let mut chat = load_or_create_run_chat(app, run)?;
+    let user_changed = runs::ensure_user_message_once(&mut chat, run);
+    let assistant_changed = runs::finalize_chat_once(&mut chat, run);
+    if user_changed || assistant_changed {
+        update_chat_metadata(&mut chat, run.updated_at.as_str());
+        let vault = vault_root(app)?;
+        let path = agent::chat_path(&vault, &chat.id)?;
+        write_chat(app, state, &vault, &path, &chat)?;
+    }
+    Ok(())
+}
+
+fn load_or_create_run_chat(
+    app: &AppHandle,
+    run: &AgentRunRecord,
+) -> Result<AgentChatRecord, String> {
+    let vault = vault_root(app)?;
+    if let Some(chat) = agent::read_chat_by_id(&vault, &run.conversation_id)? {
+        return Ok(chat);
+    }
+    let meta = read_meta(app)?;
+    let mut chat = agent::new_chat_record(&meta, None);
+    chat.id = run.conversation_id.clone();
+    chat.path = format!("{}/{}.md", crate::vault::AGENT_DIR, chat.id);
+    Ok(chat)
+}
+
+fn update_chat_metadata(chat: &mut AgentChatRecord, updated_at: &str) {
+    chat.updated = updated_at.to_string();
+    chat.title =
+        agent::title_from_messages(&chat.messages).unwrap_or_else(|| "New chat".to_string());
+    if chat.tags.is_empty() {
+        chat.tags.push("agent".to_string());
+    }
+}
+
 fn write_chat(
     app: &AppHandle,
     state: &State<AppState>,
@@ -270,4 +641,129 @@ fn write_chat(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_run() -> runs::NewAgentRun {
+        runs::NewAgentRun {
+            conversation_id: "agent-conversation-test".to_string(),
+            idempotency_key: "user-message-test".to_string(),
+            input_message: agent::AgentVaultMessage {
+                id: "user-message-test".to_string(),
+                role: "user".to_string(),
+                created_at: "2031-02-03T12:00:00Z".to_string(),
+                content: "Summarize the attached notes.".to_string(),
+            },
+            request_messages: vec![agent::AgentChatMessage {
+                role: "user".to_string(),
+                content: "Summarize the attached notes.".to_string(),
+            }],
+            retry_of: None,
+        }
+    }
+
+    fn empty_chat() -> AgentChatRecord {
+        AgentChatRecord {
+            id: "agent-conversation-test".to_string(),
+            path: "agent/agent-conversation-test.md".to_string(),
+            title: "Notes summary".to_string(),
+            agent: "Local agent".to_string(),
+            model: "test-model".to_string(),
+            created: "2031-02-03T11:00:00Z".to_string(),
+            updated: "2031-02-03T11:00:00Z".to_string(),
+            pinned: false,
+            tags: vec!["agent".to_string()],
+            context: None,
+            messages: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn command_cancellation_path_persists_status_and_signals_the_runner() {
+        let temp = tempfile::tempdir().unwrap();
+        let (run, _) = runs::create_or_get(temp.path(), new_run(), "2031-02-03T12:00:00Z").unwrap();
+        runs::mark_running(temp.path(), &run.id, "2031-02-03T12:00:01Z").unwrap();
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+        let cancelled = cancel_persisted_run(
+            temp.path(),
+            &run.id,
+            "2031-02-03T12:00:02Z",
+            Some(&cancel_tx),
+        )
+        .unwrap();
+
+        assert_eq!(cancelled.status, runs::AgentRunStatus::Cancelled);
+        assert!(*cancel_rx.borrow());
+        let late_completion = runs::complete(
+            temp.path(),
+            &run.id,
+            "This response must not be saved.",
+            "2031-02-03T12:00:03Z",
+        )
+        .unwrap();
+        assert_eq!(late_completion.status, runs::AgentRunStatus::Cancelled);
+        assert!(late_completion.final_response.is_none());
+    }
+
+    #[test]
+    fn runner_completion_path_finalizes_the_persisted_transcript_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let app_data = temp.path().join("app-data");
+        let vault = temp.path().join("vault");
+        vault_lib::ensure_dirs(&vault).unwrap();
+        let (run, _) = runs::create_or_get(&app_data, new_run(), "2031-02-03T12:00:00Z").unwrap();
+        runs::mark_running(&app_data, &run.id, "2031-02-03T12:00:01Z").unwrap();
+        let chat_path = agent::chat_path(&vault, &run.conversation_id).unwrap();
+        vault_lib::write_atomic(&chat_path, &agent::serialize_chat(&empty_chat()).unwrap())
+            .unwrap();
+
+        let finalize = |completed: &AgentRunRecord| -> Result<(), String> {
+            let mut chat = agent::read_chat(&vault, &chat_path)?;
+            runs::ensure_user_message_once(&mut chat, completed);
+            runs::finalize_chat_once(&mut chat, completed);
+            let serialized = agent::serialize_chat(&chat).map_err(|error| error.to_string())?;
+            vault_lib::write_atomic(&chat_path, &serialized).map_err(|error| error.to_string())
+        };
+        let finalized = finalize_successful_run(
+            &app_data,
+            &run.id,
+            "The notes describe three decisions.",
+            "2031-02-03T12:00:02Z",
+            finalize,
+        )
+        .unwrap();
+        assert!(finalized.transcript_finalized_at.is_some());
+
+        finalize_successful_run(
+            &app_data,
+            &run.id,
+            "The notes describe three decisions.",
+            "2031-02-03T12:00:03Z",
+            |_| panic!("an already finalized run must not rewrite its transcript"),
+        )
+        .unwrap();
+
+        let chat = agent::read_chat(&vault, &chat_path).unwrap();
+        let assistant_messages = chat
+            .messages
+            .iter()
+            .filter(|message| message.id == run.assistant_message_id)
+            .collect::<Vec<_>>();
+        assert_eq!(assistant_messages.len(), 1);
+        assert_eq!(
+            assistant_messages[0].content,
+            "The notes describe three decisions."
+        );
+        assert_eq!(
+            chat.messages
+                .iter()
+                .filter(|message| message.id == run.input_message.id)
+                .count(),
+            1
+        );
+    }
 }

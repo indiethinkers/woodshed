@@ -8,8 +8,38 @@ interface AgentChatMessage {
   content: string;
 }
 
-interface AgentChatStreamEvent {
-  streamId: string;
+export type AgentRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+interface AgentRunInputMessage {
+  id: string;
+  role: "user";
+  createdAt: string;
+  content: string;
+}
+
+export interface AgentRun {
+  id: string;
+  conversationId: string;
+  sessionId: string;
+  assistantMessageId: string;
+  status: AgentRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  inputMessage: AgentRunInputMessage;
+  events: AgentRunEvent[];
+  finalResponse?: string | null;
+  error?: string | null;
+  retryOf?: string | null;
+}
+
+interface AgentRunEvent {
   kind:
     | "delta"
     | "reasoning-delta"
@@ -41,91 +71,202 @@ interface StreamPartIds {
   reasoningStarted: boolean;
 }
 
-export function createAgentChatTransport(options?: {
+interface AgentTransportOptions {
   getSystemContext?: () => string | null;
-}): ChatTransport<UIMessage> {
+  onRunChange?: (run: AgentRun | null) => void;
+  pollIntervalMs?: number;
+}
+
+export function createAgentChatTransport(
+  options: AgentTransportOptions = {},
+): ChatTransport<UIMessage> {
   return {
-    async sendMessages({ chatId, messages, abortSignal }) {
-      const systemContext = options?.getSystemContext?.()?.trim();
+    async sendMessages({ chatId, messages, trigger, messageId, abortSignal }) {
+      const systemContext = options.getSystemContext?.()?.trim();
       const agentMessages = messagesToAgentMessages(messages);
       if (systemContext) {
         agentMessages.unshift({ role: "system", content: systemContext });
       }
-      return sendViaTauriEvents(chatId, agentMessages, abortSignal);
+      const inputMessage = latestUserMessage(messages);
+      if (!inputMessage) {
+        throw new Error("Agent requests need a user message.");
+      }
+
+      let retryOf: string | undefined;
+      let idempotencyKey = inputMessage.id;
+      if (trigger === "regenerate-message") {
+        const recent = await listRuns(chatId);
+        retryOf = recent.find(
+          (run) =>
+            run.assistantMessageId === messageId ||
+            run.inputMessage.id === messageId ||
+            run.inputMessage.id === inputMessage.id,
+        )?.id;
+        idempotencyKey = `agent-retry-${nanoid()}`;
+      }
+
+      const run = await tauriInvoke<AgentRun>("agent_run_create", {
+        input: {
+          conversationId: chatId,
+          idempotencyKey,
+          inputMessage,
+          messages: agentMessages,
+          retryOf,
+        },
+      });
+      if (!run) throw new Error("Woodshed did not create an agent run.");
+      options.onRunChange?.(run);
+      return streamAgentRun(run, abortSignal, options);
     },
-    async reconnectToStream() {
-      return null;
+    async reconnectToStream({ chatId }) {
+      const runs = await listRuns(chatId);
+      const active = runs.find(
+        (run) => run.status === "queued" || run.status === "running",
+      );
+      if (!active) {
+        // Keep the latest terminal run visible after reload as well. There is
+        // no stream to resume, but failed/cancelled states still need useful UI.
+        options.onRunChange?.(runs[0] ?? null);
+        return null;
+      }
+      options.onRunChange?.(active);
+      return streamAgentRun(active, undefined, options);
     },
   };
 }
 
-function sendViaTauriEvents(
-  chatId: string,
-  messages: AgentChatMessage[],
-  abortSignal?: AbortSignal,
-): Promise<ReadableStream<UIMessageChunk>> {
-  return Promise.resolve(
-    new ReadableStream<UIMessageChunk>({
-      async start(controller) {
-        const streamId = nanoid();
-        const ids = startMessage(controller);
-        let closed = false;
-        let unlisten: (() => void) | null = null;
+function streamAgentRun(
+  initialRun: AgentRun,
+  abortSignal: AbortSignal | undefined,
+  options: AgentTransportOptions,
+): ReadableStream<UIMessageChunk> {
+  let stopped = false;
+  return new ReadableStream<UIMessageChunk>({
+    async start(controller) {
+      const ids = startMessage(controller, initialRun.assistantMessageId);
+      let eventIndex = 0;
+      let emittedText = "";
+      let pollFailures = 0;
 
-        const close = () => {
-          if (closed) return;
-          closed = true;
-          unlisten?.();
-          controller.close();
-        };
-        const fail = (message: string) => {
-          enqueue(controller, { type: "error", errorText: message });
-          close();
-        };
-        const abort = () => {
-          enqueue(controller, { type: "abort", reason: "aborted" });
-          close();
-        };
-
-        if (abortSignal?.aborted) {
-          abort();
-          return;
+      const close = () => {
+        if (stopped) return;
+        stopped = true;
+        abortSignal?.removeEventListener("abort", abort);
+        controller.close();
+      };
+      const fail = (message: string) => {
+        enqueue(controller, { type: "error", errorText: message });
+        close();
+      };
+      const abort = () => {
+        enqueue(controller, { type: "abort", reason: "detached" });
+        close();
+      };
+      const accept = (run: AgentRun): boolean => {
+        options.onRunChange?.(run);
+        for (const event of run.events.slice(eventIndex)) {
+          enqueueAgentEvent(controller, ids, event);
+          if (event.kind === "delta" && event.delta) emittedText += event.delta;
         }
+        eventIndex = run.events.length;
 
-        abortSignal?.addEventListener("abort", abort, { once: true });
+        if (run.status === "completed") {
+          const finalResponse = run.finalResponse ?? "";
+          if (finalResponse.startsWith(emittedText)) {
+            const remainder = finalResponse.slice(emittedText.length);
+            if (remainder) {
+              enqueue(controller, {
+                type: "text-delta",
+                id: ids.textId,
+                delta: remainder,
+              });
+            }
+          }
+          finishMessage(controller, ids);
+          close();
+          return true;
+        }
+        if (run.status === "failed") {
+          fail(run.error || "Agent run failed.");
+          return true;
+        }
+        if (run.status === "cancelled") {
+          enqueue(controller, { type: "abort", reason: "cancelled" });
+          close();
+          return true;
+        }
+        return false;
+      };
 
+      if (abortSignal?.aborted) {
+        abort();
+        return;
+      }
+      abortSignal?.addEventListener("abort", abort, { once: true });
+      if (accept(initialRun)) return;
+
+      while (!stopped) {
+        await delay(options.pollIntervalMs ?? 300);
+        if (stopped) return;
         try {
-          const { listen } = await import("@tauri-apps/api/event");
-          unlisten = await listen<AgentChatStreamEvent>(
-            "agent:chat-stream",
-            (event) => {
-              const payload = event.payload;
-              if (!payload || payload.streamId !== streamId || closed) return;
-              if (payload.kind === "done") {
-                finishMessage(controller, ids);
-                close();
-                return;
-              }
-              if (payload.kind === "error") {
-                fail(payload.error || "Agent stream failed.");
-                return;
-              }
-              enqueueAgentEvent(controller, ids, payload);
-            },
-          );
-          await tauriInvoke("agent_chat_stream", {
-            input: { streamId, conversationId: chatId, messages },
+          const run = await tauriInvoke<AgentRun | null>("agent_run_get", {
+            runId: initialRun.id,
           });
+          if (!run) {
+            fail("Agent run could not be found.");
+            return;
+          }
+          pollFailures = 0;
+          if (accept(run)) return;
         } catch (error) {
-          fail(error instanceof Error ? error.message : String(error));
+          pollFailures += 1;
+          if (pollFailures >= 3) {
+            fail(error instanceof Error ? error.message : String(error));
+            return;
+          }
         }
-      },
-    }),
+      }
+    },
+    cancel() {
+      // Stream cancellation only detaches this page. Explicit user cancellation
+      // calls agent_run_cancel; navigation/reload must leave the backend job alive.
+      stopped = true;
+    },
+  });
+}
+
+async function listRuns(chatId: string): Promise<AgentRun[]> {
+  return (
+    (await tauriInvoke<AgentRun[]>("agent_runs_for_conversation", {
+      conversationId: chatId,
+    })) ?? []
   );
 }
 
-function startMessage(controller: ReadableStreamDefaultController<UIMessageChunk>) {
-  const messageId = nanoid();
+function latestUserMessage(messages: UIMessage[]): AgentRunInputMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "user") continue;
+    const content = messageContentForAgent(message).trim();
+    if (!content) continue;
+    return {
+      id: message.id,
+      role: "user",
+      createdAt: new Date().toISOString(),
+      content,
+    };
+  }
+  return null;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function startMessage(
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+  messageId: string,
+) {
   const textId = nanoid();
   const reasoningId = nanoid();
   enqueue(controller, { type: "start", messageId });
@@ -149,7 +290,7 @@ function finishMessage(
 function enqueueAgentEvent(
   controller: ReadableStreamDefaultController<UIMessageChunk>,
   ids: StreamPartIds,
-  payload: AgentChatStreamEvent,
+  payload: AgentRunEvent,
 ) {
   if (payload.kind === "delta" && payload.delta) {
     enqueue(controller, {
@@ -244,8 +385,7 @@ function enqueueAgentEvent(
     });
     return;
   }
-  if (payload.kind === "tool-output-denied") {
-    if (!payload.toolCallId) return;
+  if (payload.kind === "tool-output-denied" && payload.toolCallId) {
     enqueue(controller, {
       type: "tool-output-denied",
       toolCallId: payload.toolCallId,
@@ -260,7 +400,8 @@ function enqueue(
   try {
     controller.enqueue(chunk);
   } catch {
-    // The AI SDK may close the stream after an abort; late Hermes chunks are ignored.
+    // The AI SDK may close the stream after a local detach. The backend job
+    // remains authoritative, so late poll results are intentionally ignored.
   }
 }
 
