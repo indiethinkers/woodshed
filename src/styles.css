@@ -951,14 +951,19 @@
   display: none;
 }
 
-/* In Cadence, Enter above a tweet creates an intentional blank line. Keep that
-   line visible while continuing to collapse the timestamp-only lead paragraph. */
+/* In Cadence, Enter above an embed creates an intentional blank line. Show
+   those earlier paragraphs, but keep the paste placeholder immediately before
+   the embed collapsed so the card occupies the cursor's original line. */
 .tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
-  > p:empty,
+  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  > p:empty:not(
+    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+  ),
 .tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
-  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
+    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+  ) {
   display: block;
 }
 

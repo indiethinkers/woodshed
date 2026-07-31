@@ -140,13 +140,17 @@ function setDomCursorAfterText(root: HTMLElement, text: string) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("DailyContent notes editor", () => {
-  it("keeps intentional empty lines above tweet embeds visible while editing", () => {
+  it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
     expect(styles).toContain(`.tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
-  > p:empty,
+  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  > p:empty:not(
+    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+  ),
 .tiptap-content[data-daily-timestamps]
-  li:has(> div[data-tweet-id])
-  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  li:has(> :is(div[data-tweet-id], div[data-youtube-resource]))
+  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
+    :has(+ :is(div[data-tweet-id], div[data-youtube-resource]))
+  ) {
   display: block;
 }`);
   });

@@ -2183,7 +2183,7 @@ function AgentComposer({
           "border border-border bg-background p-2 shadow-[0_1px_2px_rgba(0,0,0,0.03),0_8px_22px_-18px_rgba(0,0,0,0.18)] transition-[border-color,box-shadow] duration-150 hover:border-foreground/20 focus-within:border-foreground/30 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_30px_-16px_rgba(0,0,0,0.26)] [&>[data-slot=input-group]]:h-auto [&>[data-slot=input-group]]:border-0 [&>[data-slot=input-group]]:bg-transparent [&>[data-slot=input-group]]:!ring-0",
           compact
             ? "rounded-[16px] border-foreground/35 bg-input/80 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] hover:border-foreground/45 focus-within:border-foreground/55 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_10%,transparent)]"
-            : "rounded-[14px]",
+            : "rounded-full border-foreground/30 shadow-none hover:border-foreground/40 focus-within:border-foreground/50 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_8%,transparent)]",
           className,
         )}
         maxFiles={4}

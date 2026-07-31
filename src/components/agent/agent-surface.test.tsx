@@ -114,6 +114,31 @@ describe("AgentSurface voice controls", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("uses a clear pill outline and muted placeholder while unfocused", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(
+      "How can I help you today?",
+    );
+    const composer = textarea.closest("form");
+
+    expect(composer).toHaveClass(
+      "rounded-full",
+      "border-foreground/30",
+      "shadow-none",
+    );
+    expect(textarea).toHaveClass("placeholder:text-muted-foreground");
+  });
+
   it("asks the transport to reconnect after hydrating an existing chat", async () => {
     window.localStorage.setItem(
       "woodshed:agent:last-chat-id",

@@ -115,6 +115,20 @@ function mountOutlineEditor(value: string, onCommit: (next: string) => void) {
   return { ui, ...render(ui(value)) };
 }
 
+function mountFreeformEditor(value: string, onCommit: (next: string) => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <TiptapEditor
+        value={value}
+        onCommit={onCommit}
+        mode="freeform"
+        placeholder="Start writing..."
+      />
+    </QueryClientProvider>,
+  );
+}
+
 function topLevelListItems(container: HTMLElement): Element[] {
   const root = container.querySelector(".tiptap-content");
   const list = Array.from(root?.children ?? []).find(
@@ -178,6 +192,91 @@ function setDomCursorInside(element: Element) {
 }
 
 describe("TiptapEditor URL embeds (daily journal)", () => {
+  it("renders a pasted embed on the cursor's current empty line", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/987654321";
+    const { container } = mountFreeformEditor(
+      "Synthetic line above\n\nSynthetic line below",
+      () => undefined,
+    );
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, "Synthetic line above");
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    expect(editorEl.querySelectorAll(":scope > p")).toHaveLength(3);
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? tweetUrl : ""),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    const directChildren = Array.from(editorEl.children);
+    expect(directChildren).toHaveLength(3);
+    expect(directChildren[0]).toHaveTextContent("Synthetic line above");
+    expect(directChildren[1]?.querySelector("[data-tweet-id]")).toBeTruthy();
+    expect(directChildren[2]).toHaveTextContent("Synthetic line below");
+  });
+
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/246813579",
+    },
+    {
+      kind: "YouTube",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=abcdefghijk",
+    },
+  ])("keeps a pasted $kind embed inside the cursor's current Cadence row", async ({
+    selector,
+    url,
+  }) => {
+    const first = "Synthetic row above";
+    const second = "Synthetic row below";
+    const { container } = mountOutlineEditor(
+      `- [09:30] ${first}\n- [09:31] ${second}`,
+      () => undefined,
+    );
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, first);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    expect(topLevelListItems(container)).toHaveLength(3);
+
+    fireEvent.paste(editorEl, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === "text/plain" ? url : ""),
+      },
+    });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      expect(items).toHaveLength(3);
+      expect(items[1]?.querySelector(selector)).toBeTruthy();
+      expect(items[1]?.querySelector(":scope > p")).toBeTruthy();
+    });
+  });
+
   it("keeps rich clipboard structure instead of flattening it to plain text", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const onCommit = vi.fn();
