@@ -244,7 +244,7 @@ fn oembed_endpoint_for(url: &reqwest::Url) -> Option<reqwest::Url> {
 /// Resolve title / author / published via oEmbed — no AI, just the
 /// provider's own metadata. YouTube answers with the real video title; X
 /// has no title field, so one is assembled from the author name plus the
-/// leading characters of the tweet text embedded in the `html` payload.
+/// complete tweet text embedded in the `html` payload.
 /// None (unknown host, network failure, unusable payload) falls back to
 /// the generic HTML scrape.
 async fn fetch_oembed_article(url: &reqwest::Url) -> Option<ExtractedArticle> {
@@ -273,11 +273,7 @@ fn oembed_article(payload: &JsonValue, url: &reqwest::Url) -> Option<ExtractedAr
 
     let (title, source, published) = if is_tweet {
         let (text, published) = tweet_text_and_date(payload)?;
-        let title = format!(
-            "{} on X: {}",
-            author.as_deref().unwrap_or("Post"),
-            truncate_chars(&text, 60),
-        );
+        let title = format!("{} on X: {}", author.as_deref().unwrap_or("Post"), text,);
         (title, "x.com".to_string(), published)
     } else {
         (json_str(payload, "title")?, "youtube.com".to_string(), None)
@@ -319,14 +315,6 @@ fn json_str(payload: &JsonValue, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-fn truncate_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max).collect();
-    format!("{}…", cut.trim_end())
 }
 
 fn article_fallback_for_url(url: &reqwest::Url) -> ExtractedArticle {
@@ -1234,7 +1222,7 @@ mod tests {
     }
 
     #[test]
-    fn oembed_article_truncates_long_tweets() {
+    fn oembed_article_keeps_complete_tweet_text() {
         let text = "word ".repeat(40);
         let payload = serde_json::json!({
             "author_name": "Alex Rivera",
@@ -1243,8 +1231,8 @@ mod tests {
         let url = reqwest::Url::parse("https://x.com/alexrivera/status/123").unwrap();
         let article = oembed_article(&payload, &url).unwrap();
         let title = article.title.unwrap();
-        assert!(title.ends_with('…'), "got {title}");
-        assert!(title.chars().count() <= "Alex Rivera on X: ".chars().count() + 61);
+        assert_eq!(title, format!("Alex Rivera on X: {}", text.trim()));
+        assert!(!title.ends_with('…'));
     }
 
     #[test]
