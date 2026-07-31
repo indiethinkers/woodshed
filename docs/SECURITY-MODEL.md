@@ -28,12 +28,12 @@ The rendered body is additionally served under `default-src 'none'`, so no
 sender markup or CSS can reach the network even if sanitization is wrong. Remote
 image URLs are rewritten to Woodshed's bounded cache and load when the user
 opens a message; sender HTML never fetches them directly. The main webview also
-blocks arbitrary HTTP(S) image loads. YouTube embeds are the narrow exception:
-the webview CSP permits only `https://www.youtube-nocookie.com` as a frame
-origin and lazily loads that privacy-enhanced player when an embed is displayed.
-The frame uses `strict-origin-when-cross-origin`, which identifies the app to
-YouTube without sending the vault route. YouTube controls the frame document
-and its subrequests; they do not pass through Woodshed's bounded Rust fetcher.
+blocks arbitrary HTTP(S) image loads. YouTube embeds are the exception: the
+webview CSP permits YouTube-owned frame origins and lazily loads YouTube's
+standard player when an embed is displayed. The frame uses `unsafe-url` and
+also supplies the current page URL as `widget_referrer` so YouTube can identify
+the player inside a native webview. YouTube controls the frame document and its
+subrequests; they do not pass through Woodshed's bounded Rust fetcher.
 
 ## Storage
 
@@ -78,8 +78,8 @@ Public resource, calendar, oEmbed, and remote-image fetches:
 - redact credentials, query strings, and fragments from logs.
 
 YouTube player frames are the documented exception to these Rust fetch limits.
-The main webview CSP restricts their frame origin to `youtube-nocookie.com`, and
-the iframe sends only the app origin as its referrer, not the vault route.
+The main webview CSP permits YouTube-owned frame origins. The iframe sends the
+full Woodshed page URL as both referrer data and an explicit `widget_referrer`.
 Network activity inside the frame is controlled by YouTube.
 
 Resource budgets are enforced at ingress: text records and rendered email

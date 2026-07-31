@@ -30,8 +30,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: http://asset.localhost wsmail: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self' wsmail: https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'",
-      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: http://asset.localhost wsmail: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:5173 http://127.0.0.1:5173 ws://localhost:5173 ws://127.0.0.1:5173; frame-src 'self' wsmail: https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: http://asset.localhost wsmail: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self' wsmail: https://youtube.com https://*.youtube.com https://youtube-nocookie.com https://*.youtube-nocookie.com; object-src 'none'; base-uri 'self'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' asset: http://asset.localhost wsmail: data: blob:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:5173 http://127.0.0.1:5173 ws://localhost:5173 ws://127.0.0.1:5173; frame-src 'self' wsmail: https://youtube.com https://*.youtube.com https://youtube-nocookie.com https://*.youtube-nocookie.com; object-src 'none'; base-uri 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": []

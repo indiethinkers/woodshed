@@ -4,7 +4,7 @@ import { GripVertical, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { YoutubeFacade } from "./youtube-facade";
 
-/// React NodeView for `youtubeResource`: a bare, responsive nocookie player.
+/// React NodeView for `youtubeResource`: a bare, responsive YouTube player.
 /// The same player renders in the read-only `Markdown` path so the editor and
 /// sidebar/mail views look identical.
 ///

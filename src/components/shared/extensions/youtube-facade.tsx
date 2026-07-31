@@ -4,9 +4,9 @@ import { openExternalUrl } from "@/lib/open-external";
 
 /// A native YouTube player shell shared by editable and read-only Markdown.
 ///
-/// `youtube-nocookie.com` gives the player its familiar pre-play chrome
-/// without adding a wrapper dependency. Its network request happens when the
-/// embed is shown.
+/// Uses YouTube's standard player directly. The page URL is supplied as the
+/// widget referrer because native webviews do not consistently attach an HTTP
+/// Referer header when the app itself uses a custom URL scheme.
 export function YoutubeFacade({
   url,
   videoId,
@@ -19,6 +19,9 @@ export function YoutubeFacade({
   controlsVisible?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const embedUrl = new URL(`https://www.youtube.com/embed/${videoId}`);
+  embedUrl.searchParams.set("rel", "0");
+  embedUrl.searchParams.set("widget_referrer", window.location.href);
 
   useEffect(() => {
     if (!copied) return;
@@ -47,10 +50,10 @@ export function YoutubeFacade({
   return (
     <div className="group/youtube relative my-3 aspect-video w-full overflow-hidden rounded-md bg-black first:mt-0 last:mb-0">
       <iframe
-        src={`https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`}
+        src={embedUrl.toString()}
         title={`YouTube video ${videoId}`}
         loading="lazy"
-        referrerPolicy="strict-origin-when-cross-origin"
+        referrerPolicy="unsafe-url"
         className="absolute inset-0 h-full w-full"
         frameBorder={0}
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"

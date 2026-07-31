@@ -12,8 +12,8 @@ Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
 requests when you invoke them. Displaying a YouTube embed loads YouTube's
-privacy-enhanced player, and opening an HTML email loads its remote images by
-default through Woodshed's bounded cache.
+standard player, and opening an HTML email loads its remote images by default
+through Woodshed's bounded cache.
 
 ## Data stored on your device
 
@@ -48,11 +48,11 @@ embeds and remote email images are the exceptions described below.
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. Public fetches reject private/local
   destinations and enforce redirect, timeout, size, and concurrency limits.
-- **YouTube embeds:** displaying a YouTube embed loads the privacy-enhanced
-  `youtube-nocookie.com` player. YouTube receives your IP address and time of
-  access when the embed is displayed, plus the Woodshed app origin required to
-  identify the player client. Vault routes are not sent. Player content and
-  player requests are handled by YouTube under its own terms.
+- **YouTube embeds:** displaying a YouTube embed loads the standard
+  `youtube.com` player. YouTube receives your IP address, time of access, the
+  full Woodshed page URL, and any identifiers or cookies its standard player
+  uses. Player content and player requests are handled by YouTube under its own
+  terms.
 - **Remote email images:** opening an HTML email requests its remote images by
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and
