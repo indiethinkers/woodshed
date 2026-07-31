@@ -365,19 +365,19 @@ export function useEventMutations() {
   const remove = useMutation<
     void,
     Error,
-    { id: string },
+    { id: string; retainDetail?: boolean },
     { snapshots: Map<readonly unknown[], unknown> }
   >({
     mutationFn: async ({ id }) => {
       await tauriInvoke<void>("event_delete", { id });
     },
-    onMutate: async ({ id }) => {
+    onMutate: async ({ id, retainDetail }) => {
       const snapshots = new Map<readonly unknown[], unknown>();
 
       const prevSingle = qc.getQueryData<EventDto | null>(["event", id]);
       if (prevSingle !== undefined) {
         snapshots.set(["event", id], prevSingle);
-        qc.setQueryData(["event", id], null);
+        if (!retainDetail) qc.setQueryData(["event", id], null);
       }
 
       qc.getQueriesData<EventDto[]>({ queryKey: ["events"] }).forEach(

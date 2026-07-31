@@ -186,7 +186,7 @@ export function useResourceMutations() {
   const remove = useMutation<
     void,
     Error,
-    { id: string },
+    { id: string; retainDetail?: boolean },
     { snapshots: Map<readonly unknown[], unknown> }
   >({
     mutationFn: async ({ id }) => {
@@ -195,13 +195,13 @@ export function useResourceMutations() {
       // day's journal — refresh any cached daily page so it clears.
       void qc.invalidateQueries({ queryKey: ["dailyJournal"] });
     },
-    onMutate: async ({ id }) => {
+    onMutate: async ({ id, retainDetail }) => {
       const snapshots = new Map<readonly unknown[], unknown>();
 
       const prevSingle = qc.getQueryData<ResourceDto | null>(["resource", id]);
       if (prevSingle !== undefined) {
         snapshots.set(["resource", id], prevSingle);
-        qc.setQueryData(["resource", id], null);
+        if (!retainDetail) qc.setQueryData(["resource", id], null);
       }
 
       qc.getQueriesData<ResourceDto[]>({ queryKey: ["resources"] }).forEach(

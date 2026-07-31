@@ -203,7 +203,7 @@ export function usePeopleMutations() {
   const remove = useMutation<
     void,
     Error,
-    { id: string },
+    { id: string; retainDetail?: boolean },
     { snapshot: PersonDto[] | undefined }
   >({
     mutationFn: async ({ id }) => {
@@ -216,15 +216,19 @@ export function usePeopleMutations() {
       void qc.invalidateQueries({ queryKey: ["dailyJournal"] });
       void qc.invalidateQueries({ queryKey: ["wikilinkTargets"] });
     },
-    onMutate: async ({ id }) => {
+    onMutate: async ({ id, retainDetail }) => {
       const snapshot = qc.getQueryData<PersonDto[]>(PEOPLE_KEY);
-      if (snapshot) {
+      if (snapshot && !retainDetail) {
         qc.setQueryData(
           PEOPLE_KEY,
           snapshot.filter((p) => p.id !== id),
         );
       }
       return { snapshot };
+    },
+    onSuccess: (_data, { id }) => {
+      const people = qc.getQueryData<PersonDto[]>(PEOPLE_KEY);
+      if (people) qc.setQueryData(PEOPLE_KEY, people.filter((person) => person.id !== id));
     },
     onError: (_err, _vars, context) => {
       if (context?.snapshot) qc.setQueryData(PEOPLE_KEY, context.snapshot);

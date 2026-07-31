@@ -12,7 +12,7 @@ use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -641,13 +641,7 @@ pub fn row_reorder(
 ) -> Result<Vec<RowDto>, String> {
     let vault = vault_root(&app)?;
     let current = read_all_rows(&vault, &table_id)?;
-    let expected: std::collections::BTreeSet<_> =
-        current.iter().map(|row| row.id.as_str()).collect();
-    let received: std::collections::BTreeSet<_> =
-        input.row_ids.iter().map(String::as_str).collect();
-    if input.row_ids.len() != current.len() || received != expected {
-        return Err("row reorder must include each table row exactly once".to_string());
-    }
+    validate_row_reorder(&current, &input.row_ids)?;
 
     let mut rows = Vec::with_capacity(input.row_ids.len());
     for (index, row_id) in input.row_ids.iter().enumerate() {
@@ -660,6 +654,15 @@ pub fn row_reorder(
         rows.push(RowDto::from_parsed(row, &vault, &path));
     }
     Ok(rows)
+}
+
+fn validate_row_reorder(current: &[RowDto], row_ids: &[String]) -> Result<(), String> {
+    let expected: BTreeSet<_> = current.iter().map(|row| row.id.as_str()).collect();
+    let received: BTreeSet<_> = row_ids.iter().map(String::as_str).collect();
+    if row_ids.len() != current.len() || received != expected {
+        return Err("row reorder must include each table row exactly once".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -855,6 +858,38 @@ mod tests {
             .map(|row| row.id)
             .collect();
         assert_eq!(ids, vec!["row_second", "row_first"]);
+    }
+
+    #[test]
+    fn row_reorder_requires_an_exact_permutation_of_existing_ids() {
+        let current = vec![
+            RowDto {
+                id: "row_a".to_string(),
+                path: String::new(),
+                table: "budget".to_string(),
+                created: String::new(),
+                sort_key: None,
+                cells: BTreeMap::new(),
+                body: String::new(),
+            },
+            RowDto {
+                id: "row_b".to_string(),
+                path: String::new(),
+                table: "budget".to_string(),
+                created: String::new(),
+                sort_key: None,
+                cells: BTreeMap::new(),
+                body: String::new(),
+            },
+        ];
+
+        assert!(
+            validate_row_reorder(&current, &["row_b".to_string(), "row_a".to_string()]).is_ok()
+        );
+        assert!(
+            validate_row_reorder(&current, &["row_a".to_string(), "row_a".to_string()]).is_err()
+        );
+        assert!(validate_row_reorder(&current, &["row_a".to_string()]).is_err());
     }
 
     #[test]

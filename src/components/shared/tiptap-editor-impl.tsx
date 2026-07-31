@@ -12,6 +12,7 @@ import { resolveWikilink } from "@/lib/wikilinks";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { TextSelection } from "@tiptap/pm/state";
 import type { ResolvedPos } from "@tiptap/pm/model";
@@ -699,6 +700,12 @@ export function TiptapEditor({
         superscriptTwo: false,
         superscriptThree: false,
       }),
+      // Retain pasted HTML tables as editable table nodes and serialize them
+      // back to Markdown instead of flattening their rows into plain prose.
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableHeader,
+      TableCell,
       SectionHeader,
       MeetingTranscript,
       ...(timestampedListItems ? [DailyTimestamp] : []),

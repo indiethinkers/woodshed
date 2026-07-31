@@ -58,6 +58,34 @@ const CALC_FNS: { value: CalcFn; label: string }[] = [
   { value: "max", label: "Max" },
 ];
 
+export function isTableRowDeleteShortcut(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  defaultPrevented: boolean;
+}): boolean {
+  return (
+    (event.key === "Delete" || event.key === "Backspace") &&
+    !event.defaultPrevented &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey
+  );
+}
+
+export function moveTableRowIds(
+  rowIds: string[],
+  activeId: string,
+  overId: string,
+): string[] | null {
+  if (activeId === overId) return null;
+  const oldIndex = rowIds.indexOf(activeId);
+  const newIndex = rowIds.indexOf(overId);
+  if (oldIndex === -1 || newIndex === -1) return null;
+  return arrayMove(rowIds, oldIndex, newIndex);
+}
+
 interface TableViewProps {
   tableId: string;
 }
@@ -132,10 +160,7 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
   useEffect(() => {
     function deleteSelectedRows(event: KeyboardEvent) {
       if (
-        event.key !== "Delete" ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
+        !isTableRowDeleteShortcut(event) ||
         selectedRowIds.size === 0 ||
         isEditableElement(event.target)
       ) {
@@ -1380,10 +1405,8 @@ function RowsDnd({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = ids.indexOf(String(active.id));
-    const newIndex = ids.indexOf(String(over.id));
-    if (oldIndex === -1 || newIndex === -1) return;
-    onReorder(arrayMove(ids, oldIndex, newIndex));
+    const next = moveTableRowIds(ids, String(active.id), String(over.id));
+    if (next) onReorder(next);
   }
   if (!enabled) return <>{children}</>;
   return (

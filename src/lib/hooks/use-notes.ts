@@ -204,7 +204,7 @@ export function useNoteMutations() {
   const remove = useMutation<
     void,
     Error,
-    { id: string },
+    { id: string; retainDetail?: boolean },
     { snapshot: NoteDto[] | undefined }
   >({
     mutationFn: async ({ id }) => {
@@ -214,9 +214,9 @@ export function useNoteMutations() {
       void qc.invalidateQueries({ queryKey: ["dailyJournal"] });
       void qc.invalidateQueries({ queryKey: ["wikilinkTargets"] });
     },
-    onMutate: async ({ id }) => {
+    onMutate: async ({ id, retainDetail }) => {
       const snapshot = qc.getQueryData<NoteDto[]>(NOTES_KEY);
-      if (snapshot) {
+      if (snapshot && !retainDetail) {
         qc.setQueryData(
           NOTES_KEY,
           snapshot.filter((n) => n.id !== id),
@@ -224,6 +224,7 @@ export function useNoteMutations() {
       }
       return { snapshot };
     },
+    onSuccess: (_data, { id }) => removeFromList(qc, id),
     onError: (_err, _vars, context) => {
       if (context?.snapshot) qc.setQueryData(NOTES_KEY, context.snapshot);
     },

@@ -180,11 +180,13 @@ function setDomCursorInside(element: Element) {
 describe("TiptapEditor URL embeds (daily journal)", () => {
   it("keeps rich clipboard structure instead of flattening it to plain text", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { container } = render(
+    const onCommit = vi.fn();
+    const editor = (value: string) => (
       <QueryClientProvider client={qc}>
-        <TiptapEditor value="" onCommit={vi.fn()} mode="freeform" />
-      </QueryClientProvider>,
+        <TiptapEditor value={value} onCommit={onCommit} mode="freeform" />
+      </QueryClientProvider>
     );
+    const { container, rerender } = render(editor(""));
     const editorEl = await waitFor(() => {
       const root = container.querySelector<HTMLElement>(".tiptap-content");
       expect(root).toBeTruthy();
@@ -197,9 +199,9 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
         items: [],
         getData: (type: string) => {
           if (type === "text/html") {
-            return "<h2>Release notes</h2><p><strong>Keep this emphasis.</strong></p><ul><li>One</li><li>Two</li></ul>";
+            return "<h2>Release notes</h2><p><strong>Keep this emphasis.</strong></p><ul><li>One</li><li>Two</li></ul><table><thead><tr><th>Owner</th></tr></thead><tbody><tr><td>Alex</td></tr></tbody></table>";
           }
-          return "Release notes\nKeep this emphasis.\nOne\nTwo";
+          return "Release notes\nKeep this emphasis.\nOne\nTwo\nOwner\nAlex";
         },
       },
     });
@@ -208,6 +210,22 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(editorEl.querySelector("h2")).toHaveTextContent("Release notes");
       expect(editorEl.querySelector("strong")).toHaveTextContent("Keep this emphasis.");
       expect(editorEl.querySelectorAll("li")).toHaveLength(2);
+      expect(editorEl.querySelector("table")).toHaveTextContent("Owner");
+      expect(editorEl.querySelector("table")).toHaveTextContent("Alex");
+    });
+
+    await waitFor(
+      () => expect(onCommit).toHaveBeenCalled(),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const savedMarkdown = onCommit.mock.calls.at(-1)?.[0] as string;
+    expect(savedMarkdown).toContain("Owner");
+    expect(savedMarkdown).toContain("Alex");
+
+    rerender(editor(savedMarkdown));
+    await waitFor(() => {
+      expect(container.querySelector("table")).toHaveTextContent("Owner");
+      expect(container.querySelector("table")).toHaveTextContent("Alex");
     });
   });
 

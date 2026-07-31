@@ -40,6 +40,7 @@
     "@tiptap/extension-link": "^3.28.0",
     "@tiptap/extension-list": "^3.28.0",
     "@tiptap/extension-placeholder": "^3.28.0",
+    "@tiptap/extension-table": "3.28.0",
     "@tiptap/extension-typography": "^3.28.0",
     "@tiptap/pm": "^3.28.0",
     "@tiptap/react": "^3.28.0",

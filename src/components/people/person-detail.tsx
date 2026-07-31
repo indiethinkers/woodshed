@@ -125,8 +125,10 @@ function PersonDetailInner({ person }: { person: PersonDto }) {
   }
 
   function handleDelete() {
-    remove.mutate({ id: person.id });
-    void navigate({ replace: true, to: "/people" });
+    remove.mutate(
+      { id: person.id, retainDetail: true },
+      { onSuccess: () => void navigate({ replace: true, to: "/people" }) },
+    );
   }
 
   function handleAvatarUpload(file: File) {

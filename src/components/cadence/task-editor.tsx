@@ -153,8 +153,13 @@ function TaskEditorInner({ task, date }: { task: TaskDto; date: string }) {
       setDeleting(true);
       return;
     }
-    remove.mutate({ id: task.id });
-    void navigate({ replace: true, to: "/cadence/$date", params: { date } });
+    remove.mutate(
+      { id: task.id },
+      {
+        onSuccess: () =>
+          void navigate({ replace: true, to: "/cadence/$date", params: { date } }),
+      },
+    );
   }
 
   return (

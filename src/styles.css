@@ -940,6 +940,29 @@
 .tiptap-content hr.ProseMirror-selectednode {
   border-top-color: var(--foreground);
 }
+
+.tiptap-content table {
+  width: max-content;
+  min-width: min(100%, 24rem);
+  max-width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.tiptap-content th,
+.tiptap-content td {
+  min-width: 7rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+.tiptap-content th {
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-weight: 600;
+  text-align: left;
+}
 /* Placeholder text on the first empty paragraph. The second selector
    covers outline mode, where the first child is `ul > li > p` instead of
    a top-level `p` — without it, fresh notes render as a bare bullet with

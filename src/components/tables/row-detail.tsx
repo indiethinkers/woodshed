@@ -92,8 +92,13 @@ function RowDetailInner({ table, row }: { table: TableDto; row: RowDto }) {
       setDeleting(true);
       return;
     }
-    remove.mutate({ rowId: row.id });
-    void navigate({ replace: true, to: "/databases/$id", params: { id: table.id } });
+    remove.mutate(
+      { rowId: row.id, retainDetail: true },
+      {
+        onSuccess: () =>
+          void navigate({ replace: true, to: "/databases/$id", params: { id: table.id } }),
+      },
+    );
   }
 
   return (

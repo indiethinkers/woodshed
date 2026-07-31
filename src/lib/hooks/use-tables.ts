@@ -444,7 +444,7 @@ export function useRowMutations(tableId: string) {
   const remove = useMutation<
     void,
     Error,
-    { rowId: string },
+    { rowId: string; retainDetail?: boolean },
     { snapshots: Map<readonly unknown[], unknown> }
   >({
     mutationFn: async ({ rowId }) => {
@@ -452,7 +452,7 @@ export function useRowMutations(tableId: string) {
       // Cache writes inside mutationFn so they survive mid-flight unmount.
       qc.invalidateQueries({ queryKey: ["tables"] });
     },
-    onMutate: async ({ rowId }) => {
+    onMutate: async ({ rowId, retainDetail }) => {
       const snapshots = new Map<readonly unknown[], unknown>();
       const list = qc.getQueryData<RowDto[]>(["rows", tableId]);
       if (Array.isArray(list)) {
@@ -465,7 +465,7 @@ export function useRowMutations(tableId: string) {
       const prevSingle = qc.getQueryData<RowDto | null>(["row", tableId, rowId]);
       if (prevSingle !== undefined) {
         snapshots.set(["row", tableId, rowId], prevSingle);
-        qc.setQueryData(["row", tableId, rowId], null);
+        if (!retainDetail) qc.setQueryData(["row", tableId, rowId], null);
       }
       return { snapshots };
     },
