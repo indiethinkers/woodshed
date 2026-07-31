@@ -262,6 +262,83 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     expect(commits).toEqual([]);
   });
 
+  it("creates one empty Cadence block for every Enter between text blocks", async () => {
+    const commits: string[] = [];
+    const first = "First synthetic block";
+    const second = "Second synthetic block";
+    const { container } = mountOutlineEditor(
+      `- [09:30] ${first}\n- [09:31] ${second}`,
+      (next) => commits.push(next),
+    );
+
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      expect(topLevelListItems(container)).toHaveLength(2);
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, first);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      expect(items).toHaveLength(5);
+      expect(items[0]).toHaveTextContent(first);
+      expect(items[4]).toHaveTextContent(second);
+      expect(
+        items.slice(1, 4).every((item) => item.textContent?.trim() === ""),
+      ).toBe(true);
+    });
+  });
+
+  it("keeps explicitly empty Cadence blocks when the editor reopens", async () => {
+    const commits: string[] = [];
+    const note = "Synthetic trailing note";
+    const mounted = mountOutlineEditor(
+      `- [09:30] ${note}`,
+      (next) => commits.push(next),
+    );
+    const editorEl = await waitFor(() => {
+      const root = mounted.container.querySelector<HTMLElement>(
+        ".tiptap-content",
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    });
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorAfterText(editorEl, note);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(topLevelListItems(mounted.container)).toHaveLength(4);
+    });
+    await waitFor(
+      () => expect(commits.length).toBeGreaterThan(0),
+      { timeout: SETTLE_MS * 2 },
+    );
+    const saved = commits.at(-1)!;
+    expect(
+      saved.split("\n").filter((line) => line.trim() === "-"),
+    ).toHaveLength(3);
+
+    mounted.unmount();
+    const reopened = mountOutlineEditor(saved, () => undefined);
+    await waitFor(() => {
+      expect(topLevelListItems(reopened.container)).toHaveLength(4);
+    });
+  });
+
   it("loads a journal without mangling bullets or committing anything", async () => {
     vi.stubGlobal(
       "fetch",

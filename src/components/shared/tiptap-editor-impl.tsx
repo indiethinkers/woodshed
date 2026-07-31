@@ -48,10 +48,7 @@ import {
   type WikilinkPickerHandle,
   type WikilinkPickerState,
 } from "./wikilink-picker";
-import {
-  normalizeToOutline,
-  removeGeneratedTrailingEmptyBullet,
-} from "./outline-normalizer";
+import { normalizeToOutline } from "./outline-normalizer";
 import { unwrapGeneratedOutlineMarkdown } from "./outline-markdown";
 import {
   SlashCommandMenu,
@@ -1098,7 +1095,6 @@ export function TiptapEditor({
       if (mode === "outline") {
         normalizeToOutline(editor);
         parseCollapsedMarkers(editor);
-        removeGeneratedTrailingEmptyBullet(editor);
       }
       // The initial markdown parse leaves YouTube / Twitter URLs as plain
       // links. Convert any URL-only paragraph into the matching embed.
@@ -1394,7 +1390,6 @@ export function TiptapEditor({
     if (mode === "outline") {
       normalizeToOutline(editor);
       parseCollapsedMarkers(editor);
-      removeGeneratedTrailingEmptyBullet(editor);
     }
     // Defer only the embed transform: it mounts React node-views (YouTube /
     // Twitter), and dispatching that from inside an effect can trigger

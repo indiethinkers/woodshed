@@ -104,15 +104,18 @@ export function handleTimestampedListEnter(
     return true;
   }
 
-  // A blank row is already ready for the next thought. It gets stamped
-  // when the user types, so repeated Enter presses should not create a
-  // stack of empty rows. The nested case is different: pressing Enter on
-  // an empty child row means "come back out one level", matching normal
-  // outline editors without letting the caret escape the bullet list.
+  // Each blank top-level row is intentional spacing, so keep it and create
+  // another on repeated Enter. An empty nested row still means "come back
+  // out one level", matching normal outline editors.
   if (!currentListItemHasVisibleContent(editor)) {
-    event.preventDefault();
-    if (outdentEmptyNestedListItem(editor)) return true;
-    return true;
+    if (
+      outdentEmptyNestedListItem(editor) ||
+      insertEmptyTopLevelListItemAfterCurrent(editor)
+    ) {
+      event.preventDefault();
+      return true;
+    }
+    return false;
   }
 
   if (insertTopLevelItemAfterChildren(editor)) {
@@ -122,6 +125,20 @@ export function handleTimestampedListEnter(
 
   if (!editor.commands.splitListItem("listItem")) return false;
   event.preventDefault();
+  return true;
+}
+
+function insertEmptyTopLevelListItemAfterCurrent(editor: Editor): boolean {
+  const context = currentListItemContext(editor);
+  if (!context?.isTopLevel) return false;
+
+  const listItem = editor.state.schema.nodes.listItem?.createAndFill();
+  if (!listItem) return false;
+
+  const insertPos = editor.state.selection.$from.after(context.itemDepth);
+  const tr = editor.state.tr.insert(insertPos, listItem);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2), 1));
+  editor.view.dispatch(tr.scrollIntoView());
   return true;
 }
 

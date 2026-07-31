@@ -86,14 +86,17 @@ describe("DailyTimestamp extension", () => {
     expect(timestamp).toBeUndefined();
   });
 
-  it("stamps a newly created empty list item on Enter (split)", () => {
+  it("leaves a newly created empty list item unstamped until text is entered", () => {
     editor = makeEditor("- First note");
 
     editor.commands.focus("end");
     editor.commands.splitListItem("listItem");
 
+    expect(getMarkdown(editor)).toBe("- First note\n- ");
+
+    editor.commands.insertContent("Second note");
     expect(getMarkdown(editor)).toMatch(
-      /^- First note\n\s*- \[\d{2}:\d{2}\]/,
+      /^- First note\n- \[\d{2}:\d{2}\] Second note$/,
     );
   });
 

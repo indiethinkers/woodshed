@@ -3,10 +3,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { Wikilink } from "./extensions/wikilink";
-import {
-  normalizeToOutline,
-  removeGeneratedTrailingEmptyBullet,
-} from "./outline-normalizer";
+import { normalizeToOutline } from "./outline-normalizer";
 
 function makeEditor(content = "") {
   const dom = document.createElement("div");
@@ -123,27 +120,5 @@ describe("normalizeToOutline", () => {
     expect(topLevelTypes(editor)).toEqual(["bulletList"]);
     const list = editor.state.doc.firstChild!;
     expect(list.childCount).toBe(1);
-  });
-});
-
-describe("removeGeneratedTrailingEmptyBullet", () => {
-  let editor: Editor | null = null;
-
-  afterEach(() => {
-    editor?.destroy();
-    editor = null;
-  });
-
-  it("removes a legacy empty tail after an existing row", () => {
-    editor = makeEditor("- [08:32]\n-");
-    removeGeneratedTrailingEmptyBullet(editor);
-    expect(editor.state.doc.firstChild?.childCount).toBe(1);
-  });
-
-  it("keeps the sole empty row on a blank day", () => {
-    editor = makeEditor("");
-    normalizeToOutline(editor);
-    removeGeneratedTrailingEmptyBullet(editor);
-    expect(editor.state.doc.firstChild?.childCount).toBe(1);
   });
 });

@@ -115,9 +115,9 @@ pub(crate) fn log_line_on_today(
 
 /// Pure body transform behind `log_line_on_today`. An empty body (or the
 /// bare `-` editor placeholder) is replaced by the line; otherwise the line
-/// lands at the end of the journal. Empty timestamp bullets (`- [HH:MM]` with
-/// no text — see `strip_empty_timestamp_bullets`) are swept first, so the
-/// next log line replaces an abandoned empty bullet rather than following it.
+/// lands at the end of the journal. Legacy empty timestamp bullets
+/// (`- [HH:MM]` with no text) are swept first; current editors store intentional
+/// empty blocks as bare bullets and preserve them.
 pub(crate) fn append_log_line(
     body: &str,
     timestamp: &str,
@@ -142,11 +142,10 @@ pub(crate) fn append_log_line(
     }
 }
 
-/// True when a line is a list bullet carrying only a `[HH:MM]` timestamp and
-/// no note text — e.g. `- [11:19]`. The editor stamps a freshly-split bullet
-/// the instant you press Enter (so the time shows before you type); abandon it
-/// without writing anything and that empty stamp persists. An empty timestamp
-/// isn't a note, so we treat these as the bare scaffold they effectively are.
+/// True when a line is a legacy list bullet carrying only a `[HH:MM]`
+/// timestamp and no note text — e.g. `- [11:19]`. Current editors timestamp a
+/// block only after it receives text, but older records can retain these
+/// abandoned stamps.
 fn is_empty_timestamp_bullet(line: &str) -> bool {
     let Some(rest) = line.trim().strip_prefix('-') else {
         return false;
@@ -245,14 +244,21 @@ pub fn daily_get(app: AppHandle, state: State<AppState>, date: String) -> Result
 /// refuses the shrink outright. Short one-line bodies stay deletable —
 /// blocking those would frustrate more than it protects.
 pub(crate) fn is_destructive_overwrite(current: &str, next: &str) -> bool {
-    if !matches!(next.trim(), "" | "-") {
+    if !is_empty_editor_body(next) {
         return false;
     }
     let current = current.trim();
-    if matches!(current, "" | "-") {
+    if is_empty_editor_body(current) {
         return false;
     }
     current.len() >= 80 || current.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+}
+
+fn is_empty_editor_body(body: &str) -> bool {
+    body.lines().all(|line| {
+        let trimmed = line.trim();
+        trimmed.is_empty() || trimmed == "-" || is_empty_timestamp_bullet(line)
+    })
 }
 
 /// Keep the empty-overwrite guard for stale or accidental editor commits, but
@@ -277,7 +283,7 @@ pub(crate) fn should_refuse_destructive_overwrite(
 /// on-disk body.
 pub(crate) fn is_stale_base_overwrite(current: &str, previous_body: Option<&str>) -> bool {
     match previous_body {
-        Some(prev) => prev != current && !matches!(current.trim(), "" | "-"),
+        Some(prev) => prev != current && !is_empty_editor_body(current),
         None => false,
     }
 }
@@ -305,13 +311,10 @@ pub fn daily_save(
             body: String::new(),
         },
     };
-    // Normalize before the guards, not after: an abandoned empty timestamp
-    // bullet (`- [11:19]` with no text) is editor noise, not a note. Stripping
-    // it here is why pressing Enter for a new line and walking away doesn't
-    // leave a ghost stamp on the day. Running the guards on the stripped
-    // body is load-bearing: a body of only `- [11:19]` collapses to empty, and
-    // the destructive-overwrite guard must see that empty so it still protects
-    // a substantial day from a stale editor.
+    // Normalize legacy abandoned timestamp bullets before the guards. Current
+    // editors represent intentional empty blocks as bare `-` rows, which this
+    // cleanup deliberately preserves. Running the guards on the stripped body
+    // remains load-bearing for older clients and records.
     let next_body = strip_empty_timestamp_bullets(&body);
     if should_refuse_destructive_overwrite(&journal.body, &next_body, previous_body.as_deref()) {
         crate::log_warn!(
@@ -403,6 +406,7 @@ mod tests {
         assert!(is_destructive_overwrite(body, "-"));
         assert!(is_destructive_overwrite(body, ""));
         assert!(is_destructive_overwrite(body, "  \n  "));
+        assert!(is_destructive_overwrite(body, "- \n- \n- "));
         assert!(should_refuse_destructive_overwrite(body, "", None));
         assert!(should_refuse_destructive_overwrite(
             body,
@@ -428,6 +432,11 @@ mod tests {
         let body = "- [08:08] Need to test Hubpost CRM for Agents project.\n- [08:28] Revisit estimates for pricing project.";
         assert!(!should_refuse_destructive_overwrite(body, "", Some(body)));
         assert!(!should_refuse_destructive_overwrite(body, "- ", Some(body)));
+        assert!(!should_refuse_destructive_overwrite(
+            body,
+            "- \n- \n- ",
+            Some(body)
+        ));
     }
 
     #[test]
@@ -460,6 +469,7 @@ mod tests {
         // diverging base is fine — the empty-overwrite guard owns that case.
         assert!(!is_stale_base_overwrite("", Some("old")));
         assert!(!is_stale_base_overwrite("-", Some("old")));
+        assert!(!is_stale_base_overwrite("- \n- ", Some("old")));
         assert!(!is_stale_base_overwrite("  \n ", Some("old")));
     }
 

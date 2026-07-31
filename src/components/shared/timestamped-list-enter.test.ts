@@ -69,6 +69,64 @@ describe("insertParagraphAboveTrailingEmbed", () => {
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
   });
 
+  it("creates a distinct top-level block for every Enter on an empty block", () => {
+    editor = new Editor({
+      extensions: [StarterKit, DailyTimestamp],
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "bulletList",
+            content: [
+              {
+                type: "listItem",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "First block" }],
+                  },
+                ],
+              },
+              {
+                type: "listItem",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Second block" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    let firstTextEnd = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (firstTextEnd === -1 && node.isText && node.text === "First block") {
+        firstTextEnd = pos + node.nodeSize;
+        return false;
+      }
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        TextSelection.create(editor.state.doc, firstTextEnd),
+      ),
+    );
+
+    for (let index = 0; index < 3; index += 1) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        cancelable: true,
+      });
+      expect(handleTimestampedListEnter(event, editor)).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(editor.state.doc.child(0).childCount).toBe(5);
+  });
+
   it("treats a hidden daily timestamp as an empty line above the embed", () => {
     editor = new Editor({
       extensions: [StarterKit, DailyTimestamp, TestEmbed],

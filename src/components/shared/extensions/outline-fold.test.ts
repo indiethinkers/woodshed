@@ -208,7 +208,7 @@ describe("OutlineListItem collapse round-trip", () => {
     expect(list?.child(0).lastChild?.type.name).toBe("bulletList");
     expect(list?.child(1).childCount).toBe(1);
     expect(getMarkdown(editor)).toMatch(
-      /^- \[09:30\] Parent <!-- collapsed -->[\s\S]*  - Child[\s\S]*^- \[\d{2}:\d{2}\]/m,
+      /^- \[09:30\] Parent <!-- collapsed -->[\s\S]*  - Child[\s\S]*^-[ \t]*$/m,
     );
   });
 
@@ -240,7 +240,7 @@ describe("OutlineListItem collapse round-trip", () => {
     expect(list?.child(0).lastChild?.type.name).toBe("bulletList");
     expect(list?.child(1).type.name).toBe("listItem");
     expect(getMarkdown(editor)).toMatch(
-      /^- \[09:30\] Parent[\s\S]*^  - Child[\s\S]*^- \[\d{2}:\d{2}\]\s*$/m,
+      /^- \[09:30\] Parent[\s\S]*^  - Child[\s\S]*^-[ \t]*$/m,
     );
   });
 
@@ -255,7 +255,7 @@ describe("OutlineListItem collapse round-trip", () => {
     expect(list?.type.name).toBe("bulletList");
     expect(list?.childCount).toBe(2);
     expect(getMarkdown(editor)).toMatch(
-      /^- \[09:30\] Parent[\s\S]*^  - Child[\s\S]*^- \[\d{2}:\d{2}\]\s*$/m,
+      /^- \[09:30\] Parent[\s\S]*^  - Child[\s\S]*^-[ \t]*$/m,
     );
   });
 
