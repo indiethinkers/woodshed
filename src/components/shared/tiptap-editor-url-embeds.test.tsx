@@ -229,6 +229,39 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     });
   });
 
+  it("creates a new Cadence line above an embed when the lead paragraph only has a timestamp", async () => {
+    const commits: string[] = [];
+    const tweetUrl = "https://x.com/sample_account/status/123456789";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}`,
+      (next) => commits.push(next),
+    );
+
+    const editorEl = await waitFor(() => {
+      const root = container.querySelector<HTMLElement>(".tiptap-content");
+      expect(root).toBeTruthy();
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+      return root!;
+    });
+    const item = topLevelListItems(container)[0]!;
+    const leadParagraph = Array.from(item.children).find(
+      (child) => child.tagName === "P",
+    )!;
+    expect(item.querySelectorAll(":scope > p")).toHaveLength(1);
+
+    editorEl.focus();
+    fireEvent.focus(editorEl);
+    setDomCursorInside(leadParagraph);
+    fireEvent(document, new Event("selectionchange"));
+    fireEvent.keyDown(editorEl, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(item.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(item.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    expect(commits).toEqual([]);
+  });
+
   it("loads a journal without mangling bullets or committing anything", async () => {
     vi.stubGlobal(
       "fetch",

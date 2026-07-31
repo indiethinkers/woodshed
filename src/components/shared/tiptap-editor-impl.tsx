@@ -15,7 +15,6 @@ import Typography from "@tiptap/extension-typography";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { TextSelection } from "@tiptap/pm/state";
-import type { ResolvedPos } from "@tiptap/pm/model";
 import type { Node as PMNode, NodeType } from "prosemirror-model";
 import {
   YoutubeResource,
@@ -68,12 +67,9 @@ import { handleListIndentShortcut } from "./list-indent-shortcut";
 import {
   deleteEmptyListItem,
   deleteListItemTextBeforeCursor,
-  insertParagraphAboveTrailingEmbed,
+  handleTimestampedListEnter,
   insertTimestampedHorizontalRule,
-  insertTopLevelItemAfterChildren,
-  listItemHasVisibleContent,
   nestTimestampedListMarker,
-  outdentEmptyNestedListItem,
   outdentListItemAtStart,
   outdentNestedListItem,
 } from "./timestamped-list-enter";
@@ -1470,64 +1466,6 @@ function imagePickerTarget(
   return typeof detail?.pos === "number" && Number.isFinite(detail.pos)
     ? { pos: detail.pos }
     : null;
-}
-
-function handleTimestampedListEnter(
-  event: KeyboardEvent,
-  editor: Editor | null,
-): boolean {
-  if (!editor) return false;
-  if (event.key !== "Enter") return false;
-  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-    return false;
-  }
-  if (!selectionIsInsideNode(editor, "listItem")) return false;
-
-  if (insertParagraphAboveTrailingEmbed(editor)) {
-    event.preventDefault();
-    return true;
-  }
-
-  // A blank row is already ready for the next thought. It gets stamped
-  // when the user types, so repeated Enter presses should not create a
-  // stack of empty rows. The nested case is different: pressing Enter on
-  // an empty child row means "come back out one level", matching normal
-  // outline editors without letting the caret escape the bullet list.
-  if (!currentListItemHasVisibleContent(editor)) {
-    event.preventDefault();
-    if (outdentEmptyNestedListItem(editor)) return true;
-    return true;
-  }
-
-  if (insertTopLevelItemAfterChildren(editor)) {
-    event.preventDefault();
-    return true;
-  }
-
-  if (!editor.commands.splitListItem("listItem")) return false;
-  event.preventDefault();
-  return true;
-}
-
-function selectionIsInsideNode(editor: Editor, nodeName: string): boolean {
-  const { $from, $to } = editor.state.selection;
-  return (
-    ancestorDepthByName($from, nodeName) !== null &&
-    ancestorDepthByName($to, nodeName) !== null
-  );
-}
-
-function currentListItemHasVisibleContent(editor: Editor): boolean {
-  const depth = ancestorDepthByName(editor.state.selection.$from, "listItem");
-  if (depth === null) return false;
-  return listItemHasVisibleContent(editor.state.selection.$from.node(depth));
-}
-
-function ancestorDepthByName($pos: ResolvedPos, nodeName: string): number | null {
-  for (let depth = $pos.depth; depth > 0; depth -= 1) {
-    if ($pos.node(depth).type.name === nodeName) return depth;
-  }
-  return null;
 }
 
 // ---- URL-only paragraph → embed transform ----

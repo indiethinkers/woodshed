@@ -140,6 +140,17 @@ function setDomCursorAfterText(root: HTMLElement, text: string) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("DailyContent notes editor", () => {
+  it("keeps intentional empty lines above tweet embeds visible while editing", () => {
+    expect(styles).toContain(`.tiptap-content[data-daily-timestamps]
+  li:has(> div[data-tweet-id])
+  > p:empty,
+.tiptap-content[data-daily-timestamps]
+  li:has(> div[data-tweet-id])
+  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  display: block;
+}`);
+  });
+
   it("covers the sticky header inset so scrolled notes cannot bleed above it", async () => {
     const { container } = renderDailyContent("- [09:30] A journal entry");
 

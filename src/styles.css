@@ -951,6 +951,17 @@
   display: none;
 }
 
+/* In Cadence, Enter above a tweet creates an intentional blank line. Keep that
+   line visible while continuing to collapse the timestamp-only lead paragraph. */
+.tiptap-content[data-daily-timestamps]
+  li:has(> div[data-tweet-id])
+  > p:empty,
+.tiptap-content[data-daily-timestamps]
+  li:has(> div[data-tweet-id])
+  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  display: block;
+}
+
 .tiptap-content hr {
   border: 0;
   border-top: 1px solid var(--border);

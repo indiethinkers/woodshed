@@ -1,6 +1,10 @@
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
-import { Fragment, type Node as PMNode } from "prosemirror-model";
+import {
+  Fragment,
+  type Node as PMNode,
+  type ResolvedPos,
+} from "prosemirror-model";
 
 export function insertTopLevelItemAfterChildren(editor: Editor): boolean {
   const { state } = editor;
@@ -52,7 +56,11 @@ export function insertTopLevelItemAfterChildren(editor: Editor): boolean {
 export function insertParagraphAboveTrailingEmbed(editor: Editor): boolean {
   const { state } = editor;
   const { $from, empty } = state.selection;
-  if (!empty || !$from.parent.isTextblock || $from.parent.content.size !== 0) {
+  if (
+    !empty ||
+    !$from.parent.isTextblock ||
+    listItemHasVisibleContent($from.parent)
+  ) {
     return false;
   }
 
@@ -79,6 +87,63 @@ export function insertParagraphAboveTrailingEmbed(editor: Editor): boolean {
   tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1), 1));
   editor.view.dispatch(tr.scrollIntoView());
   return true;
+}
+
+export function handleTimestampedListEnter(
+  event: KeyboardEvent,
+  editor: Editor | null,
+): boolean {
+  if (!editor || event.key !== "Enter") return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+    return false;
+  }
+  if (!selectionIsInsideNode(editor, "listItem")) return false;
+
+  if (insertParagraphAboveTrailingEmbed(editor)) {
+    event.preventDefault();
+    return true;
+  }
+
+  // A blank row is already ready for the next thought. It gets stamped
+  // when the user types, so repeated Enter presses should not create a
+  // stack of empty rows. The nested case is different: pressing Enter on
+  // an empty child row means "come back out one level", matching normal
+  // outline editors without letting the caret escape the bullet list.
+  if (!currentListItemHasVisibleContent(editor)) {
+    event.preventDefault();
+    if (outdentEmptyNestedListItem(editor)) return true;
+    return true;
+  }
+
+  if (insertTopLevelItemAfterChildren(editor)) {
+    event.preventDefault();
+    return true;
+  }
+
+  if (!editor.commands.splitListItem("listItem")) return false;
+  event.preventDefault();
+  return true;
+}
+
+function selectionIsInsideNode(editor: Editor, nodeName: string): boolean {
+  const { $from, $to } = editor.state.selection;
+  return (
+    ancestorDepthByName($from, nodeName) !== null &&
+    ancestorDepthByName($to, nodeName) !== null
+  );
+}
+
+function currentListItemHasVisibleContent(editor: Editor): boolean {
+  const depth = ancestorDepthByName(editor.state.selection.$from, "listItem");
+  if (depth === null) return false;
+  return listItemHasVisibleContent(editor.state.selection.$from.node(depth));
+}
+
+function ancestorDepthByName($pos: ResolvedPos, nodeName: string): number | null {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === nodeName) return depth;
+  }
+  return null;
 }
 
 export function deleteEmptyListItem(editor: Editor): boolean {

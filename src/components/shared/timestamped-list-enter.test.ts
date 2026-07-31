@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Editor, Node } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { TextSelection } from "@tiptap/pm/state";
-import { insertParagraphAboveTrailingEmbed } from "./timestamped-list-enter";
+import { DailyTimestamp } from "./extensions/daily-timestamp";
+import {
+  handleTimestampedListEnter,
+  insertParagraphAboveTrailingEmbed,
+} from "./timestamped-list-enter";
 
 const TestEmbed = Node.create({
   name: "testEmbed",
@@ -63,5 +67,54 @@ describe("insertParagraphAboveTrailingEmbed", () => {
     expect(item.child(1).type.name).toBe("paragraph");
     expect(item.child(2).type.name).toBe("testEmbed");
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+  });
+
+  it("treats a hidden daily timestamp as an empty line above the embed", () => {
+    editor = new Editor({
+      extensions: [StarterKit, DailyTimestamp, TestEmbed],
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "bulletList",
+            content: [
+              {
+                type: "listItem",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      { type: "dailyTimestamp", attrs: { time: "12:24" } },
+                    ],
+                  },
+                  { type: "testEmbed" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    let paragraphPos = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (paragraphPos === -1 && node.type.name === "paragraph") {
+        paragraphPos = pos;
+        return false;
+      }
+      return true;
+    });
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        TextSelection.create(editor.state.doc, paragraphPos + 2),
+      ),
+    );
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      cancelable: true,
+    });
+    expect(handleTimestampedListEnter(event, editor)).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    expect(editor.state.doc.child(0).child(0).childCount).toBe(3);
   });
 });
