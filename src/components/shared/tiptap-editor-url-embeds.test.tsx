@@ -553,7 +553,7 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     ).toBeNull();
   });
 
-  it("turns the writing affordance into a focused paragraph when clicked", async () => {
+  it("turns the writing affordance into a focused Cadence row when clicked", async () => {
     const tweetUrl = "https://x.com/sample_account/status/564738291";
     const { container } = mountOutlineEditor(
       `- [09:30]\n\n  ${tweetUrl}`,
@@ -572,13 +572,31 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
     fireEvent.mouseDown(writingBlock);
 
+    let paragraph: HTMLParagraphElement | null = null;
     await waitFor(() => {
-      const paragraph = container.querySelector(
-        "p[data-post-embed-writing-block]",
+      const items = topLevelListItems(container);
+      paragraph = items[1]?.querySelector(
+        ":scope > p[data-post-embed-writing-block]",
       );
       expect(paragraph).toBeTruthy();
-      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(items).toHaveLength(2);
+      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
       expect(document.activeElement).toHaveClass("tiptap-content");
+    });
+
+    paragraph!.textContent = "First character";
+    fireEvent.input(paragraph!, {
+      data: "First character",
+      inputType: "insertText",
+    });
+
+    await waitFor(() => {
+      const nextItem = topLevelListItems(container)[1];
+      expect(nextItem).toHaveTextContent("First character");
+      expect(nextItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+      expect(
+        nextItem?.querySelector("[data-post-embed-writing-block]"),
+      ).toBeNull();
     });
   });
 

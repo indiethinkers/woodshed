@@ -14,6 +14,52 @@ interface TrailingEmbed {
     | { kind: "paragraph"; from: number; to: number };
 }
 
+interface TopLevelListItemContext {
+  itemDepth: number;
+  itemEnd: number;
+  itemIndex: number;
+  list: PMNode;
+}
+
+function topLevelListItemAt(
+  doc: PMNode,
+  pos: number,
+): TopLevelListItemContext | null {
+  const $pos = doc.resolve(pos);
+  for (let itemDepth = $pos.depth; itemDepth > 0; itemDepth -= 1) {
+    if ($pos.node(itemDepth).type.name !== "listItem") continue;
+
+    const listDepth = itemDepth - 1;
+    if (
+      listDepth !== 1 ||
+      $pos.node(listDepth).type.name !== "bulletList" ||
+      $pos.node(0).type.name !== "doc"
+    ) {
+      return null;
+    }
+
+    return {
+      itemDepth,
+      itemEnd: $pos.after(itemDepth),
+      itemIndex: $pos.index(listDepth),
+      list: $pos.node(listDepth),
+    };
+  }
+  return null;
+}
+
+function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
+  if (
+    node?.type.name !== "listItem" ||
+    node.childCount !== 1 ||
+    node.firstChild?.type.name !== "paragraph" ||
+    node.firstChild.content.size !== 0
+  ) {
+    return null;
+  }
+  return node.firstChild;
+}
+
 /**
  * Locate an embed only when it is the document's last substantive block.
  *
@@ -39,6 +85,29 @@ function findTrailingEmbed(doc: PMNode): TrailingEmbed | null {
     if (!EMBED_NODE_NAMES.has(node.type.name) || !parent) return;
     const paragraph = doc.type.schema.nodes.paragraph;
     if (!paragraph) return;
+
+    const listItem = topLevelListItemAt(doc, pos);
+    if (listItem) {
+      const nextParagraph = emptyLeadParagraph(
+        listItem.list.maybeChild(listItem.itemIndex + 1),
+      );
+      if (nextParagraph) {
+        const from = listItem.itemEnd + 1;
+        candidates.push({
+          nodePos: pos,
+          target: { kind: "paragraph", from, to: from + nextParagraph.nodeSize },
+        });
+        return;
+      }
+
+      if (listItem.itemIndex + 1 === listItem.list.childCount) {
+        candidates.push({
+          nodePos: pos,
+          target: { kind: "insert", pos: pos + node.nodeSize },
+        });
+      }
+      return;
+    }
 
     const insertIndex = index + 1;
     const nextSibling = parent.maybeChild(insertIndex);
@@ -67,13 +136,52 @@ function findTrailingEmbed(doc: PMNode): TrailingEmbed | null {
   return candidate.nodePos === lastSubstantivePos ? candidate : null;
 }
 
-function insertParagraph(
+function insertWritingBlock(
   view: EditorView,
   getPos: () => number | undefined,
 ): void {
   const insertPos = getPos();
+  if (insertPos == null) return;
+
+  const listItemContext = topLevelListItemAt(view.state.doc, insertPos);
+  if (listItemContext) {
+    const listItem = view.state.schema.nodes.listItem?.createAndFill();
+    if (!listItem) return;
+
+    const transaction = view.state.tr;
+    const $widget = view.state.doc.resolve(insertPos);
+    const legacyParagraph = $widget.parent.maybeChild($widget.index());
+    if (
+      $widget.parent.type.name === "listItem" &&
+      legacyParagraph?.type.name === "paragraph" &&
+      legacyParagraph.content.size === 0
+    ) {
+      transaction.delete(insertPos, insertPos + legacyParagraph.nodeSize);
+    }
+
+    const itemEnd = transaction.mapping.map(listItemContext.itemEnd, 1);
+    const $itemEnd = transaction.doc.resolve(itemEnd);
+    if (
+      !$itemEnd.parent.canReplaceWith(
+        $itemEnd.index(),
+        $itemEnd.index(),
+        listItem.type,
+      )
+    ) {
+      return;
+    }
+
+    transaction.insert(itemEnd, listItem);
+    transaction.setSelection(
+      TextSelection.near(transaction.doc.resolve(itemEnd + 2), 1),
+    );
+    view.dispatch(transaction.scrollIntoView());
+    view.focus();
+    return;
+  }
+
   const paragraph = view.state.schema.nodes.paragraph?.createAndFill();
-  if (insertPos == null || !paragraph) return;
+  if (!paragraph) return;
 
   const $insert = view.state.doc.resolve(insertPos);
   if (!$insert.parent.canReplaceWith($insert.index(), $insert.index(), paragraph.type)) {
@@ -102,13 +210,13 @@ function createWritingButton(
   button.addEventListener("mousedown", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    insertParagraph(view, getPos);
+    insertWritingBlock(view, getPos);
   });
   button.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
-    insertParagraph(view, getPos);
+    insertWritingBlock(view, getPos);
   });
   return button;
 }
@@ -116,7 +224,8 @@ function createWritingButton(
 /**
  * Paint a clickable writing affordance after the final embed without adding
  * derived content to the Markdown document. Clicking it creates a real empty
- * paragraph and places the caret there.
+ * block and places the caret there. In Cadence that block must be a sibling
+ * list item so its spacing and timestamp behavior match every other entry.
  */
 export const PostEmbedWritingBlock = Extension.create({
   name: "postEmbedWritingBlock",
