@@ -160,19 +160,31 @@ describe("DailyContent notes editor", () => {
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
     );
     expect(styles).toMatch(
-      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:first-child\s*\{[^}]*height:\s*0;[^}]*min-height:\s*0;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:has\(> \[data-daily-timestamp\]\)\s*\{[^}]*height:\s*0;[^}]*min-height:\s*0;/,
     );
     expect(styles).toMatch(
-      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:first-child\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:not\(:has\(> \[data-daily-timestamp\]\)\):not\(\s*\.cadence-active-empty-paragraph\s*\)\s*\{[^}]*display:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /p\.cadence-active-empty-paragraph:has\([\s\S]*~ div\.react-renderer\.cadence-standalone-embed[\s\S]*\)\s*\{[^}]*margin-bottom:\s*var\(--embed-block-gap\);/,
+    );
+    expect(styles).toMatch(
+      /div\.react-renderer\.cadence-standalone-embed\s*~ p\.cadence-active-empty-paragraph\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
+    );
+    expect(styles).toMatch(
+      /p:not\(\.cadence-active-empty-paragraph\):empty:has\([\s\S]*\+ div\.react-renderer > \[data-tweet-id\][\s\S]*\)/,
+    );
+    expect(styles).toMatch(
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
     );
     expect(styles).not.toMatch(
-      /> p\s*> \[data-daily-timestamp\]\s*\{\s*top:\s*1rem;/,
+      /\.tiptap-content\[data-daily-timestamps\]\s*> ul\s*> li\s*> p\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
     );
   });
 
   it("keeps equal space around embeds and exposes the writing block below", () => {
     expect(styles).toMatch(
-      /\.tiptap-content\s*\{[^}]*--embed-block-gap:\s*2rem;/,
+      /\.tiptap-content\s*\{[^}]*--embed-block-gap:\s*1\.5rem;/,
     );
     expect(styles).toMatch(
       /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*var\(--embed-block-gap\);/,

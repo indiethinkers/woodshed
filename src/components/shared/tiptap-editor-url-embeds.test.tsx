@@ -389,6 +389,9 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(items).toHaveLength(3);
       expect(items[1]?.querySelector(selector)).toBeTruthy();
       expect(items[1]?.querySelector(":scope > p")).toBeTruthy();
+      expect(
+        items[1]?.querySelector(":scope > div.react-renderer"),
+      ).toHaveClass("cadence-standalone-embed");
     });
   });
 
@@ -473,6 +476,27 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(item.querySelectorAll(":scope > p")).toHaveLength(2);
       expect(item.querySelector("[data-tweet-id]")).toBeTruthy();
     });
+    const insertedParagraph = item.querySelector<HTMLElement>(
+      ":scope > p.cadence-active-empty-paragraph",
+    );
+    expect(insertedParagraph).toBeTruthy();
+    expect(
+      item.querySelector(":scope > div.react-renderer"),
+    ).toHaveClass("cadence-standalone-embed");
+
+    insertedParagraph!.textContent = "Synthetic lead text";
+    fireEvent.input(insertedParagraph!, {
+      data: "Synthetic lead text",
+      inputType: "insertText",
+    });
+
+    await waitFor(() => {
+      expect(item).toHaveTextContent("Synthetic lead text");
+      expect(
+        item.querySelector(":scope > div.react-renderer"),
+      ).not.toHaveClass("cadence-standalone-embed");
+      expect(item.querySelectorAll("[data-daily-timestamp]")).toHaveLength(1);
+    });
     expect(commits).toEqual([]);
   });
 
@@ -553,6 +577,25 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     expect(
       container.querySelector("[data-post-embed-writing-block]"),
     ).toBeNull();
+  });
+
+  it("keeps ordinary embed margins when another block atom shares the Cadence row", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/161803398";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ---\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      expect(wrapper?.closest("li")?.querySelector(":scope > hr")).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
   });
 
   it.each([

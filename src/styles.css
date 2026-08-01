@@ -299,7 +299,7 @@
 /* Tiptap body editor — minimal block styling that mirrors the read-only
    Markdown renderer so editing and viewing match. */
 .tiptap-content {
-  --embed-block-gap: 2rem;
+  --embed-block-gap: 1.5rem;
   outline: none;
   /* Browsers don't always resolve `cursor: auto` to text within a
      contenteditable's margin/padding regions, so the I-beam disappears in
@@ -988,42 +988,81 @@
    and the card's top edge sits on the entry line, directly beside the dash.
    The embed shell is the wrapper's first child, so its own margin-top is
    already 0 via `.twitter-embed-shell:first-child`. */
-/* The editor marks Cadence embeds whose lead paragraph has no substantive
-   content. Use that semantic marker instead of reconstructing emptiness from
-   browser-generated trailing breaks, which change as the caret moves. */
+/* The editor marks Cadence embeds whose surrounding paragraphs have no
+   substantive content. Use that semantic marker instead of reconstructing
+   emptiness from browser-generated trailing breaks, which change as the caret
+   moves. Paste and Enter can leave more than one empty lead paragraph, so the
+   paragraph that owns the gutter timestamp stays while the others collapse. */
 .tiptap-content[data-daily-timestamps]
   li:has(> div.react-renderer.cadence-standalone-embed)
-  > p:first-child {
+  > p:has(> [data-daily-timestamp]) {
   height: 0;
   min-height: 0;
 }
 .tiptap-content[data-daily-timestamps]
   li:has(> div.react-renderer.cadence-standalone-embed)
-  > p:first-child
+  > p:not(:has(> [data-daily-timestamp])):not(
+    .cadence-active-empty-paragraph
+  ) {
+  display: none;
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p.cadence-active-empty-paragraph {
+  min-height: 1.5em;
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p.cadence-active-empty-paragraph:has(
+    ~ div.react-renderer.cadence-standalone-embed
+  ) {
+  margin-bottom: var(--embed-block-gap);
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > div.react-renderer.cadence-standalone-embed
+  ~ p.cadence-active-empty-paragraph {
+  margin-top: var(--embed-block-gap);
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p
   > [data-daily-timestamp] {
   top: 1rem;
 }
 /* Collapse only the empty paste paragraph immediately before an embed. The
    terminal-card writing affordance is derived by PostEmbedWritingBlock and
    never needs a hidden Markdown paragraph of its own. */
-.tiptap-content li:has(> img.tiptap-image) > p:empty:has(+ img.tiptap-image),
 .tiptap-content
   li:has(> img.tiptap-image)
-  > p:has(> br.ProseMirror-trailingBreak:only-child):has(+ img.tiptap-image),
+  > p:not(.cadence-active-empty-paragraph):empty:has(+ img.tiptap-image),
+.tiptap-content
+  li:has(> img.tiptap-image)
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(+ img.tiptap-image),
 .tiptap-content
   li:has(> div.react-renderer > [data-youtube-resource])
-  > p:empty:has(+ div.react-renderer > [data-youtube-resource]),
+  > p:not(.cadence-active-empty-paragraph):empty:has(
+    + div.react-renderer > [data-youtube-resource]
+  ),
 .tiptap-content
   li:has(> div.react-renderer > [data-youtube-resource])
-  > p:has(> br.ProseMirror-trailingBreak:only-child):has(
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(
     + div.react-renderer > [data-youtube-resource]
   ),
 .tiptap-content
   li:has(> div.react-renderer > [data-tweet-id])
-  > p:empty:has(+ div.react-renderer > [data-tweet-id]),
+  > p:not(.cadence-active-empty-paragraph):empty:has(
+    + div.react-renderer > [data-tweet-id]
+  ),
 .tiptap-content
   li:has(> div.react-renderer > [data-tweet-id])
-  > p:has(> br.ProseMirror-trailingBreak:only-child):has(
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(
     + div.react-renderer > [data-tweet-id]
   ) {
   display: none;

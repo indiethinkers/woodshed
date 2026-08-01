@@ -25,6 +25,7 @@ interface PostEmbedWritingBlockOptions {
 }
 
 interface EmbedInspection {
+  cadenceActiveEmptyParagraphs: Array<{ from: number; to: number }>;
   cadenceStandaloneEmbeds: Array<{ from: number; to: number }>;
   trailingEmbed: TrailingEmbed | null;
 }
@@ -61,12 +62,54 @@ function topLevelListItemAt(
 }
 
 function hasSubstantiveContent(node: PMNode): boolean {
+  if (isSubstantive(node)) return true;
   let substantive = false;
   node.descendants((child) => {
     if (isSubstantive(child)) substantive = true;
     return !substantive;
   });
   return substantive;
+}
+
+function isStandaloneCadenceEmbed(parent: PMNode, embed: PMNode): boolean {
+  if (parent.type.name !== "listItem") return false;
+
+  let embedCount = 0;
+  let standalone = true;
+  parent.forEach((child) => {
+    if (EMBED_NODE_NAMES.has(child.type.name)) {
+      embedCount += 1;
+      if (child !== embed) standalone = false;
+      return;
+    }
+    if (hasSubstantiveContent(child)) standalone = false;
+  });
+  return standalone && embedCount === 1;
+}
+
+function selectedEmptyParagraphIn(
+  doc: PMNode,
+  selectionFrom: number,
+  listItem: PMNode,
+): { from: number; to: number } | null {
+  const $from = doc.resolve(selectionFrom);
+  for (let depth = $from.depth - 1; depth > 0; depth -= 1) {
+    if ($from.node(depth) !== listItem) continue;
+    const paragraphDepth = depth + 1;
+    const paragraph = $from.node(paragraphDepth);
+    if (
+      paragraph.type.name !== "paragraph" ||
+      hasSubstantiveContent(paragraph) ||
+      paragraph.content.content.some(
+        (child) => child.type.name === "dailyTimestamp",
+      )
+    ) {
+      return null;
+    }
+    const from = $from.before(paragraphDepth);
+    return { from, to: from + paragraph.nodeSize };
+  }
+  return null;
 }
 
 function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
@@ -92,7 +135,9 @@ function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
 function inspectEmbeds(
   doc: PMNode,
   timestampedListItems: boolean,
+  selectionFrom: number,
 ): EmbedInspection {
+  const cadenceActiveEmptyParagraphs: Array<{ from: number; to: number }> = [];
   const cadenceStandaloneEmbeds: Array<{ from: number; to: number }> = [];
   const candidates: TrailingEmbed[] = [];
   let lastSubstantivePos = -1;
@@ -108,17 +153,19 @@ function inspectEmbeds(
       ? topLevelListItemAt(doc, pos)
       : null;
     if (listItem) {
-      if (
-        parent.type.name === "listItem" &&
-        parent.childCount === 2 &&
-        parent.lastChild === node &&
-        parent.firstChild?.type.name === "paragraph" &&
-        !hasSubstantiveContent(parent.firstChild)
-      ) {
+      if (isStandaloneCadenceEmbed(parent, node)) {
         cadenceStandaloneEmbeds.push({
           from: pos,
           to: pos + node.nodeSize,
         });
+        const activeParagraph = selectedEmptyParagraphIn(
+          doc,
+          selectionFrom,
+          parent,
+        );
+        if (activeParagraph) {
+          cadenceActiveEmptyParagraphs.push(activeParagraph);
+        }
       }
       const nextParagraph = emptyLeadParagraph(
         listItem.list.maybeChild(listItem.itemIndex + 1),
@@ -165,6 +212,7 @@ function inspectEmbeds(
 
   const candidate = candidates.at(-1);
   return {
+    cadenceActiveEmptyParagraphs,
     cadenceStandaloneEmbeds,
     trailingEmbed:
       candidate?.nodePos === lastSubstantivePos ? candidate : null,
@@ -278,14 +326,26 @@ export const PostEmbedWritingBlock = Extension.create<PostEmbedWritingBlockOptio
         key: postEmbedWritingBlockKey,
         props: {
           decorations(state) {
-            const { cadenceStandaloneEmbeds, trailingEmbed } = inspectEmbeds(
+            const {
+              cadenceActiveEmptyParagraphs,
+              cadenceStandaloneEmbeds,
+              trailingEmbed,
+            } = inspectEmbeds(
               state.doc,
               timestampedListItems,
+              state.selection.from,
             );
             const decorations = cadenceStandaloneEmbeds.map(({ from, to }) =>
               Decoration.node(from, to, {
                 class: "cadence-standalone-embed",
               }),
+            );
+            decorations.push(
+              ...cadenceActiveEmptyParagraphs.map(({ from, to }) =>
+                Decoration.node(from, to, {
+                  class: "cadence-active-empty-paragraph",
+                }),
+              ),
             );
             if (trailingEmbed?.target.kind === "paragraph") {
               decorations.push(
