@@ -66,7 +66,7 @@ every commit. Maintainer packaging instructions live in
 | Surface | What it does |
 |---|---|
 | **Cadence** | Combines the daily journal, calendar schedule, and task rail |
-| **Mail** | Unifies configured Gmail inboxes, threads, drafts, replies, archive, and Sweep |
+| **Mail** | Unifies configured Gmail inboxes, threads, drafts, replies, and archive |
 | **Agent** | Stores AI conversations as vault records and adds page-aware chat |
 | **Notebook** | Provides long-form Markdown editing with slash commands and embeds |
 | **Resources** | Captures web links, metadata, highlights, and personal notes |
@@ -118,10 +118,13 @@ other.
 ├── archive/       Archived messages
 ├── drafts/        Mail drafts
 ├── agent/         Agent conversation transcripts
-├── sweep/         Mail workflow cards
 ├── attachments/   User and mail attachments
 └── .woodshed/     Trash and record revisions
 ```
+
+Vaults created by older builds may retain retired `sweep/` Markdown records.
+Woodshed no longer scaffolds or uses that directory, and upgrades deliberately
+leave those files untouched for manual inspection or removal.
 
 Most records pair structured frontmatter with a freeform Markdown body:
 
@@ -193,7 +196,7 @@ and diagnostics.
 |---|---|---|
 | Gmail | Multi-account IMAP inbox and SMTP send/reply | Owner-only app-data file |
 | Google Calendar | Read-only iCal subscription and local event cache | OS credential store |
-| Hermes-compatible endpoint | Agent chat and confirmed Sweep actions | Local profile discovery, or owner-only app-data file |
+| Hermes-compatible endpoint | Agent chat and confirmed actions | Local profile discovery, or owner-only app-data file |
 
 Resource capture fetches only a URL submitted by the user. Public fetches reject
 private network targets and enforce redirect, time, and response-size limits.
@@ -290,7 +293,7 @@ explicit Rust command boundary.
 | `src/routes/` | File-based TanStack routes and route loaders |
 | `src/components/layout/` | Navigation rail, tabs, panels, title bar, providers |
 | `src/components/cadence/` | Daily journal, event, and task experiences |
-| `src/components/mail/` | Inbox, thread, compose, account, and Sweep UI |
+| `src/components/mail/` | Inbox, thread, compose, and account UI |
 | `src/components/agent/` | Chat surface, streaming messages, and tools |
 | `src/components/notebook/` | Note list and detail experiences |
 | `src/components/people/` | Personal CRM list, detail, and avatar flows |
@@ -314,7 +317,6 @@ explicit Rust command boundary.
 | `src-tauri/src/gmail/` | Gmail IMAP/SMTP clients, parsing, credentials, pooling |
 | `src-tauri/src/gcal/` | iCal parsing, filtering, recurrence, and caching |
 | `src-tauri/src/agent/` | Agent records, endpoint configuration, and stream protocol |
-| `src-tauri/src/sweep/` | Mail triage cards, prompts, plans, and status transitions |
 | `src-tauri/src/network.rs` | Public URL validation and bounded requests |
 | `src-tauri/src/email_render.rs` | Sanitized email rendering and remote-image blocking |
 | `src-tauri/src/image_cache.rs` | Bounded disk cache for approved remote images |
@@ -381,7 +383,7 @@ Configured integrations communicate directly from the desktop app.
 - Gmail uses IMAP and SMTP. App Passwords are stored in an owner-only app-data
   file that relies on OS account isolation and disk encryption.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
-- Hermes receives selected content after an explicit Agent or Sweep action.
+- Hermes receives selected content after an explicit Agent action.
   Loopback endpoints authenticate from the matching local Hermes profile; custom
   and remote endpoints use the same owner-only app-data file.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.

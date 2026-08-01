@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -62,6 +62,7 @@ import { DatabasesList } from "./databases-list";
 beforeEach(() => {
   mocks.customLoading = false;
   mocks.generatedLoading = false;
+  window.localStorage.clear();
 });
 
 describe("DatabasesList", () => {
@@ -128,5 +129,104 @@ describe("DatabasesList", () => {
         .getAllByTestId("record-table-skeleton")
         .map((skeleton) => skeleton.getAttribute("data-compact")),
     ).toEqual(["true", "true"]);
+  });
+
+  it("resizes and persists each inline database independently", () => {
+    const view = render(<DatabasesList />);
+
+    const customTable = screen
+      .getByRole("heading", { name: "Custom" })
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
+    const generatedTable = screen
+      .getByRole("heading", { name: "Generated" })
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
+    const customGrid = customTable.querySelector<HTMLElement>(
+      "[data-record-table-grid]",
+    )!;
+    const generatedGrid = generatedTable.querySelector<HTMLElement>(
+      "[data-record-table-grid]",
+    )!;
+    const resizeName = within(customTable).getByRole("separator", {
+      name: "Resize Name column",
+    });
+
+    expect(resizeName).toHaveClass("w-3");
+    expect(customGrid.style.getPropertyValue("--col-name-size")).toBe(
+      "480px",
+    );
+    expect(generatedGrid.style.getPropertyValue("--col-name-size")).toBe(
+      "480px",
+    );
+
+    fireEvent.pointerDown(resizeName, {
+      button: 0,
+      clientX: 480,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(resizeName, { clientX: 540, pointerId: 1 });
+    fireEvent.pointerUp(resizeName, { clientX: 540, pointerId: 1 });
+
+    expect(customGrid.style.getPropertyValue("--col-name-size")).toBe(
+      "540px",
+    );
+    expect(generatedGrid.style.getPropertyValue("--col-name-size")).toBe(
+      "480px",
+    );
+    expect(
+      window.localStorage.getItem(
+        "woodshed:record-table:column-widths:databases-custom",
+      ),
+    ).toBe('{"name":540}');
+    expect(
+      window.localStorage.getItem(
+        "woodshed:record-table:column-widths:databases-generated",
+      ),
+    ).toBeNull();
+
+    view.unmount();
+    render(<DatabasesList />);
+    const restoredCustomTable = screen
+      .getByRole("heading", { name: "Custom" })
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
+    expect(
+      restoredCustomTable
+        .querySelector<HTMLElement>("[data-record-table-grid]")!
+        .style.getPropertyValue("--col-name-size"),
+    ).toBe("540px");
+  });
+
+  it("supports keyboard resizing with coarse steps and a minimum width", () => {
+    render(<DatabasesList />);
+
+    const customTable = screen
+      .getByRole("heading", { name: "Custom" })
+      .closest<HTMLElement>('[data-record-table-variant="inline"]')!;
+    const customGrid = customTable.querySelector<HTMLElement>(
+      "[data-record-table-grid]",
+    )!;
+    const resizeCreated = within(customTable).getByRole("separator", {
+      name: "Resize Created column",
+    });
+
+    fireEvent.keyDown(resizeCreated, { key: "ArrowLeft" });
+    expect(resizeCreated).toHaveAttribute("aria-valuenow", "180");
+    fireEvent.keyDown(resizeCreated, { key: "ArrowLeft", shiftKey: true });
+    fireEvent.keyDown(resizeCreated, { key: "ArrowLeft", shiftKey: true });
+    fireEvent.keyDown(resizeCreated, { key: "ArrowLeft", shiftKey: true });
+    expect(resizeCreated).toHaveAttribute("aria-valuenow", "80");
+
+    fireEvent.keyDown(resizeCreated, { key: "ArrowLeft", shiftKey: true });
+    expect(resizeCreated).toHaveAttribute("aria-valuenow", "80");
+    fireEvent.keyDown(resizeCreated, { key: "ArrowRight", shiftKey: true });
+
+    expect(resizeCreated).toHaveAttribute("aria-valuenow", "120");
+    expect(customGrid.style.getPropertyValue("--col-created-size")).toBe(
+      "120px",
+    );
+    expect(
+      window.localStorage.getItem(
+        "woodshed:record-table:column-widths:databases-custom",
+      ),
+    ).toBe('{"created":120}');
   });
 });

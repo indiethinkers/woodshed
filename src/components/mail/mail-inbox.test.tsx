@@ -87,15 +87,17 @@ beforeEach(() => {
 });
 
 describe("MailInbox", () => {
-  it("renders the mode switch in the Mail sidebar", () => {
+  it("renders the Mail sidebar without a mode switch", () => {
     const { container } = render(<MailInbox />);
 
     const sidebar = container.querySelector(
       '[data-woodshed-surface="mail-detail-list"]',
     );
-    const modeSwitch = screen.getByRole("group", { name: "Mail view" });
 
-    expect(sidebar).toContainElement(modeSwitch);
+    expect(sidebar).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Mail view" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Archive all" }),
     ).not.toBeInTheDocument();

@@ -1,6 +1,6 @@
 # Woodshed Privacy Policy
 
-**Effective:** 2026-05-08 · **Last updated:** 2026-07-28
+**Effective:** 2026-05-08 · **Last updated:** 2026-07-31
 **Contact:** daniel@indiethinkers.com
 
 > **Plain-English summary.** Woodshed is a local-first desktop application. We do not operate a server that receives or stores your data. Your vault, mail, calendar cache, index, preferences, and logs stay on your computer. Data leaves the device only when you configure and explicitly invoke Gmail, an iCal feed, resource capture, or a Hermes-compatible agent endpoint.
@@ -24,7 +24,7 @@ Vault files and synced mail are not encrypted by Woodshed. Use operating-system 
 - **Google Calendar or another iCal host.** An explicit Sync downloads the configured read-only iCal feed. Woodshed does not currently request Calendar OAuth access or write to Google Calendar.
 - **Resource capture.** Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.
 - **Remote email images.** Sender images are removed by default. They are requested only after you choose **Load remote images**. Loading an image can reveal your IP address and time of access to its host.
-- **Hermes-compatible agent endpoint.** An explicit agent or Sweep action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Opening Sweep alone sends nothing. Proposed record creation and mail archive actions require confirmation.
+- **Hermes-compatible agent endpoint.** An explicit agent action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Proposed record creation and mail archive actions require confirmation.
 These providers receive requests directly from your device and process them under their own terms. Woodshed does not proxy or retain a server-side copy.
 
 ## 4. Information we do not collect
@@ -40,6 +40,8 @@ Diagnostics remain on the device in a file capped at 1 MiB with one rotated gene
 ## 6. Retention and deletion
 
 Data persists on your device until you remove it. In-app deletion moves records to `.woodshed/trash/` inside the vault for recovery. Uninstalling Woodshed does not delete the vault.
+
+Retired Sweep-card Markdown created by older builds remains in the vault's `sweep/` directory until you inspect, move, or delete it. Current builds do not use or remove those files.
 
 Removing an account deletes its Woodshed-stored credential. You can revoke a Gmail App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Reset a leaked Google Calendar secret URL in Google Calendar settings. Delete the app-data directory to remove preferences, indexes, caches, logs, and Woodshed's `secrets.json`; remove iCal and Deepgram credential entries separately through the OS.
 

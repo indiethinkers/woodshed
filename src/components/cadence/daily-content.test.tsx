@@ -172,16 +172,19 @@ describe("DailyContent notes editor", () => {
 
   it("keeps equal space around embeds and exposes the writing block below", () => {
     expect(styles).toMatch(
+      /\.tiptap-content\s*\{[^}]*--embed-block-gap:\s*2rem;/,
+    );
+    expect(styles).toMatch(
       /p[^,{]*:has\(\s*\+ div\.react-renderer\s*>\s*:is\(\[data-tweet-id\], \[data-youtube-resource\]\)\s*\)/s,
     );
     expect(styles).toMatch(
-      /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*1rem;/,
+      /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*var\(--embed-block-gap\);/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\[data-daily-timestamp\][\s\S]*\)\s*\{[^}]*margin-top:\s*1rem !important;/,
+      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\[data-daily-timestamp\][\s\S]*\)\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\)\s*\+ li[\s\S]*\{[^}]*margin-top:\s*1rem !important;/,
+      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\)\s*\+ li[\s\S]*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
     );
     expect(styles).toMatch(
       /\[data-daily-timestamps\][\s\S]*p:has\(> \[data-daily-timestamp\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\{[^}]*margin-block:\s*0;/,
@@ -193,7 +196,7 @@ describe("DailyContent notes editor", () => {
       /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]:empty::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*1rem;/,
+      /\[data-daily-timestamps\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
     );
   });
 

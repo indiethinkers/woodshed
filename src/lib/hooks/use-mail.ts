@@ -207,8 +207,8 @@ export function useMail() {
   };
 }
 
-/** Consumers that genuinely aggregate the entire inbox (Sweep, person
- * activity, cross-message navigation) opt into walking every bounded page.
+/** Consumers that genuinely aggregate the entire inbox (person activity and
+ * cross-message navigation) opt into walking every bounded page.
  * Ordinary inbox rendering remains user-driven and fetches one page at a time.
  */
 export function useAllMail() {

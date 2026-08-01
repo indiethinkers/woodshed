@@ -23,7 +23,6 @@ pub mod logging;
 pub mod network;
 pub mod parsers;
 pub mod state;
-pub mod sweep;
 pub mod sync_ext;
 pub mod vault;
 pub mod watcher;
@@ -32,8 +31,8 @@ pub mod wikilinks;
 use crate::sync_ext::MutexRecover;
 use commands::{
     agent as agent_cmd, areas, attachments, config, daily, events, gcal as gcal_cmd,
-    gmail as gmail_cmd, logs, mail, notebook, people, resources, search as search_cmd,
-    sweep as sweep_cmd, tables, tags, tasks, vault as vault_cmd, watcher as watcher_cmd,
+    gmail as gmail_cmd, logs, mail, notebook, people, resources, search as search_cmd, tables,
+    tags, tasks, vault as vault_cmd, watcher as watcher_cmd,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -554,13 +553,6 @@ pub fn run() {
             search_cmd::wikilink_backlinks,
             search_cmd::wikilink_outgoing,
             search_cmd::vault_reindex,
-            // Inbox Sweep
-            sweep_cmd::sweep_triage_email,
-            sweep_cmd::sweep_cards_all,
-            sweep_cmd::sweep_card_save,
-            sweep_cmd::sweep_card_refine,
-            sweep_cmd::sweep_card_plan_actions,
-            sweep_cmd::sweep_discard_orphans,
             // Mail (Gmail-backed; provider-agnostic disk ops live in mail.rs)
             mail::mail_get_full,
             mail::mail_open_attachment,

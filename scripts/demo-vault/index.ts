@@ -33,7 +33,6 @@ import { buildResources } from "./content/resources";
 import { buildCadence } from "./content/cadence";
 import { buildTables } from "./content/tables";
 import { buildMail } from "./content/mail";
-import { buildSweep } from "./content/sweep";
 import { buildAgent } from "./content/agent";
 
 /**
@@ -54,7 +53,6 @@ const VAULT_SUBDIRS = [
   "resources",
   "areas",
   "agent",
-  "sweep",
   "tables",
   "data",
   "attachments",
@@ -185,8 +183,7 @@ function main(): void {
   buildResources(writer, calendar);
   buildCadence(writer, calendar, people);
   buildTables(writer, calendar);
-  const mail = buildMail(writer, calendar);
-  buildSweep(writer, calendar, mail);
+  const inboxCount = buildMail(writer, calendar);
   buildAgent(writer, calendar);
   if (options.clockOut !== undefined) {
     writeDemoClock(options.clockOut, options.out, calendar.at(0, DEMO_TIME));
@@ -205,7 +202,7 @@ function main(): void {
     `  ${"total".padEnd(width)}  ${String(writer.total()).padStart(4)}`,
   );
   console.log(
-    `\n${areas.length} areas · ${people.length} people · ${mail.inboxIds.length} inbox messages`,
+    `\n${areas.length} areas · ${people.length} people · ${inboxCount} inbox messages`,
   );
   console.log(
     "\nPoint Woodshed at this directory. If you go through onboarding," +

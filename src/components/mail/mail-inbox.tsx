@@ -27,7 +27,6 @@ import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { ComposeDialog } from "@/components/mail/compose-dialog";
-import { MailModeToggle } from "@/components/mail/mail-mode-toggle";
 
 const ALL_INBOXES = "__all__";
 
@@ -205,9 +204,6 @@ export function MailInbox() {
           data-woodshed-surface="mail-detail-list"
           className={`${detailPanelWidthClass} shrink-0 bg-list flex flex-col border-r border-border`}
         >
-          <div className="shrink-0 border-b border-border/45 px-3 pb-2.5 pt-3.5 dark:border-white/[0.07]">
-            <MailModeToggle mode="inbox" />
-          </div>
           {activeEmail ? (
             <EmailDetailPane email={activeEmail} people={people} />
           ) : null}

@@ -15,7 +15,6 @@ pub mod people;
 pub mod resources;
 pub mod search;
 pub mod seed;
-pub mod sweep;
 pub mod tables;
 pub mod tags;
 pub mod tasks;

@@ -13,7 +13,6 @@ import {
 } from "@/lib/vault-events";
 import { logsEvent } from "@/lib/tauri";
 import { WikilinkTargetsBridge } from "@/lib/hooks/wikilink-targets-bridge";
-import { MailRefreshProvider } from "@/lib/hooks/use-mail-refresh-job";
 import { DemoClockProvider } from "@/lib/demo-clock";
 
 // Single QueryClient per app. staleTime: Infinity because cache invalidation
@@ -115,20 +114,18 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <DemoClockProvider>
-        <MailRefreshProvider>
-          <WikilinkTargetsBridge />
-          <TooltipProvider>
-            <AgentPanelProvider>
-              <RightSidebarProvider>
-                <TabsProvider>
-                  <ListPanelProvider>
-                    <RouteTheme>{children}</RouteTheme>
-                  </ListPanelProvider>
-                </TabsProvider>
-              </RightSidebarProvider>
-            </AgentPanelProvider>
-          </TooltipProvider>
-        </MailRefreshProvider>
+        <WikilinkTargetsBridge />
+        <TooltipProvider>
+          <AgentPanelProvider>
+            <RightSidebarProvider>
+              <TabsProvider>
+                <ListPanelProvider>
+                  <RouteTheme>{children}</RouteTheme>
+                </ListPanelProvider>
+              </TabsProvider>
+            </RightSidebarProvider>
+          </AgentPanelProvider>
+        </TooltipProvider>
       </DemoClockProvider>
       <Toaster />
     </QueryClientProvider>

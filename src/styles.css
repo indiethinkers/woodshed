@@ -299,6 +299,7 @@
 /* Tiptap body editor — minimal block styling that mirrors the read-only
    Markdown renderer so editing and viewing match. */
 .tiptap-content {
+  --embed-block-gap: 2rem;
   outline: none;
   /* Browsers don't always resolve `cursor: auto` to text within a
      contenteditable's margin/padding regions, so the I-beam disappears in
@@ -776,7 +777,7 @@
   div.react-renderer:has(
     > :is([data-tweet-id], [data-youtube-resource])
   ) {
-  margin-block: 1rem;
+  margin-block: var(--embed-block-gap);
 }
 /* Timestamp-only Cadence embeds use sibling-row margins for their rhythm.
    Keeping the gap outside the embed row avoids margin collapse through the
@@ -796,7 +797,7 @@
       + div.react-renderer
       > :is([data-tweet-id], [data-youtube-resource])
   ) {
-  margin-top: 1rem !important;
+  margin-top: var(--embed-block-gap) !important;
 }
 .tiptap-content[data-daily-timestamps]
   > ul
@@ -814,7 +815,7 @@
       > :is([data-tweet-id], [data-youtube-resource])
   )
   + li {
-  margin-top: 1rem !important;
+  margin-top: var(--embed-block-gap) !important;
 }
 .tiptap-content[data-daily-timestamps]
   > ul
@@ -1136,7 +1137,7 @@
     > :is([data-tweet-id], [data-youtube-resource])
   )
   + .post-embed-writing-block {
-  margin-top: 1rem;
+  margin-top: var(--embed-block-gap);
 }
 .tiptap-content
   p.post-embed-writing-block[data-post-embed-writing-block][data-placeholder]:empty::before {
@@ -1188,58 +1189,6 @@
   pointer-events: none;
   height: 0;
   float: left;
-}
-
-/* Mail refresh progress. One signature motion per state, no extra chrome:
-   - Syncing (indeterminate): a single light streak glides across the track.
-   - Triaging (determinate): a brighter band flows through the fill while
-     work is in flight; the fill width animates to the known queue progress.
-   - Complete: a calm, solid bar (no animation). */
-.mail-refresh-comet {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--foreground) 85%, transparent) 50%,
-    transparent 100%
-  );
-  animation: mail-refresh-comet 1.25s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-
-@keyframes mail-refresh-comet {
-  from {
-    transform: translateX(-110%);
-  }
-  to {
-    transform: translateX(260%);
-  }
-}
-
-.mail-refresh-streaming {
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--background) 45%, transparent) 50%,
-    transparent 100%
-  );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  animation: mail-refresh-stream 1.4s linear infinite;
-}
-
-@keyframes mail-refresh-stream {
-  from {
-    background-position: 220% 0;
-  }
-  to {
-    background-position: -120% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mail-refresh-comet,
-  .mail-refresh-streaming {
-    animation: none;
-  }
 }
 
 /* ─────────── Agent chat ─────────── */

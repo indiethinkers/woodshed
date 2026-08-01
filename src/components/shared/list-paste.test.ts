@@ -66,14 +66,14 @@ describe("plainTextParagraphBlocks", () => {
 describe("normalizeWrappedPlainText", () => {
   it("unwraps hard-wrapped prose inside paragraphs", () => {
     const input =
-      "I want you to help me turn the email page into an inbox sweep app. Here's how it should work:\n\n" +
+      "I want you to help me turn the email page into a triage app. Here's how it should work:\n\n" +
       "For every email that's in my inbox, I want it to create a card that shows me what the email is\n" +
       "about and then proposes a next action, whether that's a draft reply or any other thing that makes\n" +
       "sense.\n\n" +
       "It should allow me to scroll through my email and get through it just by talking to each card.";
 
     expect(normalizeWrappedPlainText(input)).toBe(
-      "I want you to help me turn the email page into an inbox sweep app. Here's how it should work:\n\n" +
+      "I want you to help me turn the email page into a triage app. Here's how it should work:\n\n" +
         "For every email that's in my inbox, I want it to create a card that shows me what the email is about and then proposes a next action, whether that's a draft reply or any other thing that makes sense.\n\n" +
         "It should allow me to scroll through my email and get through it just by talking to each card.",
     );
@@ -81,7 +81,7 @@ describe("normalizeWrappedPlainText", () => {
 
   it("preserves lists and other structured markdown", () => {
     const input =
-      "Inbox sweep plan\n\n- summarize each message\n- propose a next action\n\n## Notes";
+      "Inbox triage plan\n\n- summarize each message\n- propose a next action\n\n## Notes";
 
     expect(normalizeWrappedPlainText(input)).toBeNull();
   });

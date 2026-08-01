@@ -119,7 +119,7 @@ External writes are initiated by the user. Agent-generated action plans display
 the concrete operation fields—including resource URLs and task scheduling—and
 require confirmation before creating records or archiving mail. Confirmation
 text is normalized and bounded before display, and execution uses those exact
-confirmed values. Opening Sweep alone sends nothing.
+confirmed values.
 
 ## Residual assumptions
 

@@ -63,10 +63,10 @@ embeds and remote email images are the exceptions described below.
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and
   time of access to the image host.
-- **Hermes-compatible agent endpoint:** an explicit agent or Sweep command sends
-  the selected instruction and relevant vault or email content directly to the
-  endpoint you configured. Opening Sweep does not transmit content. Proposed
-  record creation and mail archive actions require confirmation.
+- **Hermes-compatible agent endpoint:** an explicit agent command sends the
+  selected instruction and relevant vault or email content directly to the
+  endpoint you configured. Proposed record creation and mail archive actions
+  require confirmation.
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 
@@ -81,9 +81,12 @@ sharing them publicly.
 ## Retention and deletion
 
 Vault records persist until you remove them. Agent run records currently persist
-in the application-data directory until that directory is removed. In-app record deletion moves files
-to `.woodshed/trash/` inside the vault so they can be recovered or permanently
-removed by you. Uninstalling the app does not delete the vault.
+in the application-data directory until that directory is removed. Retired
+Sweep-card Markdown created by older builds remains in the vault's `sweep/`
+directory until you inspect, move, or delete it; current builds do not use or
+remove those files. In-app record deletion moves files to `.woodshed/trash/`
+inside the vault so they can be recovered or permanently removed by you.
+Uninstalling the app does not delete the vault.
 
 Removing an account deletes its stored credential, including any legacy entry
 the operating-system credential store still holds. You can also revoke Gmail

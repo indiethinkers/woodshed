@@ -1493,11 +1493,11 @@ fn archive_local_email(
 /// Reconcile a Gmail account's local inbox against the live Gmail INBOX.
 ///
 /// The sync path only ever *adds* to `inbox/`; without this, a message the
-/// user archived or handled directly in Gmail lingers locally forever and
-/// keeps showing up in the sweep's Review lane. Here we pull the full set
-/// of message ids currently in the Gmail inbox and archive-locally (move
-/// to `archive/`) any local inbox file for this account that's no longer
-/// among them. Gmail is the source of truth for inbox membership.
+/// user archived or handled directly in Gmail lingers locally forever. Here
+/// we pull the full set of message ids currently in the Gmail inbox and
+/// archive-locally (move to `archive/`) any local inbox file for this account
+/// that's no longer among them. Gmail is the source of truth for inbox
+/// membership.
 ///
 /// Returns the count archived. `live_raw` is the *full* inbox id set (not the
 /// recent-N sync window), so messages outside the sync window aren't wrongly
