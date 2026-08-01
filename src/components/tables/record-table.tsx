@@ -592,15 +592,15 @@ function RecordTableGrid<T>({
     <div
       ref={gridRef}
       data-record-table-grid
-      className={`${compact ? "" : "min-h-[240px]"} overflow-x-auto border-y border-border/60`}
+      className={`${compact ? "" : "min-h-[240px]"} overflow-x-auto border-y [border-bottom-color:var(--table-border-bottom)] [border-top-color:var(--table-border-strong)]`}
       style={columnSizing(columns, selectable, columnWidths)}
     >
       <div className="min-w-full" style={{ width: "max-content" }}>
-        <Row className="group h-8 border-b border-border/60">
+        <Row className="group h-8 border-b border-[var(--table-border-strong)]">
           {selectable && (
             <CellShell
               columnId="__select"
-              className="flex items-center justify-center border-r border-border/40"
+              className="flex items-center justify-center border-r border-[var(--table-border)]"
             >
               <SelectAllCheckbox
                 rowKeys={visibleKeys}
@@ -613,7 +613,7 @@ function RecordTableGrid<T>({
             <CellShell
               key={column.id}
               columnId={column.id}
-              className="group/record-header relative flex items-center border-r border-border/40 px-2.5"
+              className="group/record-header relative flex items-center border-r border-[var(--table-border)] px-2.5"
             >
               <SortHeader column={column} sorts={sorts} onSort={onSort} />
               {onResizeColumn && (
@@ -665,11 +665,11 @@ function RecordTableGrid<T>({
 
         {rows.length === 0 &&
           (errorState ? (
-            <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 border-b border-border/40 px-6 py-10 text-center">
+            <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 border-b border-[var(--table-border)] px-6 py-10 text-center">
               {errorState}
             </div>
           ) : (
-            <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 border-b border-border/40 px-6 py-10 text-center">
+            <div className="flex min-h-[180px] flex-col items-center justify-center gap-2 border-b border-[var(--table-border)] px-6 py-10 text-center">
               <Database
                 className="h-5 w-5 text-muted-foreground/40"
                 strokeWidth={1.5}
@@ -712,7 +712,7 @@ function DatabaseRow<T>({
     // Fixed h-9: the windowed renderer in RecordTableGrid assumes a
     // uniform ROW_HEIGHT. Every cell truncates, so nothing needs to grow.
     <div
-      className={`group flex h-9 items-stretch border-b border-border/40 transition-colors ${
+      className={`group flex h-9 items-stretch border-b border-[var(--table-border)] transition-colors ${
         isSelected ? "bg-accent/40" : "hover:bg-muted/15"
       }`}
     >
@@ -720,7 +720,7 @@ function DatabaseRow<T>({
         <CellShell
           columnId="__select"
           lead
-          className="flex items-center justify-center border-r border-border/40"
+          className="flex items-center justify-center border-r border-[var(--table-border)]"
         >
           <RowCheckbox
             checked={isSelected}
@@ -734,7 +734,7 @@ function DatabaseRow<T>({
           key={column.id}
           columnId={column.id}
           lead={index === 0}
-          className="flex min-h-9 items-center border-r border-border/40 px-2.5"
+          className="flex min-h-9 items-center border-r border-[var(--table-border)] px-2.5"
         >
           {index === 0 ? (
             // First (title) column hosts Notion-style hover affordances
@@ -1103,9 +1103,9 @@ function TableSkeleton({ compact }: { compact: boolean }) {
     <div
       data-testid="record-table-skeleton"
       data-compact={compact}
-      className={`${compact ? "" : "min-h-[240px]"} animate-pulse border-y border-border/60`}
+      className={`${compact ? "" : "min-h-[240px]"} animate-pulse border-y [border-bottom-color:var(--table-border-bottom)] [border-top-color:var(--table-border-strong)]`}
     >
-      <div className="flex h-8 items-center gap-6 border-b border-border/60 px-2.5">
+      <div className="flex h-8 items-center gap-6 border-b border-[var(--table-border-strong)] px-2.5">
         <div className="h-3 w-24 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
         <div className="h-3 w-16 rounded bg-muted" />
@@ -1113,7 +1113,7 @@ function TableSkeleton({ compact }: { compact: boolean }) {
       {widths.map((width, i) => (
         <div
           key={i}
-          className="flex h-9 items-center gap-6 border-b border-border/40 px-2.5"
+          className="flex h-9 items-center gap-6 border-b border-[var(--table-border)] px-2.5"
         >
           <div
             className="h-3 rounded bg-muted"
