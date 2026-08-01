@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRightSidebar } from "@/components/layout/right-sidebar-context-internal";
+import { useGcalSync } from "@/lib/hooks/use-gcal";
+import { useRefreshMail } from "@/lib/hooks/use-mail";
 import { setThemePreference } from "@/lib/theme";
 import { hasBackend, tauriInvoke } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -76,7 +78,7 @@ export function TitleBarActions({ compact = false }: { compact?: boolean }) {
       }`}
     >
       <SearchTrigger compact={compact} />
-      <VaultRefreshButton />
+      <WoodshedRefreshButton />
       <ThemeToggle />
       <ReferencesButton />
     </div>
@@ -197,29 +199,69 @@ export function ThemeToggle({
   );
 }
 
-export function VaultRefreshButton({
+export function WoodshedRefreshButton({
   className,
   iconClassName,
 }: IconButtonProps = {}) {
   const [isSyncing, setIsSyncing] = useState(false);
+  const calendarSync = useGcalSync();
+  const refreshMail = useRefreshMail();
   const backendAvailable = hasBackend();
 
-  async function refreshVault() {
+  async function refreshAll() {
     if (isSyncing || !backendAvailable) return;
     setIsSyncing(true);
-    const toastId = toast.loading("Refreshing vault...");
+    const toastId = toast.loading("Refreshing vault, calendars, and mail...");
 
     try {
-      const result = await tauriInvoke<VaultGitSyncResult>("vault_git_sync");
-      toast.success("Vault pushed to GitHub", {
-        id: toastId,
-        description: syncToastDescription(result),
-      });
-    } catch (err) {
-      toast.error("Vault refresh failed", {
-        id: toastId,
-        description: errorMessage(err),
-      });
+      // Git and mail both write vault files, so finish the Git operation before
+      // refreshing external accounts. Calendar and mail can then run together.
+      const [vaultResult] = await Promise.allSettled([
+        tauriInvoke<VaultGitSyncResult>("vault_git_sync"),
+      ]);
+      const [calendarResult, mailResult] = await Promise.allSettled([
+        calendarSync.mutateAsync(),
+        refreshMail(),
+      ]);
+
+      const failures: string[] = [];
+      if (vaultResult.status === "rejected") {
+        failures.push(`Vault: ${errorMessage(vaultResult.reason)}`);
+      }
+      if (calendarResult.status === "rejected") {
+        failures.push(`Calendars: ${errorMessage(calendarResult.reason)}`);
+      } else {
+        const failedAccounts = calendarResult.value.accounts.filter(
+          (account) => account.error,
+        ).length;
+        if (failedAccounts > 0) {
+          failures.push(
+            `Calendars: ${failedAccounts} account${failedAccounts === 1 ? "" : "s"} failed to refresh.`,
+          );
+        }
+      }
+      if (mailResult.status === "rejected") {
+        failures.push(`Mail: ${errorMessage(mailResult.reason)}`);
+      } else if (mailResult.value.failedAccounts) {
+        const failedAccounts = mailResult.value.failedAccounts;
+        failures.push(
+          `Mail: ${failedAccounts} account${failedAccounts === 1 ? "" : "s"} failed to refresh.`,
+        );
+      }
+
+      if (failures.length > 0) {
+        toast.error("Woodshed refresh incomplete", {
+          id: toastId,
+          description: failures.join(" "),
+        });
+      } else {
+        toast.success("Woodshed refreshed", {
+          id: toastId,
+          description: syncToastDescription(
+            vaultResult.status === "fulfilled" ? vaultResult.value : null,
+          ),
+        });
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -229,13 +271,13 @@ export function VaultRefreshButton({
     <button
       data-tauri-drag-region="false"
       type="button"
-      onClick={() => void refreshVault()}
+      onClick={() => void refreshAll()}
       title={
         backendAvailable
-          ? "Refresh vault from GitHub"
+          ? "Refresh vault, calendars, and mail"
           : "Refresh requires the Woodshed backend"
       }
-      aria-label="Refresh vault from GitHub"
+      aria-label="Refresh vault, calendars, and mail"
       disabled={!backendAvailable || isSyncing}
       className={cn(
         titleBarIconButtonClass,

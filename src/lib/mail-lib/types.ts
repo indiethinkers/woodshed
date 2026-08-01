@@ -105,6 +105,9 @@ export interface EmailFull extends EmailSummary {
 export interface MailSyncResult {
   emails: EmailSummary[];
   stats: SyncStats;
+  /** Accounts that could not be refreshed while at least one other account
+   * completed. Omitted when every requested account succeeded. */
+  failedAccounts?: number;
   /** Local inbox messages archived during reconciliation because they
    * left the Gmail inbox (handled directly in Gmail). */
   removed?: number;

@@ -706,7 +706,7 @@ function TableGrid({
 
   return (
     <div
-      className="w-full min-h-[240px]"
+      className="min-h-[240px] w-full border-b border-[var(--table-border-bottom)]"
       style={columnSizeVars as React.CSSProperties}
     >
       <ColumnsDnd
@@ -716,7 +716,7 @@ function TableGrid({
       >
         <div className="min-w-full" style={{ width: "max-content" }}>
           {/* Header row */}
-          <Row className="group border-b border-border/60 h-8">
+          <Row className="group h-8 border-b border-[var(--table-border-strong)]">
             <HeaderShell header={headers[0]}>
               <SelectAllCheckbox
                 rowIds={rows.map((r) => r.id)}
@@ -771,7 +771,7 @@ function TableGrid({
                   key={row.id}
                   rowId={row.id}
                   enabled={canManuallyOrderRows}
-                  className={`group border-b border-border/40 transition-colors ${
+                  className={`group border-b border-[var(--table-border)] transition-colors ${
                     isSelected ? "bg-accent/30" : "hover:bg-muted/15"
                   }`}
                 >
@@ -796,7 +796,7 @@ function TableGrid({
                     <CellShell
                       key={cellModel.id}
                       columnId={col.id}
-                      className={`flex items-center min-h-9 border-r border-border/40 ${
+                      className={`flex min-h-9 items-center border-r border-[var(--table-border)] ${
                         idx === 0 ? "pl-1 pr-2.5" : "px-2.5"
                       }`}
                     >
@@ -871,7 +871,7 @@ function TableGrid({
           </RowsDnd>
 
           {/* + New item row */}
-          <Row className="border-b border-border/40 h-9">
+          <Row className="h-9 border-b border-[var(--table-border)]">
             <CellShell columnId="__select" />
             <div className="flex-1 flex items-center px-2.5">
               <button
@@ -895,7 +895,7 @@ function TableGrid({
                   <CellShell
                     key={header.id}
                     columnId={col.id}
-                    className="px-2.5 pt-2 pb-3 flex items-center border-r border-border/40"
+                    className="flex items-center border-r border-[var(--table-border)] px-2.5 pt-2 pb-3"
                   >
                     <CalculationCell
                       column={col}
