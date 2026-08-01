@@ -22,7 +22,7 @@ vi.mock("@/lib/hooks/use-tasks", () => ({ useAllTasks: () => ({ data: [] }) }));
 vi.mock("@/lib/hooks/use-tag-table", () => ({ useTagTable: () => ({ data: [] }) }));
 vi.mock("@/lib/hooks/use-today", () => ({ useToday: () => "2026-07-28" }));
 
-import { AreasList } from "./areas-list";
+import { AreasList, formatRecordBreakdown } from "./areas-list";
 
 describe("AreasList", () => {
   it("pins Unassigned below named areas", () => {
@@ -43,5 +43,14 @@ describe("AreasList", () => {
       (element) => element.style.background || element.style.backgroundColor,
     );
     expect(tinted).toEqual([]);
+  });
+
+  it("names each record type instead of using unexplained suffixes", () => {
+    render(<AreasList />);
+
+    expect(screen.getByText("Record types")).toBeInTheDocument();
+    expect(
+      formatRecordBreakdown({ event: 2, task: 1, note: 3, person: 4 }),
+    ).toBe("2 events · 1 task · 3 notes · 4 people");
   });
 });

@@ -772,6 +772,76 @@
   max-width: 550px;
   margin: 0.75rem 0;
 }
+.tiptap-content
+  div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  ) {
+  margin-block: 1rem;
+}
+/* Timestamp-only Cadence embeds use sibling-row margins for their rhythm.
+   Keeping the gap outside the embed row avoids margin collapse through the
+   otherwise zero-height timestamp paragraph and guarantees the same measured
+   distance above the card and below it. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(
+    > p:has(> [data-daily-timestamp]:only-child)
+      + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ),
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(
+    > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+      + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  ) {
+  margin-top: 1rem !important;
+}
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(
+    > p:has(> [data-daily-timestamp]:only-child)
+      + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  + li,
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(
+    > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+      + div.react-renderer
+      > :is([data-tweet-id], [data-youtube-resource])
+  )
+  + li {
+  margin-top: 1rem !important;
+}
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p:has(> [data-daily-timestamp]:only-child)
+  + div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  ),
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+  + div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  ) {
+  margin-block: 0;
+}
+.tiptap-content
+  div.react-renderer
+  > [data-tweet-id]
+  > .twitter-embed-shell,
+.tiptap-content
+  div.react-renderer
+  > [data-youtube-resource]
+  > div {
+  margin-block: 0;
+}
 .tiptap-content > [data-tweet-id]:first-child > .twitter-embed-shell {
   margin-top: 0;
 }
@@ -1003,48 +1073,77 @@
   > [data-daily-timestamp] {
   top: 1rem;
 }
-/* Suppress ProseMirror's empty cursor-landing paragraph that sits next
-   to a block embed inside a list item. ProseMirror leaves a
-   `<p><br class="ProseMirror-trailingBreak"></p>` placeholder whenever
-   `insertContent` lands a block node at a collapsed selection, which
-   shows up as a stray blank line above (or below) the embed. Hiding
-   it gets the embed flush; the cursor can still arrow into the empty
-   paragraph, and the moment any text is typed there it stops being
-   empty and the rule disengages — the paragraph reappears
-   automatically. */
-.tiptap-content li:has(> img.tiptap-image) > p:empty,
-.tiptap-content li:has(> img.tiptap-image) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]) > p:empty,
+/* Collapse only the empty paste paragraph immediately before an embed. The
+   terminal-card writing affordance is derived by PostEmbedWritingBlock and
+   never needs a hidden Markdown paragraph of its own. */
+.tiptap-content li:has(> img.tiptap-image) > p:empty:has(+ img.tiptap-image),
+.tiptap-content
+  li:has(> img.tiptap-image)
+  > p:has(> br.ProseMirror-trailingBreak:only-child):has(+ img.tiptap-image),
 .tiptap-content
   li:has(> div.react-renderer > [data-youtube-resource])
-  > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div.react-renderer > [data-tweet-id]) > p:empty,
+  > p:empty:has(+ div.react-renderer > [data-youtube-resource]),
+.tiptap-content
+  li:has(> div.react-renderer > [data-youtube-resource])
+  > p:has(> br.ProseMirror-trailingBreak:only-child):has(
+    + div.react-renderer > [data-youtube-resource]
+  ),
 .tiptap-content
   li:has(> div.react-renderer > [data-tweet-id])
-  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  > p:empty:has(+ div.react-renderer > [data-tweet-id]),
+.tiptap-content
+  li:has(> div.react-renderer > [data-tweet-id])
+  > p:has(> br.ProseMirror-trailingBreak:only-child):has(
+    + div.react-renderer > [data-tweet-id]
+  ) {
   display: none;
 }
 
-/* In Cadence, Enter above an embed creates an intentional blank line. Show
-   those earlier paragraphs, but keep the paste placeholder immediately before
-   the embed collapsed so the card occupies the cursor's original line. */
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:empty:not(
-    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
-  ),
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
-    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
-  ) {
+.post-embed-writing-block {
   display: block;
+  width: 100%;
+  min-height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted-foreground) 68%, transparent);
+  font: inherit;
+  line-height: 1.5rem;
+  text-align: left;
+}
+.post-embed-writing-block:hover,
+.post-embed-writing-block:focus-visible {
+  color: var(--muted-foreground);
+  outline: none;
+}
+/* The terminal affordance lives inside the embed's Cadence row, so it does
+   not receive the next-row margin used when real text follows. Give it the
+   same explicit gap as that next row. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p:has(> [data-daily-timestamp]:only-child)
+  + div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  )
+  + .post-embed-writing-block,
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+  + div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  )
+  + .post-embed-writing-block {
+  margin-top: 1rem;
+}
+.tiptap-content
+  p.post-embed-writing-block[data-post-embed-writing-block][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  height: 0;
+  float: left;
+  pointer-events: none;
 }
 
 .tiptap-content hr {

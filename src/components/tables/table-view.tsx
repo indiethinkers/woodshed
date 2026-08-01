@@ -631,7 +631,7 @@ function TableGrid({
   const tanstackColumns = useMemo<ColumnDef<RowDto>[]>(() => {
     const select: ColumnDef<RowDto> = {
       id: "__select",
-      size: 32,
+      size: 36,
       enableResizing: false,
     };
     const addCol: ColumnDef<RowDto> = {
@@ -939,6 +939,7 @@ function CellShell({
 }) {
   return (
     <div
+      data-table-cell=""
       className={`shrink-0 min-w-0 ${className}`}
       style={{ width: `var(--col-${columnId}-size)` }}
     >
@@ -1453,7 +1454,7 @@ function SortableTableRow({
       {...listeners}
       aria-label="Reorder row"
       title="Drag to reorder"
-      className="-ml-1 inline-flex h-5 w-3 shrink-0 cursor-grab items-center justify-center text-muted-foreground/55 opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover:opacity-100 focus-visible:opacity-100"
+      className="-ml-1 mr-1 inline-flex h-5 w-3 shrink-0 cursor-grab items-center justify-center text-muted-foreground/55 opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover:opacity-100 focus-visible:opacity-100"
     >
       <GripVertical className="h-3.5 w-3.5" />
     </span>
@@ -1513,7 +1514,7 @@ function SortableHeaderCell({
     <div
       ref={setNodeRef}
       style={style}
-      className={`shrink-0 min-w-0 text-left font-normal relative h-8 ${
+      className={`group/header shrink-0 min-w-0 text-left font-normal relative h-8 ${
         isFirst ? "pl-2.5 pr-2.5" : "px-2.5"
       } flex items-center`}
     >
@@ -1542,12 +1543,13 @@ function SortableHeaderCell({
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
           aria-label="Resize column"
+          title="Drag to resize column"
           role="separator"
-          className={`absolute top-0 -right-[3px] h-full w-1.5 z-20 cursor-col-resize group/resize ${
+          className={`group/resize absolute top-0 -right-1.5 z-20 h-full w-3 touch-none select-none cursor-col-resize ${
             header.column.getIsResizing() ? "bg-foreground/40" : ""
           }`}
         >
-          <span className="absolute inset-y-1 left-1/2 -translate-x-1/2 w-px bg-foreground/0 group-hover/resize:bg-foreground/40 transition-colors" />
+          <span className="absolute inset-y-1 left-1/2 -translate-x-1/2 w-px bg-foreground/0 transition-colors group-hover/header:bg-foreground/20 group-hover/resize:bg-foreground/50" />
         </span>
       )}
     </div>

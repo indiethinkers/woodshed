@@ -21,6 +21,7 @@ context to another.
 ## Table of Contents
 
 - 🌲 [Why Woodshed](#why-woodshed)
+- 📦 [Download](#download)
 - 🧰 [Features](#features)
 - 💾 [How Woodshed stores data](#how-woodshed-stores-data)
 - 🧭 [Using Woodshed](#using-woodshed)
@@ -48,6 +49,16 @@ same local graph.
 - **Narrow privilege.** The webview uses scoped Rust commands instead of general
   shell or filesystem permissions.
 
+## Download
+
+When available, published macOS builds are distributed through
+[GitHub Releases](https://github.com/indiethinkers/woodshed/releases). Choose
+the Apple Silicon or Intel `.dmg`, drag Woodshed to Applications, and launch it.
+
+Woodshed is under active development, so there may not be a published build for
+every commit. Maintainer packaging instructions live in
+[`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Features
 
 ### Eight connected surfaces
@@ -60,7 +71,7 @@ same local graph.
 | **Notebook** | Provides long-form Markdown editing with slash commands and embeds |
 | **Resources** | Captures web links, metadata, highlights, and personal notes |
 | **People** | Acts as a personal CRM connected to events, notes, mail, and areas |
-| **Databases** | Supports structured tables, board views, rows, and generated tag tables |
+| **Databases** | Supports resizable structured tables, board views, rows, and generated tag tables |
 | **Areas** | Groups related notes, tasks, events, and people around a focus |
 
 ### Features across every surface

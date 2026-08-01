@@ -118,4 +118,5 @@ needs these secrets in the GitHub repo settings:
 - `APPLE_PASSWORD` — app-specific password for notarization
 - `APPLE_TEAM_ID` — 10-char Team ID
 
-CI workflow lands as part of Lane C in Week 1.
+The release workflow and maintainer checklist are documented in
+[`docs/RELEASING.md`](../docs/RELEASING.md).

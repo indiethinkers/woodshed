@@ -170,12 +170,30 @@ describe("DailyContent notes editor", () => {
     );
   });
 
-  it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
-    expect(styles).toContain(
-      ":has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))",
+  it("keeps equal space around embeds and exposes the writing block below", () => {
+    expect(styles).toMatch(
+      /p[^,{]*:has\(\s*\+ div\.react-renderer\s*>\s*:is\(\[data-tweet-id\], \[data-youtube-resource\]\)\s*\)/s,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*> p:empty:not\([\s\S]*div\.react-renderer[\s\S]*\)[\s\S]*display:\s*block;/,
+      /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*1rem;/,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\[data-daily-timestamp\][\s\S]*\)\s*\{[^}]*margin-top:\s*1rem !important;/,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\)\s*\+ li[\s\S]*\{[^}]*margin-top:\s*1rem !important;/,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*p:has\(> \[data-daily-timestamp\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\{[^}]*margin-block:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /\.post-embed-writing-block\s*\{[^}]*text-align:\s*left;/,
+    );
+    expect(styles).toMatch(
+      /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]:empty::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*1rem;/,
     );
   });
 

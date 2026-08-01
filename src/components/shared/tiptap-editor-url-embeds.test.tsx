@@ -476,6 +476,126 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     expect(commits).toEqual([]);
   });
 
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/192837465",
+    },
+    {
+      kind: "YouTube video",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=abcdefghijk",
+    },
+  ])("adds one writing affordance after the final Cadence $kind", async ({
+    selector,
+    url,
+  }) => {
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${url}`,
+      () => undefined,
+    );
+
+    const embedItem = await waitFor(() => {
+      const item = container.querySelector(selector)?.closest("li");
+      expect(item).toBeTruthy();
+      return item!;
+    });
+    const postEmbedBlock = embedItem.querySelector(
+      ":scope > div.react-renderer + [data-post-embed-writing-block]",
+    );
+
+    expect(postEmbedBlock).toHaveTextContent("Start writing...");
+    expect(
+      embedItem.querySelectorAll(
+        ":scope > div.react-renderer + [data-post-embed-writing-block]",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/675849302",
+    },
+    {
+      kind: "YouTube video",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=zyxwvutsrqp",
+    },
+  ])("adds the writing affordance after a final freeform $kind", async ({
+    selector,
+    url,
+  }) => {
+    const { container } = mountFreeformEditor(url, () => undefined);
+
+    await waitFor(() => {
+      expect(container.querySelector(selector)).toBeTruthy();
+      expect(
+        container.querySelector("[data-post-embed-writing-block]"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("does not add the writing affordance when text follows the embed", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/918273645";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}\n- [09:31] Existing synthetic text`,
+      () => undefined,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
+  });
+
+  it("turns the writing affordance into a focused paragraph when clicked", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/564738291";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const writingBlock = await waitFor(() => {
+      const block = container.querySelector<HTMLElement>(
+        "[data-post-embed-writing-block]",
+      );
+      expect(block).toBeTruthy();
+      return block!;
+    });
+    const embedItem = writingBlock.closest("li")!;
+    expect(writingBlock.tagName).toBe("BUTTON");
+    expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
+    fireEvent.mouseDown(writingBlock);
+
+    await waitFor(() => {
+      const paragraph = container.querySelector(
+        "p[data-post-embed-writing-block]",
+      );
+      expect(paragraph).toBeTruthy();
+      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(document.activeElement).toHaveClass("tiptap-content");
+    });
+  });
+
+  it("does not add a post-embed writing block to ordinary rows", async () => {
+    const { container } = mountOutlineEditor(
+      "- [09:30] A normal synthetic row",
+      () => undefined,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".tiptap-content")).toBeTruthy();
+    });
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
+  });
+
   it("creates one empty Cadence block for every Enter between text blocks", async () => {
     const commits: string[] = [];
     const first = "First synthetic block";
