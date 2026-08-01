@@ -740,7 +740,7 @@ export function TiptapEditor({
         onPasted: (url) => captureEmbedResource(url, "twitter"),
       }),
       ImageMd.configure({ resolveSrc }),
-      PostEmbedWritingBlock,
+      PostEmbedWritingBlock.configure({ timestampedListItems }),
       CompactCaret,
       Wikilink,
       WikilinkSuggestion.configure({

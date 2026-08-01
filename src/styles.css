@@ -1140,7 +1140,7 @@
   margin-top: var(--embed-block-gap);
 }
 .tiptap-content
-  p.post-embed-writing-block[data-post-embed-writing-block][data-placeholder]:empty::before {
+  p.post-embed-writing-block[data-post-embed-writing-block][data-placeholder]::before {
   content: attr(data-placeholder);
   height: 0;
   float: left;

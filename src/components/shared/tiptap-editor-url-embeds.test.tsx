@@ -538,6 +538,31 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
     });
   });
 
+  it("keeps a post-embed writing block inside a freeform list item", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/102938475";
+    const { container } = mountFreeformEditor(`- ${tweetUrl}`, () => undefined);
+
+    const writingBlock = await waitFor(() => {
+      const block = container.querySelector<HTMLElement>(
+        "[data-post-embed-writing-block]",
+      );
+      expect(block).toBeTruthy();
+      return block!;
+    });
+    const embedItem = writingBlock.closest("li")!;
+    fireEvent.mouseDown(writingBlock);
+
+    await waitFor(() => {
+      expect(topLevelListItems(container)).toHaveLength(1);
+      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(
+        embedItem.querySelector(
+          ":scope > p[data-post-embed-writing-block]",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
   it("does not add the writing affordance when text follows the embed", async () => {
     const tweetUrl = "https://x.com/sample_account/status/918273645";
     const { container } = mountOutlineEditor(
@@ -597,6 +622,21 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(
         nextItem?.querySelector("[data-post-embed-writing-block]"),
       ).toBeNull();
+    });
+
+    for (const child of Array.from(paragraph!.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) child.remove();
+    }
+    fireEvent.input(paragraph!, { inputType: "deleteContentBackward" });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      const emptyRow = items[1];
+      expect(items).toHaveLength(2);
+      expect(emptyRow?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+      expect(
+        emptyRow?.querySelector("p[data-post-embed-writing-block]"),
+      ).toBeTruthy();
     });
   });
 

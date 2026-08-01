@@ -15,10 +15,18 @@ interface TrailingEmbed {
 }
 
 interface TopLevelListItemContext {
-  itemDepth: number;
   itemEnd: number;
   itemIndex: number;
   list: PMNode;
+}
+
+interface PostEmbedWritingBlockOptions {
+  timestampedListItems: boolean;
+}
+
+function isSubstantive(node: PMNode): boolean {
+  if (node.isText) return Boolean(node.textContent.trim());
+  return node.isAtom && !NON_CONTENT_ATOMS.has(node.type.name);
 }
 
 function topLevelListItemAt(
@@ -39,7 +47,6 @@ function topLevelListItemAt(
     }
 
     return {
-      itemDepth,
       itemEnd: $pos.after(itemDepth),
       itemIndex: $pos.index(listDepth),
       list: $pos.node(listDepth),
@@ -48,12 +55,21 @@ function topLevelListItemAt(
   return null;
 }
 
+function hasSubstantiveContent(node: PMNode): boolean {
+  let substantive = false;
+  node.descendants((child) => {
+    if (isSubstantive(child)) substantive = true;
+    return !substantive;
+  });
+  return substantive;
+}
+
 function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
   if (
     node?.type.name !== "listItem" ||
     node.childCount !== 1 ||
     node.firstChild?.type.name !== "paragraph" ||
-    node.firstChild.content.size !== 0
+    hasSubstantiveContent(node.firstChild)
   ) {
     return null;
   }
@@ -68,25 +84,23 @@ function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
  * outline rows and timestamp atoms do not suppress the affordance, but any
  * later text, media, rule, or embed does.
  */
-function findTrailingEmbed(doc: PMNode): TrailingEmbed | null {
+function findTrailingEmbed(
+  doc: PMNode,
+  timestampedListItems: boolean,
+): TrailingEmbed | null {
   const candidates: TrailingEmbed[] = [];
   let lastSubstantivePos = -1;
 
   doc.descendants((node, pos, parent, index) => {
-    if (node.isText) {
-      if (node.textContent.trim()) lastSubstantivePos = pos;
-      return;
-    }
-
-    if (node.isAtom && !NON_CONTENT_ATOMS.has(node.type.name)) {
-      lastSubstantivePos = pos;
-    }
+    if (isSubstantive(node)) lastSubstantivePos = pos;
 
     if (!EMBED_NODE_NAMES.has(node.type.name) || !parent) return;
     const paragraph = doc.type.schema.nodes.paragraph;
     if (!paragraph) return;
 
-    const listItem = topLevelListItemAt(doc, pos);
+    const listItem = timestampedListItems
+      ? topLevelListItemAt(doc, pos)
+      : null;
     if (listItem) {
       const nextParagraph = emptyLeadParagraph(
         listItem.list.maybeChild(listItem.itemIndex + 1),
@@ -139,27 +153,20 @@ function findTrailingEmbed(doc: PMNode): TrailingEmbed | null {
 function insertWritingBlock(
   view: EditorView,
   getPos: () => number | undefined,
+  timestampedListItems: boolean,
 ): void {
   const insertPos = getPos();
   if (insertPos == null) return;
 
-  const listItemContext = topLevelListItemAt(view.state.doc, insertPos);
+  const listItemContext = timestampedListItems
+    ? topLevelListItemAt(view.state.doc, insertPos)
+    : null;
   if (listItemContext) {
     const listItem = view.state.schema.nodes.listItem?.createAndFill();
     if (!listItem) return;
 
     const transaction = view.state.tr;
-    const $widget = view.state.doc.resolve(insertPos);
-    const legacyParagraph = $widget.parent.maybeChild($widget.index());
-    if (
-      $widget.parent.type.name === "listItem" &&
-      legacyParagraph?.type.name === "paragraph" &&
-      legacyParagraph.content.size === 0
-    ) {
-      transaction.delete(insertPos, insertPos + legacyParagraph.nodeSize);
-    }
-
-    const itemEnd = transaction.mapping.map(listItemContext.itemEnd, 1);
+    const itemEnd = listItemContext.itemEnd;
     const $itemEnd = transaction.doc.resolve(itemEnd);
     if (
       !$itemEnd.parent.canReplaceWith(
@@ -184,12 +191,20 @@ function insertWritingBlock(
   if (!paragraph) return;
 
   const $insert = view.state.doc.resolve(insertPos);
-  if (!$insert.parent.canReplaceWith($insert.index(), $insert.index(), paragraph.type)) {
+  if (
+    !$insert.parent.canReplaceWith(
+      $insert.index(),
+      $insert.index(),
+      paragraph.type,
+    )
+  ) {
     return;
   }
 
   const transaction = view.state.tr.insert(insertPos, paragraph);
-  transaction.setSelection(TextSelection.near(transaction.doc.resolve(insertPos + 1), 1));
+  transaction.setSelection(
+    TextSelection.near(transaction.doc.resolve(insertPos + 1), 1),
+  );
   transaction.setMeta("skipDailyTimestamp", true);
   view.dispatch(transaction.scrollIntoView());
   view.focus();
@@ -198,6 +213,7 @@ function insertWritingBlock(
 function createWritingButton(
   view: EditorView,
   getPos: () => number | undefined,
+  timestampedListItems: boolean,
 ): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -210,13 +226,13 @@ function createWritingButton(
   button.addEventListener("mousedown", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    insertWritingBlock(view, getPos);
+    insertWritingBlock(view, getPos, timestampedListItems);
   });
   button.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
-    insertWritingBlock(view, getPos);
+    insertWritingBlock(view, getPos, timestampedListItems);
   });
   return button;
 }
@@ -227,16 +243,24 @@ function createWritingButton(
  * block and places the caret there. In Cadence that block must be a sibling
  * list item so its spacing and timestamp behavior match every other entry.
  */
-export const PostEmbedWritingBlock = Extension.create({
+export const PostEmbedWritingBlock = Extension.create<PostEmbedWritingBlockOptions>({
   name: "postEmbedWritingBlock",
 
+  addOptions() {
+    return { timestampedListItems: false };
+  },
+
   addProseMirrorPlugins() {
+    const { timestampedListItems } = this.options;
     return [
       new Plugin({
         key: postEmbedWritingBlockKey,
         props: {
           decorations(state) {
-            const trailingEmbed = findTrailingEmbed(state.doc);
+            const trailingEmbed = findTrailingEmbed(
+              state.doc,
+              timestampedListItems,
+            );
             if (!trailingEmbed) return null;
             if (trailingEmbed.target.kind === "paragraph") {
               return DecorationSet.create(state.doc, [
@@ -254,7 +278,8 @@ export const PostEmbedWritingBlock = Extension.create({
             return DecorationSet.create(state.doc, [
               Decoration.widget(
                 trailingEmbed.target.pos,
-                (view, getPos) => createWritingButton(view, getPos),
+                (view, getPos) =>
+                  createWritingButton(view, getPos, timestampedListItems),
                 { side: 1, ignoreSelection: true },
               ),
             ]);

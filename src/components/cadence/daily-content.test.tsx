@@ -193,7 +193,7 @@ describe("DailyContent notes editor", () => {
       /\.post-embed-writing-block\s*\{[^}]*text-align:\s*left;/,
     );
     expect(styles).toMatch(
-      /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]:empty::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
+      /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
     );
     expect(styles).toMatch(
       /\[data-daily-timestamps\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
