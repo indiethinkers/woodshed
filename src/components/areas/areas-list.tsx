@@ -188,10 +188,14 @@ export function AreasList() {
         </div>
       ) : visible.length > 0 ? (
         <div className="border-y border-border/70">
-          <div className="hidden grid-cols-[minmax(0,1fr)_64px_minmax(0,200px)_56px_16px] gap-6 border-b border-border/60 px-1 py-2 font-mono text-[9px] uppercase tracking-[0.15em] text-muted-foreground/70 md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_64px_minmax(240px,300px)_56px_16px] gap-6 border-b border-border/60 px-1 py-2 font-mono text-[9px] uppercase tracking-[0.15em] text-muted-foreground/70 md:grid">
             <span>Area</span>
             <span className="text-right">Records</span>
-            <span>Composition</span>
+            <span
+              title="Events, tasks, notes, and people assigned to this area"
+            >
+              Record types
+            </span>
             <span className="text-right">Last</span>
             <span />
           </div>
@@ -233,7 +237,7 @@ function AreaRow({ summary, today }: { summary: AreaSummary; today: string }) {
       to="/areas/$area"
       params={{ area: area.id }}
       title={latest ? `Latest: ${latest.title}` : "No activity yet"}
-      className="group grid min-h-[44px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border/55 px-1 py-2.5 transition-colors last:border-b-0 hover:bg-foreground/[0.025] focus:outline-none focus-visible:bg-foreground/[0.04] md:grid-cols-[minmax(0,1fr)_64px_minmax(0,200px)_56px_16px] md:gap-6"
+      className="group grid min-h-[44px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border/55 px-1 py-2.5 transition-colors last:border-b-0 hover:bg-foreground/[0.025] focus:outline-none focus-visible:bg-foreground/[0.04] md:grid-cols-[minmax(0,1fr)_64px_minmax(240px,300px)_56px_16px] md:gap-6"
     >
       <div className="flex min-w-0 items-center gap-3">
         {isUnassigned ? (
@@ -260,8 +264,8 @@ function AreaRow({ summary, today }: { summary: AreaSummary; today: string }) {
         {total}
       </div>
 
-      <div className="hidden min-w-0 truncate font-mono text-[10.5px] tabular-nums text-muted-foreground/70 md:block">
-        {formatBreakdown(counts)}
+      <div className="hidden min-w-0 truncate text-[11px] tabular-nums text-muted-foreground/80 md:block">
+        {formatRecordBreakdown(counts)}
       </div>
 
       <div
@@ -296,18 +300,20 @@ function formatAge(days: number | null): string {
   return `${Math.round(days / 30)}mo`;
 }
 
-/** `71e · 84t · 5n · 19p` — dense enough to sit on one line. */
-function formatBreakdown(counts: Record<AreaItemType, number>) {
+/** Clear, compact prose that still fits the summary table's desktop column. */
+export function formatRecordBreakdown(counts: Record<AreaItemType, number>) {
+  const label = (value: number, singular: string, plural = `${singular}s`) =>
+    `${value} ${value === 1 ? singular : plural}`;
   return (
     [
-      [counts.event, "e"],
-      [counts.task, "t"],
-      [counts.note, "n"],
-      [counts.person, "p"],
+      [counts.event, label(counts.event, "event")],
+      [counts.task, label(counts.task, "task")],
+      [counts.note, label(counts.note, "note")],
+      [counts.person, label(counts.person, "person", "people")],
     ]
       .filter(([value]) => value !== 0)
-      .map(([value, suffix]) => `${value}${suffix}`)
-      .join(" · ") || "empty"
+      .map(([, text]) => text)
+      .join(" · ") || "No records yet"
   );
 }
 

@@ -150,11 +150,6 @@ export function invalidateForPath(
     case "drafts":
       queryClient.invalidateQueries({ queryKey: ["drafts"] });
       break;
-    case "sweep":
-      // sweep/<id>.md — Inbox Sweep triage cards. Self-writes are filtered
-      // (mutations invalidate ["sweep"] themselves); this covers external edits.
-      queryClient.invalidateQueries({ queryKey: ["sweep"] });
-      break;
     case "areas":
       // Area files (areas/<id>.md). Coarse invalidation of the list — the
       // areas query is cheap to refetch and there's no per-area cache key.

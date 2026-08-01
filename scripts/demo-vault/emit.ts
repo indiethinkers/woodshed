@@ -1,7 +1,7 @@
 // Typed record → markdown writers.
 //
 // Each writer mirrors one frontmatter struct in `src-tauri/src/parsers/` (or,
-// for mail/sweep/agent, the hand-rolled renderers in their own modules). Where
+// for mail/agent, the hand-rolled renderers in their own modules). Where
 // the Rust side declares `skip_serializing_if`, the corresponding field here is
 // `undefined` when empty so the key is omitted entirely. Writing
 // `favorite: false` or `role: ""` would be re-serialized away by the app on
@@ -552,98 +552,6 @@ export function writeDraft(w: VaultWriter, draft: DraftInput): void {
     "---\n\n" +
     `${draft.body}\n`;
   w.write(`drafts/${draft.id}.md`, contents);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sweep cards: sweep/mod.rs:166 (frontmatter) and :665 (body)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type SweepStatus = "to_review" | "queued" | "working" | "done";
-export type SweepActionKind =
-  | "reply"
-  | "forward"
-  | "archive"
-  | "task"
-  | "person"
-  | "snooze"
-  | "none";
-
-export interface SweepEventInput {
-  at: string;
-  actor: string;
-  action: string;
-  detail?: string;
-}
-
-export interface SweepCardInput {
-  id: string;
-  emailId: string;
-  threadId?: string;
-  inbox?: string;
-  from: string;
-  subject: string;
-  emailDate?: string;
-  status: SweepStatus;
-  headline: string;
-  summary: string;
-  whatHappened?: string;
-  actionKind: SweepActionKind;
-  actionLabel: string;
-  actionTarget?: string;
-  draft?: string;
-  why?: string[];
-  snoozeUntil?: string;
-  created: string;
-  updated: string;
-  timeline?: SweepEventInput[];
-}
-
-export function writeSweepCard(w: VaultWriter, card: SweepCardInput): void {
-  // The audit trail lives in the body as `<!-- sweep-event ... -->` blocks,
-  // not in frontmatter.
-  const timeline = (card.timeline ?? [])
-    .map((event) => {
-      const lines = [
-        `at: ${scalar(event.at)}`,
-        `actor: ${scalar(event.actor)}`,
-        `action: ${scalar(event.action)}`,
-      ];
-      if (event.detail !== undefined) {
-        lines.push(`detail: ${scalar(event.detail)}`);
-      }
-      return `<!-- sweep-event\n${lines.join("\n")}\n-->`;
-    })
-    .join("\n\n");
-  const body = `# ${card.headline}\n\n<!-- timeline -->\n\n${
-    timeline === "" ? "" : `${timeline}\n\n`
-  }`;
-
-  // Built directly rather than via frontmatterDoc: `render_body` keeps the
-  // trailing blank line after each event block, and trimming it away would
-  // make the file differ from what the app rewrites on the next card update.
-  const yaml = toYaml({
-    type: "sweep_card",
-    id: card.id,
-    email_id: card.emailId,
-    thread_id: card.threadId,
-    inbox: card.inbox,
-    from: card.from,
-    subject: card.subject,
-    email_date: card.emailDate,
-    status: card.status,
-    headline: card.headline,
-    summary: card.summary,
-    what_happened: card.whatHappened ?? "",
-    action_kind: card.actionKind,
-    action_label: card.actionLabel,
-    action_target: card.actionTarget,
-    draft: card.draft ?? "",
-    why: omitEmptyList(card.why),
-    snooze_until: card.snoozeUntil,
-    created: card.created,
-    updated: card.updated,
-  });
-  w.write(`sweep/${card.id}.md`, `---\n${yaml}---\n\n${body}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

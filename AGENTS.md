@@ -247,11 +247,15 @@ touched.
 ├── archive/        Archived messages
 ├── drafts/         Mail drafts
 ├── agent/          Agent conversation transcripts
-├── sweep/          Mail triage workflow cards
 ├── data/           Legacy vault metadata read by migrations
 ├── attachments/    User and mail attachments
 └── .woodshed/      Recoverable trash and record revisions
 ```
+
+Vaults created by older builds may still contain retired `sweep/` Markdown
+records. The app no longer scaffolds or uses that directory, but it deliberately
+leaves those user-owned files untouched so they can be inspected, moved, or
+deleted outside Woodshed.
 
 `vault_init` creates required directories without overwriting existing data.
 Missing runtime directories may also be created by their owning command.
@@ -313,7 +317,6 @@ fields when an existing serializer is designed to round-trip them.
 | Table schema | `tables/<id>/_schema.md` | `type`, `id`, `columns`, `views` |
 | Table row | `tables/<id>/<row>.md` | `type`, `id`, `table`, `cells` |
 | Agent chat | `agent/<id>.md` | `type`, `id`, transcript metadata |
-| Sweep card | `sweep/<id>.md` | source message, lane, action, status |
 
 Mail records use flat files in `inbox/`, `sent/`, `archive/`, and `drafts/`.
 Their account identity is stored in frontmatter.
@@ -373,7 +376,7 @@ Confirm it in `src/components/layout/sidebar.tsx` before changing navigation.
 | Surface | Primary route | Backing data |
 |---|---|---|
 | Cadence | `/` and `/cadence/*` | Daily journals, events, tasks, iCal cache |
-| Mail | `/mail` | Inbox, sent, archive, drafts, Sweep cards |
+| Mail | `/mail` | Inbox, sent, archive, drafts |
 | Agent | `/agent` | Agent chat records and configured endpoint |
 | Notebook | `/notebook` | Notes |
 | Resources | `/resources` | Saved web resources |
@@ -400,7 +403,8 @@ owner-only app-data credential file. Legacy Keychain entries are imported once,
 only after a verified local write.
 
 Gmail is the source of truth for inbox membership and `\Seen` state. Refresh
-reconciles the full remote inbox before pruning stale Review cards.
+reconciles the full remote inbox and archives local records that are no longer
+present there.
 
 Archiving updates Gmail and moves the local record from `inbox/` to `archive/`.
 Keep local and remote failure handling recoverable.
@@ -424,7 +428,7 @@ required and preserve time, redirect, address, and response-size limits.
 Sanitize fetched HTML at the boundary. Remote email images load through the
 bounded cache by default; never let sender HTML fetch remote URLs directly.
 
-### Agent and Sweep
+### Agent
 
 Agent chats are durable vault records. Each submitted turn also creates a
 durable job under `<app_data_dir>/agent-runs/`; a process-owned task executes it
@@ -441,9 +445,6 @@ key from the local Hermes profile that owns the configured API port, reading
 bounded, regular, non-symlink profile files only. That key is used in place, not
 copied into Woodshed. Custom and remote endpoints still require an explicit
 bearer key, stored through `CredentialBroker`.
-
-Sweep cards are workflow records. `to_review` cards depend on local inbox
-membership; queued, working, and done cards may outlive the source email.
 
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.

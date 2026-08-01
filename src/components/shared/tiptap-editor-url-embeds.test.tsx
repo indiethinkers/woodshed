@@ -389,6 +389,9 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(items).toHaveLength(3);
       expect(items[1]?.querySelector(selector)).toBeTruthy();
       expect(items[1]?.querySelector(":scope > p")).toBeTruthy();
+      expect(
+        items[1]?.querySelector(":scope > div.react-renderer"),
+      ).toHaveClass("cadence-standalone-embed");
     });
   });
 
@@ -473,7 +476,270 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(item.querySelectorAll(":scope > p")).toHaveLength(2);
       expect(item.querySelector("[data-tweet-id]")).toBeTruthy();
     });
+    const insertedParagraph = item.querySelector<HTMLElement>(
+      ":scope > p.cadence-active-empty-paragraph",
+    );
+    expect(insertedParagraph).toBeTruthy();
+    expect(
+      item.querySelector(":scope > div.react-renderer"),
+    ).toHaveClass("cadence-standalone-embed");
+
+    insertedParagraph!.textContent = "Synthetic lead text";
+    fireEvent.input(insertedParagraph!, {
+      data: "Synthetic lead text",
+      inputType: "insertText",
+    });
+
+    await waitFor(() => {
+      expect(item).toHaveTextContent("Synthetic lead text");
+      expect(
+        item.querySelector(":scope > div.react-renderer"),
+      ).not.toHaveClass("cadence-standalone-embed");
+      expect(item.querySelectorAll("[data-daily-timestamp]")).toHaveLength(1);
+    });
     expect(commits).toEqual([]);
+  });
+
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/192837465",
+    },
+    {
+      kind: "YouTube video",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=abcdefghijk",
+    },
+  ])("adds one writing affordance after the final Cadence $kind", async ({
+    selector,
+    url,
+  }) => {
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${url}`,
+      () => undefined,
+    );
+
+    const embedItem = await waitFor(() => {
+      const item = container.querySelector(selector)?.closest("li");
+      expect(item).toBeTruthy();
+      return item!;
+    });
+    const postEmbedBlock = embedItem.querySelector(
+      ":scope > div.react-renderer + [data-post-embed-writing-block]",
+    );
+
+    expect(
+      embedItem.querySelector(":scope > div.react-renderer"),
+    ).toHaveClass("cadence-standalone-embed");
+    expect(postEmbedBlock).toHaveTextContent("Start writing...");
+    expect(
+      embedItem.querySelectorAll(
+        ":scope > div.react-renderer + [data-post-embed-writing-block]",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps ordinary embed margins when a Cadence row has lead text", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/314159265";
+    const { container } = mountOutlineEditor(
+      `- [09:30] Synthetic context\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
+  });
+
+  it("keeps ordinary embed margins when content follows in the same Cadence row", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/271828182";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}\n\n  Synthetic follow-up`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
+  });
+
+  it("keeps ordinary embed margins when another block atom shares the Cadence row", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/161803398";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ---\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      expect(wrapper?.closest("li")?.querySelector(":scope > hr")).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
+  });
+
+  it.each([
+    {
+      kind: "tweet",
+      selector: "[data-tweet-id]",
+      url: "https://x.com/sample_account/status/675849302",
+    },
+    {
+      kind: "YouTube video",
+      selector: "[data-youtube-resource]",
+      url: "https://www.youtube.com/watch?v=zyxwvutsrqp",
+    },
+  ])("adds the writing affordance after a final freeform $kind", async ({
+    selector,
+    url,
+  }) => {
+    const { container } = mountFreeformEditor(url, () => undefined);
+
+    await waitFor(() => {
+      expect(container.querySelector(selector)).toBeTruthy();
+      expect(
+        container.querySelector("[data-post-embed-writing-block]"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("keeps a post-embed writing block inside a freeform list item", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/102938475";
+    const { container } = mountFreeformEditor(`- ${tweetUrl}`, () => undefined);
+
+    const writingBlock = await waitFor(() => {
+      const block = container.querySelector<HTMLElement>(
+        "[data-post-embed-writing-block]",
+      );
+      expect(block).toBeTruthy();
+      return block!;
+    });
+    const embedItem = writingBlock.closest("li")!;
+    fireEvent.mouseDown(writingBlock);
+
+    await waitFor(() => {
+      expect(topLevelListItems(container)).toHaveLength(1);
+      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(2);
+      expect(
+        embedItem.querySelector(
+          ":scope > p[data-post-embed-writing-block]",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("does not add the writing affordance when text follows the embed", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/918273645";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}\n- [09:31] Existing synthetic text`,
+      () => undefined,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-tweet-id]")).toBeTruthy();
+    });
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
+  });
+
+  it("turns the writing affordance into a focused Cadence row when clicked", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/564738291";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const writingBlock = await waitFor(() => {
+      const block = container.querySelector<HTMLElement>(
+        "[data-post-embed-writing-block]",
+      );
+      expect(block).toBeTruthy();
+      return block!;
+    });
+    const embedItem = writingBlock.closest("li")!;
+    expect(writingBlock.tagName).toBe("BUTTON");
+    expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
+    fireEvent.mouseDown(writingBlock);
+
+    let paragraph: HTMLParagraphElement | null = null;
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      paragraph = items[1]?.querySelector(
+        ":scope > p[data-post-embed-writing-block]",
+      );
+      expect(paragraph).toBeTruthy();
+      expect(items).toHaveLength(2);
+      expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
+      expect(
+        embedItem.querySelector(":scope > div.react-renderer"),
+      ).toHaveClass("cadence-standalone-embed");
+      expect(document.activeElement).toHaveClass("tiptap-content");
+    });
+
+    paragraph!.textContent = "First character";
+    fireEvent.input(paragraph!, {
+      data: "First character",
+      inputType: "insertText",
+    });
+
+    await waitFor(() => {
+      const nextItem = topLevelListItems(container)[1];
+      expect(nextItem).toHaveTextContent("First character");
+      expect(nextItem?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+      expect(
+        nextItem?.querySelector("[data-post-embed-writing-block]"),
+      ).toBeNull();
+    });
+
+    for (const child of Array.from(paragraph!.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) child.remove();
+    }
+    fireEvent.input(paragraph!, { inputType: "deleteContentBackward" });
+
+    await waitFor(() => {
+      const items = topLevelListItems(container);
+      const emptyRow = items[1];
+      expect(items).toHaveLength(2);
+      expect(emptyRow?.querySelector("[data-daily-timestamp]")).toBeTruthy();
+      expect(
+        emptyRow?.querySelector("p[data-post-embed-writing-block]"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("does not add a post-embed writing block to ordinary rows", async () => {
+    const { container } = mountOutlineEditor(
+      "- [09:30] A normal synthetic row",
+      () => undefined,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".tiptap-content")).toBeTruthy();
+    });
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
   });
 
   it("creates one empty Cadence block for every Enter between text blocks", async () => {

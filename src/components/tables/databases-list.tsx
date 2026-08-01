@@ -146,6 +146,7 @@ export function DatabasesList() {
           unit="databases"
           rows={customRows}
           columns={CUSTOM_COLUMNS}
+          columnSizingKey="databases-custom"
           loading={isLoading}
           rowKey={(row) => row.id}
           rowHref={(row) => row.href}
@@ -221,6 +222,7 @@ export function DatabasesList() {
           unit="databases"
           rows={generatedRows}
           columns={GENERATED_COLUMNS}
+          columnSizingKey="databases-generated"
           loading={isLoadingGenerated}
           rowKey={(row) => row.id}
           rowHref={(row) => row.href}

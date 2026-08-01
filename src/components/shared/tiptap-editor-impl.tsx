@@ -38,6 +38,7 @@ import {
   parseCollapsedMarkers,
 } from "./extensions/outline-fold";
 import { CompactCaret } from "./extensions/compact-caret";
+import { PostEmbedWritingBlock } from "./extensions/post-embed-writing-block";
 import { Wikilink, type WikilinkType } from "./extensions/wikilink";
 import {
   WikilinkSuggestion,
@@ -739,6 +740,7 @@ export function TiptapEditor({
         onPasted: (url) => captureEmbedResource(url, "twitter"),
       }),
       ImageMd.configure({ resolveSrc }),
+      PostEmbedWritingBlock.configure({ timestampedListItems }),
       CompactCaret,
       Wikilink,
       WikilinkSuggestion.configure({

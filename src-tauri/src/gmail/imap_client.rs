@@ -146,7 +146,7 @@ pub fn fetch_recent(
 /// (no bodies). Used to reconcile the local inbox: any locally-stored
 /// inbox message whose id isn't in this set has left the Gmail inbox
 /// (archived, moved, or deleted directly in Gmail) and should be archived
-/// locally so it stops surfacing in the sweep.
+/// locally so the app matches Gmail's inbox membership.
 ///
 /// Each `ids` entry is the message's bare-or-bracketed RFC 5322 Message-ID
 /// or its canonical UID identity — the same id shapes `commands::gmail`

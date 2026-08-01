@@ -11,12 +11,14 @@ import {
 } from "lucide-react";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type ElementType,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -100,6 +102,12 @@ interface RecordTableProps<T> {
   controlsEnd?: ReactNode;
   /** Rendered between the controls and the grid (inline create forms). */
   aboveGrid?: ReactNode;
+  /**
+   * Enables drag and keyboard column resizing. Widths are persisted locally
+   * under this stable, surface-owned key so separate inline tables do not
+   * overwrite one another.
+   */
+  columnSizingKey?: string;
   /** Applied before search / filter / sort (e.g. a time-window filter). */
   prefilter?: (rows: T[]) => T[];
   emptyMessage?: string;
@@ -155,6 +163,7 @@ export function RecordTable<T>({
   quietEmptyCells = false,
   controlsEnd,
   aboveGrid,
+  columnSizingKey,
   prefilter,
   emptyMessage = "No rows match this view.",
   errorState,
@@ -162,6 +171,8 @@ export function RecordTable<T>({
   rowLabel,
   favorite,
 }: RecordTableProps<T>) {
+  const [columnWidths, commitColumnWidth] =
+    useRecordTableColumnWidths(columnSizingKey);
   const visibleRows = useMemo(
     () => applyView({ columns, filters, prefilter, query, rows, sorts }),
     [columns, filters, prefilter, query, rows, sorts],
@@ -345,6 +356,8 @@ export function RecordTable<T>({
         onToggleAll={toggleAll}
         favorite={favorite}
         quietEmptyCells={quietEmptyCells}
+        columnWidths={columnWidths}
+        onResizeColumn={columnSizingKey ? commitColumnWidth : undefined}
       />
 
       {selectable && (
@@ -541,6 +554,8 @@ function RecordTableGrid<T>({
   onToggleAll,
   favorite,
   quietEmptyCells,
+  columnWidths,
+  onResizeColumn,
 }: {
   columns: RecordColumn<T>[];
   emptyMessage: string;
@@ -561,8 +576,11 @@ function RecordTableGrid<T>({
     onToggle: (row: T) => void;
   };
   quietEmptyCells: boolean;
+  columnWidths: Record<string, number>;
+  onResizeColumn?: (columnId: string, width: number) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const [start, end] = useVisibleRowRange(rows.length, bodyRef);
 
   if (loading) return <TableSkeleton compact={compact} />;
@@ -572,8 +590,10 @@ function RecordTableGrid<T>({
 
   return (
     <div
+      ref={gridRef}
+      data-record-table-grid
       className={`${compact ? "" : "min-h-[240px]"} overflow-x-auto border-y border-border/60`}
-      style={columnSizing(columns, selectable)}
+      style={columnSizing(columns, selectable, columnWidths)}
     >
       <div className="min-w-full" style={{ width: "max-content" }}>
         <Row className="group h-8 border-b border-border/60">
@@ -593,9 +613,22 @@ function RecordTableGrid<T>({
             <CellShell
               key={column.id}
               columnId={column.id}
-              className="flex items-center border-r border-border/40 px-2.5"
+              className="group/record-header relative flex items-center border-r border-border/40 px-2.5"
             >
               <SortHeader column={column} sorts={sorts} onSort={onSort} />
+              {onResizeColumn && (
+                <RecordColumnResizeHandle
+                  column={column}
+                  width={columnWidths[column.id] ?? column.width}
+                  onPreview={(width) => {
+                    gridRef.current?.style.setProperty(
+                      `--col-${column.id}-size`,
+                      `${width}px`,
+                    );
+                  }}
+                  onCommit={(width) => onResizeColumn(column.id, width)}
+                />
+              )}
             </CellShell>
           ))}
           <div className="flex-1" />
@@ -1130,6 +1163,180 @@ function CellShell({
   );
 }
 
+const MIN_RECORD_COLUMN_WIDTH = 80;
+const MAX_RECORD_COLUMN_WIDTH = 1_200;
+const RECORD_TABLE_WIDTHS_STORAGE_PREFIX =
+  "woodshed:record-table:column-widths:";
+
+function clampRecordColumnWidth(width: number): number {
+  return Math.round(
+    Math.min(
+      MAX_RECORD_COLUMN_WIDTH,
+      Math.max(MIN_RECORD_COLUMN_WIDTH, width),
+    ),
+  );
+}
+
+function RecordColumnResizeHandle<T>({
+  column,
+  width,
+  onPreview,
+  onCommit,
+}: {
+  column: RecordColumn<T>;
+  width: number;
+  onPreview: (width: number) => void;
+  onCommit: (width: number) => void;
+}) {
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+  function widthAt(clientX: number): number {
+    const active = drag.current;
+    if (!active) return width;
+    return clampRecordColumnWidth(
+      active.startWidth + clientX - active.startX,
+    );
+  }
+
+  function finishResize(event: ReactPointerEvent<HTMLSpanElement>) {
+    if (!drag.current) return;
+    const nextWidth = widthAt(event.clientX);
+    drag.current = null;
+    setIsResizing(false);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onPreview(nextWidth);
+    onCommit(nextWidth);
+  }
+
+  return (
+    <span
+      role="separator"
+      aria-label={`Resize ${column.name} column`}
+      aria-orientation="vertical"
+      aria-valuemin={MIN_RECORD_COLUMN_WIDTH}
+      aria-valuemax={MAX_RECORD_COLUMN_WIDTH}
+      aria-valuenow={width}
+      title={`Drag to resize ${column.name} column`}
+      tabIndex={0}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        drag.current = { startX: event.clientX, startWidth: width };
+        setIsResizing(true);
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current) return;
+        event.preventDefault();
+        onPreview(widthAt(event.clientX));
+      }}
+      onPointerUp={finishResize}
+      onPointerCancel={(event) => {
+        if (!drag.current) return;
+        drag.current = null;
+        setIsResizing(false);
+        if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        onPreview(width);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        const step = event.shiftKey ? 40 : 10;
+        const nextWidth = clampRecordColumnWidth(
+          width + direction * step,
+        );
+        onPreview(nextWidth);
+        onCommit(nextWidth);
+      }}
+      className={`group/resize absolute top-0 -right-1.5 z-20 h-full w-3 touch-none select-none cursor-col-resize focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground/35 ${
+        isResizing ? "bg-foreground/10" : ""
+      }`}
+    >
+      <span
+        className={`absolute inset-y-1 left-1/2 w-px -translate-x-1/2 transition-colors ${
+          isResizing
+            ? "bg-foreground/50"
+            : "bg-foreground/0 group-hover/record-header:bg-foreground/20 group-hover/resize:bg-foreground/50 group-focus-visible/resize:bg-foreground/50"
+        }`}
+      />
+    </span>
+  );
+}
+
+function readRecordTableColumnWidths(
+  columnSizingKey: string | undefined,
+): Record<string, number> {
+  if (!columnSizingKey || typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(
+      `${RECORD_TABLE_WIDTHS_STORAGE_PREFIX}${columnSizingKey}`,
+    );
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const widths: Record<string, number> = {};
+    for (const [columnId, candidate] of Object.entries(parsed)) {
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        widths[columnId] = clampRecordColumnWidth(candidate);
+      }
+    }
+    return widths;
+  } catch {
+    return {};
+  }
+}
+
+function useRecordTableColumnWidths(
+  columnSizingKey: string | undefined,
+): [Record<string, number>, (columnId: string, width: number) => void] {
+  const [widths, setWidths] = useState<Record<string, number>>(() =>
+    readRecordTableColumnWidths(columnSizingKey),
+  );
+
+  useEffect(() => {
+    if (
+      !columnSizingKey ||
+      typeof window === "undefined" ||
+      Object.keys(widths).length === 0
+    ) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        `${RECORD_TABLE_WIDTHS_STORAGE_PREFIX}${columnSizingKey}`,
+        JSON.stringify(widths),
+      );
+    } catch {
+      // Storage can be unavailable in hardened/private webviews; the live
+      // resize should still work for the current mount.
+    }
+  }, [columnSizingKey, widths]);
+
+  const commitWidth = useCallback(
+    (columnId: string, width: number) => {
+      const nextWidth = clampRecordColumnWidth(width);
+      setWidths((current) => ({ ...current, [columnId]: nextWidth }));
+    },
+    [],
+  );
+
+  return [widths, commitWidth];
+}
+
 /**
  * View-state container shared by every record table. Holds the search query,
  * filter group, and sort stack, and resets them to the supplied defaults.
@@ -1165,11 +1372,14 @@ export function useRecordTableState(defaultSorts: ViewSort[]) {
 function columnSizing<T>(
   columns: RecordColumn<T>[],
   selectable: boolean,
+  columnWidths: Record<string, number>,
 ): CSSProperties {
   const sizing: Record<string, string> = {};
   if (selectable) sizing["--col-__select-size"] = `${SELECT_COL_WIDTH}px`;
   for (const column of columns) {
-    sizing[`--col-${column.id}-size`] = `${column.width}px`;
+    sizing[`--col-${column.id}-size`] = `${
+      columnWidths[column.id] ?? column.width
+    }px`;
   }
   return sizing as CSSProperties;
 }

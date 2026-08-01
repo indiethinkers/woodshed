@@ -299,6 +299,7 @@
 /* Tiptap body editor — minimal block styling that mirrors the read-only
    Markdown renderer so editing and viewing match. */
 .tiptap-content {
+  --embed-block-gap: 1.5rem;
   outline: none;
   /* Browsers don't always resolve `cursor: auto` to text within a
      contenteditable's margin/padding regions, so the I-beam disappears in
@@ -772,6 +773,41 @@
   max-width: 550px;
   margin: 0.75rem 0;
 }
+.tiptap-content
+  div.react-renderer:has(
+    > :is([data-tweet-id], [data-youtube-resource])
+  ) {
+  margin-block: var(--embed-block-gap);
+}
+/* Timestamp-only Cadence embeds use sibling-row margins for their rhythm.
+   Keeping the gap outside the embed row avoids margin collapse through the
+   otherwise zero-height timestamp paragraph and guarantees the same measured
+   distance above the card and below it. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(> div.react-renderer.cadence-standalone-embed) {
+  margin-top: var(--embed-block-gap) !important;
+}
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li:has(> div.react-renderer.cadence-standalone-embed)
+  + li {
+  margin-top: var(--embed-block-gap) !important;
+}
+.tiptap-content[data-daily-timestamps]
+  div.react-renderer.cadence-standalone-embed {
+  margin-block: 0;
+}
+.tiptap-content
+  div.react-renderer
+  > [data-tweet-id]
+  > .twitter-embed-shell,
+.tiptap-content
+  div.react-renderer
+  > [data-youtube-resource]
+  > div {
+  margin-block: 0;
+}
 .tiptap-content > [data-tweet-id]:first-child > .twitter-embed-shell {
   margin-top: 0;
 }
@@ -952,99 +988,120 @@
    and the card's top edge sits on the entry line, directly beside the dash.
    The embed shell is the wrapper's first child, so its own margin-top is
    already 0 via `.twitter-embed-shell:first-child`. */
-/* When the bullet's text is just the timestamp atom (the user pasted a tweet
-   right at the start of an entry), the paragraph's only in-flow content is
-   the trailing <br> — the timestamp span is absolutely positioned against
-   the li. The generic empty-paragraph collapse above misses it (`:only-child`
-   fails with the atom present), leaving the card one line below the dash.
-   Collapse the line box instead of `display: none` so the timestamp keeps
-   rendering; the moment the user types on that line the trailing break goes
-   away and the rule disengages. */
+/* The editor marks Cadence embeds whose surrounding paragraphs have no
+   substantive content. Use that semantic marker instead of reconstructing
+   emptiness from browser-generated trailing breaks, which change as the caret
+   moves. Paste and Enter can leave more than one empty lead paragraph, so the
+   paragraph that owns the gutter timestamp stays while the others collapse. */
 .tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]:only-child),
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p:has(> [data-daily-timestamp]) {
   height: 0;
   min-height: 0;
 }
 .tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]:only-child)
-  > [data-daily-timestamp],
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p:not(:has(> [data-daily-timestamp])):not(
+    .cadence-active-empty-paragraph
+  ) {
+  display: none;
+}
 .tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p.cadence-active-empty-paragraph {
+  min-height: 1.5em;
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p.cadence-active-empty-paragraph:has(
+    ~ div.react-renderer.cadence-standalone-embed
+  ) {
+  margin-bottom: var(--embed-block-gap);
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > div.react-renderer.cadence-standalone-embed
+  ~ p.cadence-active-empty-paragraph {
+  margin-top: var(--embed-block-gap);
+}
+.tiptap-content[data-daily-timestamps]
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p
   > [data-daily-timestamp] {
   top: 1rem;
 }
-/* Suppress ProseMirror's empty cursor-landing paragraph that sits next
-   to a block embed inside a list item. ProseMirror leaves a
-   `<p><br class="ProseMirror-trailingBreak"></p>` placeholder whenever
-   `insertContent` lands a block node at a collapsed selection, which
-   shows up as a stray blank line above (or below) the embed. Hiding
-   it gets the embed flush; the cursor can still arrow into the empty
-   paragraph, and the moment any text is typed there it stops being
-   empty and the rule disengages — the paragraph reappears
-   automatically. */
-.tiptap-content li:has(> img.tiptap-image) > p:empty,
-.tiptap-content li:has(> img.tiptap-image) > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div.react-renderer > [data-youtube-resource]) > p:empty,
+/* Collapse only the empty paste paragraph immediately before an embed. The
+   terminal-card writing affordance is derived by PostEmbedWritingBlock and
+   never needs a hidden Markdown paragraph of its own. */
+.tiptap-content
+  li:has(> img.tiptap-image)
+  > p:not(.cadence-active-empty-paragraph):empty:has(+ img.tiptap-image),
+.tiptap-content
+  li:has(> img.tiptap-image)
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(+ img.tiptap-image),
 .tiptap-content
   li:has(> div.react-renderer > [data-youtube-resource])
-  > p:has(> br.ProseMirror-trailingBreak:only-child),
-.tiptap-content li:has(> div.react-renderer > [data-tweet-id]) > p:empty,
+  > p:not(.cadence-active-empty-paragraph):empty:has(
+    + div.react-renderer > [data-youtube-resource]
+  ),
+.tiptap-content
+  li:has(> div.react-renderer > [data-youtube-resource])
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(
+    + div.react-renderer > [data-youtube-resource]
+  ),
 .tiptap-content
   li:has(> div.react-renderer > [data-tweet-id])
-  > p:has(> br.ProseMirror-trailingBreak:only-child) {
+  > p:not(.cadence-active-empty-paragraph):empty:has(
+    + div.react-renderer > [data-tweet-id]
+  ),
+.tiptap-content
+  li:has(> div.react-renderer > [data-tweet-id])
+  > p:not(.cadence-active-empty-paragraph):has(
+    > br.ProseMirror-trailingBreak:only-child
+  ):has(
+    + div.react-renderer > [data-tweet-id]
+  ) {
   display: none;
 }
 
-/* In Cadence, Enter above an embed creates an intentional blank line. Show
-   those earlier paragraphs, but keep the paste placeholder immediately before
-   the embed collapsed so the card occupies the cursor's original line. */
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:empty:not(
-    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
-  ),
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(> br.ProseMirror-trailingBreak:only-child):not(
-    :has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))
-  ) {
+.post-embed-writing-block {
   display: block;
+  width: 100%;
+  min-height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted-foreground) 68%, transparent);
+  font: inherit;
+  line-height: 1.5rem;
+  text-align: left;
+}
+.post-embed-writing-block:hover,
+.post-embed-writing-block:focus-visible {
+  color: var(--muted-foreground);
+  outline: none;
+}
+/* The terminal affordance lives inside the embed's Cadence row, so it does
+   not receive the next-row margin used when real text follows. Give it the
+   same explicit gap as that next row. */
+.tiptap-content[data-daily-timestamps]
+  > ul
+  > li
+  > div.react-renderer.cadence-standalone-embed
+  + .post-embed-writing-block {
+  margin-top: var(--embed-block-gap);
+}
+.tiptap-content
+  p.post-embed-writing-block[data-post-embed-writing-block][data-placeholder]::before {
+  content: attr(data-placeholder);
+  height: 0;
+  float: left;
+  pointer-events: none;
 }
 
 .tiptap-content hr {
@@ -1089,58 +1146,6 @@
   pointer-events: none;
   height: 0;
   float: left;
-}
-
-/* Mail refresh progress. One signature motion per state, no extra chrome:
-   - Syncing (indeterminate): a single light streak glides across the track.
-   - Triaging (determinate): a brighter band flows through the fill while
-     work is in flight; the fill width animates to the known queue progress.
-   - Complete: a calm, solid bar (no animation). */
-.mail-refresh-comet {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--foreground) 85%, transparent) 50%,
-    transparent 100%
-  );
-  animation: mail-refresh-comet 1.25s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-
-@keyframes mail-refresh-comet {
-  from {
-    transform: translateX(-110%);
-  }
-  to {
-    transform: translateX(260%);
-  }
-}
-
-.mail-refresh-streaming {
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--background) 45%, transparent) 50%,
-    transparent 100%
-  );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  animation: mail-refresh-stream 1.4s linear infinite;
-}
-
-@keyframes mail-refresh-stream {
-  from {
-    background-position: 220% 0;
-  }
-  to {
-    background-position: -120% 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mail-refresh-comet,
-  .mail-refresh-streaming {
-    animation: none;
-  }
 }
 
 /* ─────────── Agent chat ─────────── */

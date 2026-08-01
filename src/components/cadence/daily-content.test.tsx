@@ -160,22 +160,52 @@ describe("DailyContent notes editor", () => {
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:has\(> \[data-daily-timestamp\]\)\s*\{[^}]*height:\s*0;[^}]*min-height:\s*0;/,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*> \[data-daily-timestamp\],[\s\S]*top:\s*1rem;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:not\(:has\(> \[data-daily-timestamp\]\)\):not\(\s*\.cadence-active-empty-paragraph\s*\)\s*\{[^}]*display:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /p\.cadence-active-empty-paragraph:has\([\s\S]*~ div\.react-renderer\.cadence-standalone-embed[\s\S]*\)\s*\{[^}]*margin-bottom:\s*var\(--embed-block-gap\);/,
+    );
+    expect(styles).toMatch(
+      /div\.react-renderer\.cadence-standalone-embed\s*~ p\.cadence-active-empty-paragraph\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
+    );
+    expect(styles).toMatch(
+      /p:not\(\.cadence-active-empty-paragraph\):empty:has\([\s\S]*\+ div\.react-renderer > \[data-tweet-id\][\s\S]*\)/,
+    );
+    expect(styles).toMatch(
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
     );
     expect(styles).not.toMatch(
-      /> p\s*> \[data-daily-timestamp\]\s*\{\s*top:\s*1rem;/,
+      /\.tiptap-content\[data-daily-timestamps\]\s*> ul\s*> li\s*> p\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
     );
   });
 
-  it("keeps intentional lines above embeds visible without offsetting a fresh paste", () => {
-    expect(styles).toContain(
-      ":has(+ div.react-renderer > :is([data-tweet-id], [data-youtube-resource]))",
+  it("keeps equal space around embeds and exposes the writing block below", () => {
+    expect(styles).toMatch(
+      /\.tiptap-content\s*\{[^}]*--embed-block-gap:\s*1\.5rem;/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*> p:empty:not\([\s\S]*div\.react-renderer[\s\S]*\)[\s\S]*display:\s*block;/,
+      /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*var\(--embed-block-gap\);/,
+    );
+    expect(styles).toMatch(
+      /\[data-daily-timestamps\][\s\S]*li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
+    );
+    expect(styles).toMatch(
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*\+ li\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
+    );
+    expect(styles).toMatch(
+      /div\.react-renderer\.cadence-standalone-embed\s*\{[^}]*margin-block:\s*0;/,
+    );
+    expect(styles).toMatch(
+      /\.post-embed-writing-block\s*\{[^}]*text-align:\s*left;/,
+    );
+    expect(styles).toMatch(
+      /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
+    );
+    expect(styles).toMatch(
+      /div\.react-renderer\.cadence-standalone-embed\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
     );
   });
 

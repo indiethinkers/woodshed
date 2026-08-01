@@ -20,7 +20,7 @@
   <h1>Privacy Policy</h1>
   <p class="doc-meta">
     Effective: <strong>2026-05-08</strong> &nbsp;·&nbsp;
-    Last updated: <strong>2026-07-28</strong> &nbsp;·&nbsp;
+    Last updated: <strong>2026-07-31</strong> &nbsp;·&nbsp;
     Contact: <a href="mailto:daniel@indiethinkers.com">daniel@indiethinkers.com</a>
   </p>
 
@@ -45,7 +45,7 @@
     <li><strong>Google Calendar or another iCal host.</strong> An explicit Sync downloads the configured read-only iCal feed. Woodshed does not currently request Calendar OAuth access or write to Google Calendar.</li>
     <li><strong>Resource capture.</strong> Saving a URL downloads that public page and, for supported providers, an oEmbed response. Public fetches reject private/local destinations and enforce redirect, timeout, size, and concurrency limits.</li>
     <li><strong>Remote email images.</strong> Sender images are removed by default and requested only after you choose <strong>Load remote images</strong>. Loading an image can reveal your IP address and time of access to its host.</li>
-    <li><strong>Hermes-compatible agent endpoint.</strong> An explicit agent or Sweep action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Opening Sweep sends nothing. Proposed record creation and mail archive actions require confirmation.</li>
+    <li><strong>Hermes-compatible agent endpoint.</strong> An explicit agent action sends the selected instruction and relevant vault or email content directly to the endpoint you configured. Proposed record creation and mail archive actions require confirmation.</li>
   </ul>
   <p>These providers receive requests directly from your device and process them under their own terms. Woodshed does not proxy or retain a server-side copy.</p>
 
@@ -61,6 +61,7 @@
 
   <h2>6. Retention and deletion</h2>
   <p>Data persists on your device until you remove it. In-app deletion moves records to <code>.woodshed/trash/</code> inside the vault for recovery. Uninstalling Woodshed does not delete the vault.</p>
+  <p>Retired Sweep-card Markdown created by older builds remains in the vault's <code>sweep/</code> directory until you inspect, move, or delete it. Current builds do not use or remove those files.</p>
   <p>Removing an account deletes its Woodshed-stored credential. You can revoke a Gmail App Password at <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>. Reset a leaked Google Calendar secret URL in Google Calendar settings. Delete the app-data directory to remove preferences, indexes, caches, logs, and Woodshed's <code>secrets.json</code>; remove iCal and Deepgram credential entries separately through the OS.</p>
   <p>Because we operate no data backend, we do not hold a remote copy to access, export, or delete.</p>
 

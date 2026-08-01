@@ -19,6 +19,15 @@ describe("isEditableElement", () => {
     expect(isEditableElement(editor)).toBe(true);
   });
 
+  it("treats a focused database cell as an editing surface", () => {
+    const cell = document.createElement("div");
+    cell.setAttribute("data-table-cell", "");
+    const trigger = document.createElement("button");
+    cell.appendChild(trigger);
+
+    expect(isEditableElement(trigger)).toBe(true);
+  });
+
   it("ignores inert page elements", () => {
     expect(isEditableElement(document.createElement("div"))).toBe(false);
   });

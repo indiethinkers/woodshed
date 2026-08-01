@@ -7,16 +7,6 @@ import {
 } from "../emit";
 import { FIRMS, FOUNDER, METRICS, RAISE } from "./narrative";
 
-export interface MailIndex {
-  /** Message ids present in `inbox/`. Sweep `to_review` cards must reference these. */
-  inboxIds: string[];
-  /** Enough detail for Sweep cards to describe the message they triaged. */
-  byId: Map<
-    string,
-    { from: string; subject: string; date: string; threadId: string }
-  >;
-}
-
 interface MessageSeed {
   slug: string;
   folder: MailFolder;
@@ -1156,13 +1146,8 @@ function messageId(slug: string): string {
   return `CA+${hash.toString(36)}${slug.length.toString(36)}@mail.example`;
 }
 
-export function buildMail(w: VaultWriter, cal: Calendar): MailIndex {
-  const inboxIds: string[] = [];
-  const byId = new Map<
-    string,
-    { from: string; subject: string; date: string; threadId: string }
-  >();
-
+export function buildMail(w: VaultWriter, cal: Calendar): number {
+  let inboxCount = 0;
   for (const message of MESSAGES) {
     const id = messageId(message.slug);
     const date = cal.at(message.offset, message.time);
@@ -1187,13 +1172,8 @@ export function buildMail(w: VaultWriter, cal: Calendar): MailIndex {
       body: message.body,
     });
 
-    if (message.folder === "inbox") inboxIds.push(id);
-    byId.set(id, {
-      from: message.from,
-      subject: message.subject,
-      date,
-      threadId: message.thread,
-    });
+    if (message.folder === "inbox") inboxCount += 1;
+
   }
 
   for (const draft of DRAFTS) {
@@ -1209,14 +1189,5 @@ export function buildMail(w: VaultWriter, cal: Calendar): MailIndex {
     });
   }
 
-  return { inboxIds, byId };
-}
-
-/** Message id for a seeded slug: lets Sweep cards bind to real inbox files. */
-export function inboxMessageId(slug: string): string {
-  const found = MESSAGES.find(
-    (message) => message.slug === slug && message.folder === "inbox",
-  );
-  if (!found) throw new Error(`no inbox message with slug "${slug}"`);
-  return messageId(slug);
+  return inboxCount;
 }

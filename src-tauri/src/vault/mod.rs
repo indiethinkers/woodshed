@@ -36,8 +36,6 @@ pub const EVENTS_DIR: &str = "events";
 /// `agent/<id>.md` with `type: agent_chat` frontmatter and a markdown
 /// transcript body so assistant work remains part of the user's second brain.
 pub const AGENT_DIR: &str = "agent";
-/// Inbox Sweep triage cards: one `sweep/<id>.md` per email being swept.
-pub const SWEEP_DIR: &str = "sweep";
 pub const LEGACY_CALENDAR_DIR: &str = "calendar";
 /// Legacy daily folder. Daily journal files now live under cadence/
 /// alongside their events; legacy vaults migrate at boot.
@@ -55,7 +53,6 @@ pub const VAULT_SUBDIRS: &[&str] = &[
     RESOURCES_DIR,
     AREAS_DIR,
     AGENT_DIR,
-    SWEEP_DIR,
     "tables",
     "data",
     "attachments",
@@ -116,10 +113,6 @@ pub fn events_dir(vault: &Path) -> PathBuf {
 
 pub fn agent_dir(vault: &Path) -> PathBuf {
     vault.join(AGENT_DIR)
-}
-
-pub fn sweep_dir(vault: &Path) -> PathBuf {
-    vault.join(SWEEP_DIR)
 }
 
 /// Validate a record identifier before it becomes a filesystem component.
@@ -735,6 +728,23 @@ mod tests {
         std::fs::write(vault.join("tasks").join("existing.md"), "x").unwrap();
         ensure_dirs(&vault).unwrap();
         assert!(vault.join("tasks").join("existing.md").exists());
+    }
+
+    #[test]
+    fn ensure_dirs_does_not_scaffold_or_delete_retired_sweep_data() {
+        let tmp = TempDir::new().unwrap();
+        let fresh = tmp.path().join("fresh");
+        ensure_dirs(&fresh).unwrap();
+        assert!(!fresh.join("sweep").exists());
+
+        let existing = tmp.path().join("existing");
+        std::fs::create_dir_all(existing.join("sweep")).unwrap();
+        std::fs::write(existing.join("sweep").join("card.md"), "preserve me").unwrap();
+        ensure_dirs(&existing).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(existing.join("sweep").join("card.md")).unwrap(),
+            "preserve me"
+        );
     }
 
     #[cfg(unix)]

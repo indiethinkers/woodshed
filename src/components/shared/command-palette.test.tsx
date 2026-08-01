@@ -97,4 +97,23 @@ describe("CommandPalette typeahead", () => {
 
     expect(screen.getByRole("textbox")).toHaveValue("r");
   });
+
+  it("does not capture typing from a focused database cell", () => {
+    render(
+      <>
+        <div data-table-cell="">
+          <button type="button">Synthetic cell</button>
+        </div>
+        <CommandPalette />
+      </>,
+    );
+
+    const cell = screen.getByRole("button", { name: "Synthetic cell" });
+    cell.focus();
+    fireEvent.keyDown(cell, { key: "r" });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).toBeNull();
+  });
 });

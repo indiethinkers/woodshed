@@ -2,7 +2,7 @@ export function isEditableElement(el: EventTarget | null): boolean {
   if (!(el instanceof Element)) return false;
   if (
     el.closest(
-      "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], .ProseMirror, .tiptap-content",
+      "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [data-table-cell], .ProseMirror, .tiptap-content",
     )
   ) {
     return true;

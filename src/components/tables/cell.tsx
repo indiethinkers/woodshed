@@ -21,6 +21,33 @@ interface CellProps {
   autoFocus?: boolean;
 }
 
+function isPlainTypingKey(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  isComposing?: boolean;
+}): boolean {
+  return (
+    event.key.length === 1 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.isComposing
+  );
+}
+
+function startCellEditingFromKey(
+  event: React.KeyboardEvent<HTMLElement>,
+  startEditing: (key: string) => void,
+  acceptsKey: (key: string) => boolean = () => true,
+): void {
+  if (!isPlainTypingKey(event) || !acceptsKey(event.key)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  startEditing(event.key);
+}
+
 /**
  * Type-aware cell renderer. Each column type has its own editor; the cell
  * is always read-only at rest and switches to an inline editor on click.
@@ -148,6 +175,12 @@ function TextCell({
     <button
       type="button"
       onClick={() => setEditing(true)}
+      onKeyDown={(event) =>
+        startCellEditingFromKey(event, (key) => {
+          setDraft(key);
+          setEditing(true);
+        })
+      }
       className="block w-full text-left text-sm truncate text-foreground"
     >
       {value || <span className="text-muted-foreground/40">&nbsp;</span>}
@@ -229,6 +262,16 @@ function NumberCell({
     <button
       type="button"
       onClick={() => setEditing(true)}
+      onKeyDown={(event) =>
+        startCellEditingFromKey(
+          event,
+          (key) => {
+            setDraft(key);
+            setEditing(true);
+          },
+          (key) => /^[0-9.+-]$/.test(key),
+        )
+      }
       className="block w-full text-right text-sm tabular-nums text-foreground"
     >
       {value === null ? (
@@ -314,6 +357,11 @@ function DateCell({
     <button
       type="button"
       onClick={() => setEditing(true)}
+      onKeyDown={(event) =>
+        startCellEditingFromKey(event, () => setEditing(true), (key) =>
+          /^\d$/.test(key),
+        )
+      }
       className="block w-full text-left text-sm tabular-nums text-foreground"
     >
       {value || <span className="text-muted-foreground/40">&nbsp;</span>}
@@ -389,6 +437,12 @@ function SelectCell({
       <button
         type="button"
         onClick={() => setOpen(true)}
+        onKeyDown={(event) =>
+          startCellEditingFromKey(event, (key) => {
+            setSearch(key);
+            setOpen(true);
+          })
+        }
         className="block w-full text-left"
       >
         {selected ? (
@@ -561,6 +615,12 @@ function MultiSelectCell({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(event) =>
+          startCellEditingFromKey(event, (key) => {
+            setSearch(key);
+            setOpen(true);
+          })
+        }
         className="flex flex-wrap gap-1 w-full text-left min-h-[18px]"
       >
         {selected.length > 0 ? (

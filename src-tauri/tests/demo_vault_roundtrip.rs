@@ -25,7 +25,7 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use woodshed_lib::{agent, parsers, sweep};
+use woodshed_lib::{agent, parsers};
 
 /// Vault-relative directory → the parser that owns records in it.
 const CHECKS: &[(&str, Kind)] = &[
@@ -37,7 +37,6 @@ const CHECKS: &[(&str, Kind)] = &[
     ("resources", Kind::Resource),
     ("areas", Kind::Area),
     ("agent", Kind::AgentChat),
-    ("sweep", Kind::SweepCard),
     ("inbox", Kind::Email),
     ("sent", Kind::Email),
     ("archive", Kind::Email),
@@ -54,7 +53,6 @@ enum Kind {
     Resource,
     Area,
     AgentChat,
-    SweepCard,
     Email,
     Draft,
 }
@@ -213,16 +211,6 @@ fn check(kind: Kind, path: &Path, content: &str) -> Result<(), String> {
                 && first.messages.len() == second.messages.len())
             .then_some(())
             .ok_or("agent chat did not round-trip".into())
-        }
-        Kind::SweepCard => {
-            let first = sweep::parse_card(content, &rel).map_err(|e| format!("{e:#}"))?;
-            let round = sweep::serialize_card(&first).map_err(|e| format!("{e:#}"))?;
-            let second = sweep::parse_card(&round, &rel).map_err(|e| format!("{e:#}"))?;
-            (first.id == second.id
-                && first.headline == second.headline
-                && first.timeline.len() == second.timeline.len())
-            .then_some(())
-            .ok_or("sweep card did not round-trip".into())
         }
         Kind::Email => {
             let fm: EmailFrontmatter = parse_frontmatter(content)?;

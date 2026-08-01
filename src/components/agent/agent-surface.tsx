@@ -2477,7 +2477,7 @@ function canonicalAgentRoute(pathname: string, today: string): string {
 }
 
 // Compact "when" for the page-chat history: time-of-day if today, "Yesterday",
-// a weekday within the past week, else "Mon D". Mirrors the mail sweep list.
+// a weekday within the past week, else "Mon D". Mirrors the compact mail list.
 function formatChatTimestamp(value: string | null | undefined): string {
   if (!value) return "";
   const d = new Date(value);
