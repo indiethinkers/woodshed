@@ -178,8 +178,11 @@ async function gmailSyncAll(limit: number): Promise<MailSyncResult> {
   );
   const merged: MailSyncResult = { emails: [], stats: { durationMs: 0 }, removed: 0 };
   let lastError: unknown = null;
+  let succeededAccounts = 0;
+  let failedAccounts = 0;
   for (const r of results) {
     if (r.status === "fulfilled") {
+      succeededAccounts += 1;
       merged.emails.push(...r.value.emails);
       merged.removed = (merged.removed ?? 0) + (r.value.removed ?? 0);
       merged.stats.durationMs = Math.max(
@@ -187,12 +190,14 @@ async function gmailSyncAll(limit: number): Promise<MailSyncResult> {
         r.value.stats.durationMs,
       );
     } else {
+      failedAccounts += 1;
       lastError = r.reason;
     }
   }
-  if (merged.emails.length === 0 && lastError !== null) {
+  if (succeededAccounts === 0 && lastError !== null) {
     throw lastError;
   }
+  if (failedAccounts > 0) merged.failedAccounts = failedAccounts;
   return merged;
 }
 
