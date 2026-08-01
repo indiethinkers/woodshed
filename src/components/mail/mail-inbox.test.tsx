@@ -16,14 +16,23 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({
     children,
     params,
+    search,
     to: _to,
     ...props
   }: React.ComponentProps<"a"> & {
     children: ReactNode;
     params?: { id?: string };
+    search?: { mailbox?: string };
     to?: string;
   }) => (
-    <a {...props} href={params?.id ? `/mail/${params.id}` : "#"}>
+    <a
+      {...props}
+      href={
+        params?.id
+          ? `/mail/${params.id}${search?.mailbox ? `?mailbox=${search.mailbox}` : ""}`
+          : "#"
+      }
+    >
       {children}
     </a>
   ),
@@ -137,6 +146,22 @@ describe("MailInbox", () => {
     );
   });
 
+  it("shows recipients instead of the sender in Sent", () => {
+    mocks.emails = [
+      email({
+        labels: ["sent", "read"],
+        to: ["recipient@example.test"],
+      }),
+    ];
+    const { container } = render(<MailInbox />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sent" }));
+
+    const row = container.querySelector("[data-mail-thread-row]");
+    expect(row).toHaveTextContent("recipient@example.test");
+    expect(row).not.toHaveTextContent("Avery Example");
+  });
+
   it("reopens a saved draft from the Drafts folder", () => {
     mocks.drafts = [draft()];
     render(<MailInbox />);
@@ -188,6 +213,14 @@ describe("MailInbox", () => {
 
     const row = container.querySelector("[data-mail-thread-row]")!;
     expect(row).toHaveAttribute("href", "/mail/message-1");
+  });
+
+  it("preserves the selected mailbox when opening a message", () => {
+    mocks.emails = [email({ id: "message-1", labels: ["sent", "read"] })];
+    const { container } = render(<MailInbox mailbox="sent" />);
+
+    const row = container.querySelector("[data-mail-thread-row]")!;
+    expect(row).toHaveAttribute("href", "/mail/message-1?mailbox=sent");
   });
 
   it("marks every unread message in a thread when its row is opened", async () => {

@@ -9,8 +9,8 @@ use crate::parsers::{self, Resource as ParsedResource};
 use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::wikilinks::{
-    collect_markdown_files, creation_trace_text, labels_match, push_unique_label,
-    replace_wikilink_labels, safe_wikilink_label, WIKILINK_REWRITE_DIRS,
+    collect_rewrite_markdown_files, creation_trace_text, labels_match, push_unique_label,
+    replace_wikilink_labels, safe_wikilink_label,
 };
 use crate::AppState;
 use kuchikiki::traits::*;
@@ -892,10 +892,7 @@ fn rewrite_resource_backlinks_after_title_change(
         return Ok(0);
     }
 
-    let mut files = Vec::new();
-    for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault_lib::collection_dir(vault, subdir), &mut files)?;
-    }
+    let files = collect_rewrite_markdown_files(vault)?;
 
     let mut changed = 0usize;
     for path in files {

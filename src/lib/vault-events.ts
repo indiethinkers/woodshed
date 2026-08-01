@@ -3,8 +3,8 @@ import { woodshedClient } from "@/lib/woodshed-client";
 
 // VaultChange payload shape, matching Rust src-tauri/src/watcher/mod.rs.
 export type VaultChange =
-  | { kind: "modified"; path: string }
-  | { kind: "removed"; path: string };
+  | { kind: "modified"; path: string; external?: boolean }
+  | { kind: "removed"; path: string; external?: boolean };
 
 export function invalidateAfterIndexRebuild(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ["emails"] });
@@ -36,8 +36,19 @@ export function invalidateForPath(
   queryClient: QueryClient,
   path: string,
   _kind: VaultChange["kind"] = "modified",
+  external = false,
 ): void {
   const segments = path.split("/").filter(Boolean);
+  if (external && path.endsWith(".md")) {
+    queryClient.invalidateQueries({ queryKey: ["notes"] });
+    queryClient.invalidateQueries({ queryKey: ["search"] });
+    queryClient.invalidateQueries({ queryKey: ["wikilinkTargets"] });
+    queryClient.invalidateQueries({ queryKey: ["tagTable"] });
+    queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
+    queryClient.invalidateQueries({ queryKey: ["backlinks"] });
+    queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
+    return;
+  }
   if (segments.length < 2) {
     // Root-level Markdown is a valid Notebook record in an adopted folder.
     // There is no section name to route through the switch below, so refresh
@@ -210,6 +221,6 @@ export function invalidateForPath(
 // from Rust, so this is a no-op until Phase 2 lands.
 export function vaultEventListener(queryClient: QueryClient): () => void {
   return woodshedClient().subscribeVaultChanges((change) => {
-    invalidateForPath(queryClient, change.path, change.kind);
+    invalidateForPath(queryClient, change.path, change.kind, change.external);
   });
 }

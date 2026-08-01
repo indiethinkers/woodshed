@@ -30,6 +30,7 @@ import {
   shouldShowUnreadIndicator,
   type Attachment,
   type EmailSummary,
+  type Mailbox,
 } from "@/lib/mail-lib/types";
 import { BacklinksPanel } from "@/components/shared/backlinks-panel";
 import { OutgoingLinksPanel } from "@/components/shared/outgoing-links-panel";
@@ -45,6 +46,7 @@ import { cn } from "@/lib/utils";
 
 interface EmailDetailProps {
   email: EmailSummary;
+  mailbox?: Mailbox;
   onBack?: () => void;
   onOpenEmail?: (id: string | null) => void;
 }
@@ -59,8 +61,17 @@ interface EmailDetailProps {
  *   - every unread message in the thread is marked read on Gmail and
  *     the local files are rewritten with the updated labels
  */
-export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
+export function EmailDetail({
+  email,
+  mailbox = "inbox",
+  onBack,
+  onOpenEmail,
+}: EmailDetailProps) {
   const navigate = useNavigate();
+  const mailboxSearch = useMemo(
+    () => (mailbox === "inbox" ? {} : { mailbox }),
+    [mailbox],
+  );
   const { data: thread = [], isLoading } = useThread(email.threadId);
   const { data: inboxes = [] } = useInboxes();
   const { data: inboxList = [] } = useAllMail();
@@ -147,15 +158,20 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
       if (onOpenEmail) {
         onOpenEmail(nextId);
       } else if (nextId) {
-        navigate({ to: "/mail/$id", params: { id: nextId } });
+        navigate({
+          to: "/mail/$id",
+          params: { id: nextId },
+          search: mailboxSearch,
+        });
       } else {
-        navigate({ to: "/mail" });
+        navigate({ to: "/mail", search: mailboxSearch });
       }
     },
-    [navigate, onOpenEmail],
+    [mailboxSearch, navigate, onOpenEmail],
   );
 
   const handleArchive = useCallback(() => {
+    if (mailbox !== "inbox") return;
     const nextId = nextEmailIdAfter();
     // useArchiveOne updates the cache synchronously and runs the
     // network call in the background — don't await, so the next email
@@ -164,7 +180,7 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
       archiveOne(m.id).catch((e) => console.error("archive failed", e));
     }
     openAfterAction(nextId);
-  }, [messages, archiveOne, nextEmailIdAfter, openAfterAction]);
+  }, [mailbox, messages, archiveOne, nextEmailIdAfter, openAfterAction]);
 
   const handleDelete = useCallback(() => {
     const nextId = nextEmailIdAfter();
@@ -186,7 +202,7 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
         if (onBack) {
           onBack();
         } else {
-          navigate({ to: "/mail" });
+          navigate({ to: "/mail", search: mailboxSearch });
         }
       } else if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
@@ -201,7 +217,11 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
         e.preventDefault();
         const target = messages[selectedIdx] ?? latest;
         setReplyTargetId(target.id);
-      } else if (!e.shiftKey && (e.key === "e" || e.key === "E")) {
+      } else if (
+        mailbox === "inbox" &&
+        !e.shiftKey &&
+        (e.key === "e" || e.key === "E")
+      ) {
         // Superhuman / Gmail convention: E archives the open thread.
         e.preventDefault();
         handleArchive();
@@ -222,7 +242,16 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate, onBack, handleArchive, latest, messages, selectedIdx]);
+  }, [
+    navigate,
+    mailbox,
+    mailboxSearch,
+    onBack,
+    handleArchive,
+    latest,
+    messages,
+    selectedIdx,
+  ]);
 
   return (
     <div ref={rootRef}>
@@ -292,10 +321,12 @@ export function EmailDetail({ email, onBack, onOpenEmail }: EmailDetailProps) {
           <Forward className="h-3.5 w-3.5 mr-1.5" />
           Forward
         </Button>
-        <Button variant="outline" size="sm" onClick={handleArchive}>
-          <Archive className="h-3.5 w-3.5 mr-1.5" />
-          Archive
-        </Button>
+        {mailbox === "inbox" && (
+          <Button variant="outline" size="sm" onClick={handleArchive}>
+            <Archive className="h-3.5 w-3.5 mr-1.5" />
+            Archive
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"

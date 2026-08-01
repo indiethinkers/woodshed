@@ -121,6 +121,18 @@ describe("invalidateForPath", () => {
     expect(invalidateSpy).not.toHaveBeenCalledWith();
   });
 
+  it("treats canonical-looking folders as Notebook when the watcher marks them external", () => {
+    invalidateForPath(
+      queryClient,
+      "people/existing.md",
+      "modified",
+      true,
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["people"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["events"] });
+  });
+
   it("routes root Markdown from an adopted folder to Notebook", () => {
     invalidateForPath(queryClient, "lonely.md");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes"] });

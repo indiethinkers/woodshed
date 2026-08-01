@@ -9,10 +9,9 @@ import {
 import { tauriInvoke } from "@/lib/tauri";
 import type { RecurringRule, AreaId } from "@/lib/types";
 
-/** Origin of an event. `undefined` on `EventDto.provider` means
- *  vault-local (created via "+ Add event"); explicit values flag
- *  external syncs. iCal subscriptions are read-only — the backend
- *  rejects mutations against `writable === false` records. */
+/** Origin of an event. `undefined` on legacy vault-local records; explicit
+ * values flag external syncs. iCal subscriptions are read-only — the backend
+ * rejects mutations against `writable === false` records. */
 export type EventProvider = "ical";
 
 /**
@@ -78,18 +77,6 @@ export interface EventDto {
    *  events. */
   localOverrides?: boolean;
   body: string;
-}
-
-export interface EventCreateInput {
-  title: string;
-  date: string;
-  duration: number;
-  area: AreaId;
-  attendees?: string[];
-  recurring?: RecurringRule;
-  subtitle?: string;
-  tags?: string[];
-  body?: string;
 }
 
 export interface EventUpdateInput {
@@ -285,33 +272,6 @@ export function useIcalEventSaveNotes() {
 export function useEventMutations() {
   const qc = useQueryClient();
 
-  const create = useMutation<EventDto, Error, EventCreateInput>({
-    mutationFn: async (input) => {
-      const created = await tauriInvoke<EventDto>("event_create", {
-        input: {
-          title: input.title,
-          date: input.date,
-          duration: input.duration,
-          area: input.area,
-          attendees: input.attendees ?? [],
-          recurring: input.recurring ?? "none",
-          subtitle: input.subtitle ?? null,
-          tags: input.tags ?? [],
-          body: input.body ?? null,
-        },
-      });
-      if (!created) throw new Error("Tauri runtime missing");
-      // Cache writes inside mutationFn so they survive mid-flight unmount.
-      // Drop into the bucket for the event's day. Recurrences only show
-      // up after a refetch — invalidate the date list to be safe.
-      const day = created.date.split("T")[0];
-      upsertInList(qc, ["events", day], created);
-      qc.setQueryData(["event", created.id], created);
-      qc.invalidateQueries({ queryKey: ["events", day] });
-      return created;
-    },
-  });
-
   const update = useMutation<
     EventDto,
     Error,
@@ -403,7 +363,7 @@ export function useEventMutations() {
     },
   });
 
-  return { create, update, remove };
+  return { update, remove };
 }
 
 function applyOptimisticPatch(event: EventDto, update: EventUpdateInput): EventDto {
@@ -420,23 +380,4 @@ function applyOptimisticPatch(event: EventDto, update: EventUpdateInput): EventD
   if (update.tags !== undefined) next.tags = update.tags;
   if (update.body !== undefined) next.body = update.body;
   return next;
-}
-
-function upsertInList(qc: QueryClient, key: readonly unknown[], event: EventDto) {
-  const current = qc.getQueryData<EventDto[]>(key);
-  if (!current) return;
-  const idx = current.findIndex((e) => e.id === event.id);
-  const next =
-    idx === -1 ? [...current, event] : current.map((e) => (e.id === event.id ? event : e));
-  // Sort by absolute instant, not by raw string — iCal events store UTC
-  // ("+00:00") while vault-local events carry the local offset, and ICU
-  // collation orders "-07:00" before "+00:00", which would float a new
-  // afternoon event to the top of the schedule. Mirrors the backend sort
-  // in events_for_date.
-  next.sort(
-    (a, b) =>
-      new Date(a.date).getTime() - new Date(b.date).getTime() ||
-      a.date.localeCompare(b.date),
-  );
-  qc.setQueryData(key, next);
 }

@@ -6,8 +6,8 @@ use crate::parsers::{self, Note as ParsedNote};
 use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::wikilinks::{
-    collect_markdown_files, creation_trace_text, labels_match, push_unique_label,
-    replace_wikilink_labels, safe_wikilink_label, WIKILINK_REWRITE_DIRS,
+    collect_rewrite_markdown_files, creation_trace_text, labels_match, push_unique_label,
+    replace_wikilink_labels, safe_wikilink_label,
 };
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -494,10 +494,7 @@ fn rewrite_note_backlinks_after_title_change(
         return Ok(0);
     }
 
-    let mut files = Vec::new();
-    for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault_lib::collection_dir(vault, subdir), &mut files)?;
-    }
+    let files = collect_rewrite_markdown_files(vault)?;
 
     let mut changed = 0usize;
     for path in files {
@@ -746,7 +743,7 @@ pub(crate) fn read_all_notes(vault: &Path) -> Result<Vec<NoteDto>, String> {
         }
     }
     if vault_lib::is_imported_layout(vault) {
-        for path in collect_external_markdown_files(vault)? {
+        for path in vault_lib::collect_external_markdown_files(vault)? {
             match read_note(vault, &path) {
                 Ok(note) => out.push(note),
                 Err(_) => eprintln!("skipping unreadable imported Markdown note"),
@@ -792,7 +789,7 @@ fn find_note_path(
     if !vault_lib::is_imported_layout(vault) {
         return Ok(None);
     }
-    for path in collect_external_markdown_files(vault)? {
+    for path in vault_lib::collect_external_markdown_files(vault)? {
         if read_note(vault, &path)
             .map(|note| note.id == id)
             .unwrap_or(false)
@@ -801,46 +798,6 @@ fn find_note_path(
         }
     }
     Ok(None)
-}
-
-pub(crate) fn collect_external_markdown_files(vault: &Path) -> Result<Vec<PathBuf>, String> {
-    if !vault_lib::is_imported_layout(vault) {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    let mut stack = vec![vault.to_path_buf()];
-    let managed = vault_lib::records_root(vault);
-    let internal = vault.join(".woodshed");
-    let mut visited = 0usize;
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if dir == vault => return Err(error.to_string()),
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            visited += 1;
-            if visited > 50_000 {
-                return Err("vault contains too many entries to scan safely".to_string());
-            }
-            let path = entry.path();
-            if path == managed
-                || path == internal
-                || entry.file_name().to_string_lossy().starts_with('.')
-            {
-                continue;
-            }
-            if vault_lib::is_real_directory(&path) {
-                stack.push(path);
-            } else if vault_lib::is_real_file(&path)
-                && path.extension().and_then(|value| value.to_str()) == Some("md")
-            {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
 }
 
 #[cfg(test)]

@@ -68,12 +68,16 @@ pub const VAULT_SUBDIRS: &[&str] = &[
 /// portable layout contract shared by every command.
 pub fn is_imported_layout(vault_path: &Path) -> bool {
     let marker = vault_path.join(".woodshed").join(IMPORTED_LAYOUT_MARKER);
-    if !is_real_file(&marker) {
-        return false;
+    // Fail closed. Once the app-owned marker exists, an unreadable or
+    // malformed payload must never make Woodshed reinterpret the adopted
+    // folder's root as managed collections. The marker is written atomically;
+    // any directory entry at that exact path is the durable layout contract.
+    // A dangling symlink or other damaged entry is still evidence that this
+    // root was adopted, and must never make us migrate the surrounding tree.
+    match std::fs::symlink_metadata(&marker) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     }
-    read_bounded(&marker, 64)
-        .map(|value| value.trim() == IMPORTED_RECORDS_DIR)
-        .unwrap_or(false)
 }
 
 /// Root containing Woodshed-managed collections. Native vaults use the vault
@@ -88,6 +92,68 @@ pub fn records_root(vault_path: &Path) -> PathBuf {
 
 pub fn collection_dir(vault_path: &Path, subdir: &str) -> PathBuf {
     records_root(vault_path).join(subdir)
+}
+
+/// Whether a path belongs to user-authored Markdown outside Woodshed's managed
+/// subtree in an adopted folder. This is lexical so removed watcher paths can
+/// still be classified after the file no longer exists.
+pub fn is_external_content_path(vault_path: &Path, path: &Path) -> bool {
+    is_imported_layout(vault_path)
+        && path.starts_with(vault_path)
+        && !path.starts_with(records_root(vault_path))
+        && !path.starts_with(vault_path.join(".woodshed"))
+}
+
+/// Collect Markdown beneath one or more real roots without following
+/// symlinks. Exclusions are exact root paths; a nested folder that merely has
+/// the same name remains ordinary user content.
+pub(crate) fn collect_markdown_files_bounded(
+    roots: Vec<PathBuf>,
+    excluded_roots: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    let mut stack = roots.clone();
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if roots.contains(&dir) => return Err(error.to_string()),
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 50_000 {
+                return Err("vault contains too many entries to scan safely".to_string());
+            }
+            let path = entry.path();
+            if excluded_roots.contains(&path)
+                || entry.file_name().to_string_lossy().starts_with('.')
+            {
+                continue;
+            }
+            if is_real_directory(&path) {
+                stack.push(path);
+            } else if is_real_file(&path)
+                && path.extension().and_then(|value| value.to_str()) == Some("md")
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Collect existing Markdown from an adopted folder without following
+/// symlinks or entering app-managed/internal trees.
+pub fn collect_external_markdown_files(vault_path: &Path) -> Result<Vec<PathBuf>, String> {
+    if !is_imported_layout(vault_path) {
+        return Ok(Vec::new());
+    }
+    collect_markdown_files_bounded(
+        vec![vault_path.to_path_buf()],
+        &[records_root(vault_path), vault_path.join(".woodshed")],
+    )
 }
 
 /// Mark an existing Markdown folder as an imported-layout vault without
@@ -132,13 +198,21 @@ pub fn initialize_imported_layout(vault_path: &Path) -> Result<()> {
         );
     }
     let marker = internal.join(IMPORTED_LAYOUT_MARKER);
-    if marker.exists() && !is_real_file(&marker) {
-        anyhow::bail!(
-            "import layout marker must be a regular file: {}",
-            marker.display()
-        );
+    match std::fs::symlink_metadata(&marker) {
+        Ok(metadata) if !metadata.is_file() => {
+            anyhow::bail!(
+                "import layout marker must be a regular file: {}",
+                marker.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspect import marker {}", marker.display()));
+        }
     }
-    std::fs::write(&marker, format!("{IMPORTED_RECORDS_DIR}\n"))
+    write_atomic(&marker, &format!("{IMPORTED_RECORDS_DIR}\n"))
         .with_context(|| format!("write imported layout marker {}", marker.display()))?;
     ensure_dirs(vault_path)
 }
@@ -146,6 +220,17 @@ pub fn initialize_imported_layout(vault_path: &Path) -> Result<()> {
 pub fn ensure_dirs(vault_path: &Path) -> Result<()> {
     std::fs::create_dir_all(vault_path)
         .with_context(|| format!("create vault root at {}", vault_path.display()))?;
+    if is_imported_layout(vault_path) {
+        let marker = vault_path.join(".woodshed").join(IMPORTED_LAYOUT_MARKER);
+        let metadata = std::fs::symlink_metadata(&marker)
+            .with_context(|| format!("inspect imported-layout marker {}", marker.display()))?;
+        if !metadata.is_file() {
+            anyhow::bail!(
+                "imported-layout marker must be a regular file: {}",
+                marker.display()
+            );
+        }
+    }
     let records_root = records_root(vault_path);
     std::fs::create_dir_all(&records_root)
         .with_context(|| format!("create managed records root {}", records_root.display()))?;
@@ -877,6 +962,69 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(vault.join(IMPORTED_RECORDS_DIR).join("mine.md")).unwrap(),
             "keep"
+        );
+    }
+
+    #[test]
+    fn malformed_import_marker_fails_closed_into_the_managed_subtree() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join(".woodshed")).unwrap();
+        std::fs::write(vault.join(".woodshed/imported-layout"), "incomplete").unwrap();
+        std::fs::create_dir_all(vault.join("tasks")).unwrap();
+        std::fs::write(vault.join("tasks/existing.md"), "# Existing\n").unwrap();
+
+        assert!(is_imported_layout(&vault));
+        ensure_dirs(&vault).unwrap();
+        assert!(vault.join("woodshed/tasks").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(vault.join("tasks/existing.md")).unwrap(),
+            "# Existing\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_import_marker_still_fails_closed() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join(".woodshed")).unwrap();
+        symlink(
+            tmp.path().join("missing-marker-target"),
+            vault.join(".woodshed/imported-layout"),
+        )
+        .unwrap();
+
+        assert!(is_imported_layout(&vault));
+        assert_eq!(records_root(&vault), vault.join("woodshed"));
+        assert!(ensure_dirs(&vault)
+            .unwrap_err()
+            .to_string()
+            .contains("must be a regular file"));
+        assert!(!vault.join("tasks").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_markdown_scan_skips_symlinks_and_managed_records() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join("Projects")).unwrap();
+        let external = vault.join("Projects/plan.md");
+        std::fs::write(&external, "# Plan\n").unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "# Outside\n").unwrap();
+        symlink(&outside, vault.join("Projects/linked.md")).unwrap();
+        initialize_imported_layout(&vault).unwrap();
+        std::fs::write(vault.join("woodshed/notebook/managed.md"), "managed").unwrap();
+
+        assert_eq!(
+            collect_external_markdown_files(&vault).unwrap(),
+            vec![external]
         );
     }
 

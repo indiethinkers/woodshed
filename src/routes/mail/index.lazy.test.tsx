@@ -6,11 +6,14 @@ vi.mock("@tanstack/react-router", () => ({
     () =>
     (options: { component: React.ComponentType }) => ({
       ...options,
+      useSearch: () => ({}),
     }),
 }));
 
 vi.mock("@/components/mail/mail-inbox", () => ({
-  MailInbox: () => <div>Classic Inbox</div>,
+  MailInbox: ({ mailbox }: { mailbox: string }) => (
+    <div>Classic Inbox: {mailbox}</div>
+  ),
 }));
 
 import { MailIndex } from "./index.lazy";
@@ -19,6 +22,6 @@ describe("MailIndex", () => {
   it("renders the inbox", () => {
     render(<MailIndex />);
 
-    expect(screen.getByText("Classic Inbox")).toBeInTheDocument();
+    expect(screen.getByText("Classic Inbox: inbox")).toBeInTheDocument();
   });
 });

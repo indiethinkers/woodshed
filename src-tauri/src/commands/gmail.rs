@@ -694,7 +694,7 @@ pub async fn gmail_send(
     let persisted_attachments =
         persist_outgoing_attachments(&state, &vault, &outcome.message_id, &outbound.attachments);
 
-    let summary = build_email_summary(
+    let mut summary = build_email_summary(
         outcome.message_id.clone(),
         outcome.message_id.clone(),
         account_scoped_thread_id(&credentials.email, &outcome.message_id),
@@ -708,6 +708,8 @@ pub async fn gmail_send(
         vec!["sent".into()],
         persisted_attachments,
     );
+    summary.to = input.to;
+    summary.cc = input.cc;
     persist_sent_email(&app, &state, &summary)?;
 
     Ok(GmailSendResult {
@@ -805,7 +807,7 @@ pub async fn gmail_reply(
         .unwrap_or_else(|| original.thread_id.clone());
     let thread_id = account_scoped_thread_id(&credentials.email, &inherited_thread_id);
 
-    let summary = build_email_summary(
+    let mut summary = build_email_summary(
         outcome.message_id.clone(),
         outcome.message_id.clone(),
         thread_id.clone(),
@@ -819,6 +821,8 @@ pub async fn gmail_reply(
         vec!["sent".into()],
         persisted_attachments,
     );
+    summary.to = to;
+    summary.cc = cc;
     persist_sent_email(&app, &state, &summary)?;
 
     Ok(GmailSendResult {

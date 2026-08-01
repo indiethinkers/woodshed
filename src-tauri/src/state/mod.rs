@@ -2,7 +2,7 @@
 // parsed event payloads. Without the payload cache, every events_for_date
 // call would `read_dir(events/)` + parse YAML for every file — 80-120ms on
 // a vault with 2000+ events. Both structs are hydrated at watcher_start and
-// maintained incrementally by event_create / event_update / event_delete.
+// maintained incrementally by event updates/deletes and calendar sync.
 // External watcher events upsert the touched file.
 
 use crate::parsers::{Event as ParsedEvent, EventProvider, RecurringRule};

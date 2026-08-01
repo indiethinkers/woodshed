@@ -1,6 +1,7 @@
 // Vault commands: scaffold and detect.
 
 use crate::commands::{config, seed};
+use crate::parsers;
 use crate::vault as vault_lib;
 use serde::Serialize;
 use std::ffi::OsStr;
@@ -64,12 +65,10 @@ pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let current = config::vault_path_get(app.clone())?;
     let target = resolve_switch_target(&path, current.as_deref())?;
 
-    // Refuse arbitrary folders before touching anything. Adopting a folder is
-    // not read-only: `ensure_dirs` scaffolds sixteen subdirectories into it,
-    // and the boot migration after the restart renames `calendar/` and
-    // `daily/` contents into `cadence/` and rewrites every `.md` under
-    // `resources/`. A mis-click in the folder picker must not be able to
-    // rearrange someone's files.
+    // Classify the target before writing. Existing Markdown trees get the
+    // imported layout so scaffolding and migrations stay inside `woodshed/`;
+    // only empty folders and strongly-recognized native vaults are managed at
+    // the selected root.
     if looks_like_vault(&target)? || folder_is_empty(&target)? {
         vault_lib::ensure_dirs(&target)
             .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
@@ -129,9 +128,9 @@ fn resolve_switch_target(requested: &str, current: Option<&str>) -> Result<PathB
 }
 
 /// How many canonical subdirectories a non-empty folder must already have
-/// before it is treated as an existing vault rather than someone's documents.
-/// Three is enough that an incidental `resources/` or `tables/` does not
-/// qualify, and low enough that a partially-populated vault still does.
+/// before it can be considered an existing vault. Folder names alone are not
+/// enough when Markdown exists: an ordinary tree may also contain `tasks/`,
+/// `people/`, and `resources/`, so typed Woodshed frontmatter is required too.
 const VAULT_RECOGNITION_THRESHOLD: usize = 3;
 
 /// Reject folders that are neither empty nor already a vault.
@@ -179,56 +178,90 @@ fn looks_like_vault(target: &Path) -> Result<bool, String> {
     let entries =
         std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
     let mut canonical = 0usize;
-    let mut has_woodshed_dir = false;
     for entry in entries {
         let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name == ".woodshed" {
-            has_woodshed_dir = true;
-            continue;
-        }
         if vault_lib::VAULT_SUBDIRS.contains(&name.as_ref())
             && vault_lib::is_real_directory(&entry.path())
         {
             canonical += 1;
         }
     }
-    Ok(has_woodshed_dir || canonical >= VAULT_RECOGNITION_THRESHOLD)
+    if canonical < VAULT_RECOGNITION_THRESHOLD {
+        return Ok(false);
+    }
+    let (has_markdown, has_typed_record) = native_record_evidence(target)?;
+    Ok(!has_markdown || has_typed_record)
 }
 
-fn contains_markdown(target: &Path) -> Result<bool, String> {
-    let mut stack = vec![target.to_path_buf()];
-    let mut visited = 0usize;
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if dir == target => {
-                return Err(format!("Cannot read the selected folder: {error}"));
-            }
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            visited += 1;
-            if visited > 50_000 {
-                return Err("Folder contains too many entries to inspect safely.".to_string());
-            }
-            let path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') || name == vault_lib::IMPORTED_RECORDS_DIR {
-                continue;
-            }
-            if vault_lib::is_real_directory(&path) {
-                stack.push(path);
-            } else if vault_lib::is_real_file(&path)
-                && path.extension().and_then(OsStr::to_str) == Some("md")
-            {
-                return Ok(true);
+fn native_record_evidence(target: &Path) -> Result<(bool, bool), String> {
+    let roots = vault_lib::VAULT_SUBDIRS
+        .iter()
+        .map(|subdir| target.join(subdir))
+        .filter(|path| vault_lib::is_real_directory(path))
+        .collect::<Vec<_>>();
+    let markdown = vault_lib::collect_markdown_files_bounded(roots, &[])
+        .map_err(|error| format!("Cannot inspect existing vault: {error}"))?;
+    for path in &markdown {
+        if is_valid_native_record(target, path) {
+            return Ok((true, true));
+        }
+    }
+    Ok((!markdown.is_empty(), false))
+}
+
+/// A native vault needs at least one record whose complete schema matches the
+/// collection it lives in. A coincidental `type: note` line is not sufficient
+/// evidence that Woodshed may scaffold or migrate the selected root.
+fn is_valid_native_record(target: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(target) else {
+        return false;
+    };
+    let Some(collection) = relative.components().next().and_then(|component| {
+        if let std::path::Component::Normal(value) = component {
+            value.to_str()
+        } else {
+            None
+        }
+    }) else {
+        return false;
+    };
+
+    match collection {
+        "inbox" | "sent" | "archive" => {
+            crate::commands::mail::load_email_summary_from_path(path).is_some()
+        }
+        "drafts" => crate::commands::mail::load_draft_from_path(path).is_some(),
+        _ => {
+            let Ok(content) = vault_lib::read_record(path) else {
+                return false;
+            };
+            match collection {
+                "tasks" => parsers::parse_task(&content).is_ok(),
+                "cadence" => {
+                    parsers::parse_daily(&content).is_ok() || parsers::parse_event(&content).is_ok()
+                }
+                "events" => parsers::parse_event(&content).is_ok(),
+                "people" => parsers::parse_person(&content).is_ok(),
+                "notebook" => parsers::parse_note(&content).is_ok(),
+                "resources" => parsers::parse_resource(&content).is_ok(),
+                "areas" => parsers::parse_area(&content).is_ok(),
+                "agent" => crate::agent::parse_chat(&content, &relative.to_string_lossy()).is_ok(),
+                "tables" if path.file_name().and_then(OsStr::to_str) == Some("_schema.md") => {
+                    parsers::parse_table_schema(&content).is_ok()
+                }
+                "tables" => parsers::parse_row(&content).is_ok(),
+                _ => false,
             }
         }
     }
-    Ok(false)
+}
+
+fn contains_markdown(target: &Path) -> Result<bool, String> {
+    vault_lib::collect_markdown_files_bounded(vec![target.to_path_buf()], &[])
+        .map(|files| !files.is_empty())
+        .map_err(|error| format!("Cannot read the selected folder: {error}"))
 }
 
 /// Drop the derived caches under `<app_data_dir>` that describe one vault's
@@ -639,10 +672,14 @@ mod tests {
         // Seeded directories should be non-empty.
         let people = std::fs::read_dir(target.join("people")).unwrap().count();
         assert!(people > 0, "expected seeded people files");
-        let events = std::fs::read_dir(target.join(crate::vault::CADENCE_DIR))
+        let journals = std::fs::read_dir(target.join(crate::vault::CADENCE_DIR))
             .unwrap()
             .count();
-        assert!(events > 0, "expected seeded event files");
+        assert!(journals > 0, "expected a seeded daily journal");
+        let events = std::fs::read_dir(crate::vault::events_dir(&target))
+            .unwrap()
+            .count();
+        assert_eq!(events, 0, "expected no locally-created sample events");
     }
 
     #[test]
@@ -773,17 +810,66 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("vault");
         vault_lib::ensure_dirs(&dir).unwrap();
-        fs::write(dir.join("notebook").join("n.md"), "---\ntype: note\n---\n").unwrap();
+        fs::write(
+            dir.join("notebook").join("n.md"),
+            "---\ntype: note\nid: native-note\ntitle: Native note\ncreated: 2026-08-01T12:00:00Z\n---\n",
+        )
+        .unwrap();
         assert!(ensure_safe_to_adopt(&dir).is_ok());
     }
 
     #[test]
-    fn adopting_accepts_a_vault_identified_only_by_its_woodshed_dir() {
+    fn adopting_does_not_trust_an_unrelated_woodshed_directory() {
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("sparse-vault");
+        let dir = tmp.path().join("documents");
         fs::create_dir_all(dir.join(".woodshed")).unwrap();
         fs::write(dir.join("stray.md"), "notes\n").unwrap();
-        assert!(ensure_safe_to_adopt(&dir).is_ok());
+        assert!(ensure_safe_to_adopt(&dir).is_err());
+    }
+
+    #[test]
+    fn markdown_tree_with_canonical_folder_names_is_imported_safely() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("documents");
+        for subdir in ["tasks", "people", "resources"] {
+            fs::create_dir_all(dir.join(subdir)).unwrap();
+            let content = if subdir == "tasks" {
+                "---\ntype: task\n---\n\n# Existing tasks\n".to_string()
+            } else {
+                format!("# Existing {subdir}\n")
+            };
+            fs::write(dir.join(subdir).join("existing.md"), &content).unwrap();
+        }
+
+        vault_import(dir.to_string_lossy().to_string()).unwrap();
+
+        assert!(vault_lib::is_imported_layout(&dir));
+        for subdir in ["tasks", "people", "resources"] {
+            let content = fs::read_to_string(dir.join(subdir).join("existing.md")).unwrap();
+            if subdir == "tasks" {
+                assert_eq!(content, "---\ntype: task\n---\n\n# Existing tasks\n");
+            } else {
+                assert_eq!(content, format!("# Existing {subdir}\n"));
+            }
+            assert!(dir.join("woodshed").join(subdir).is_dir());
+        }
+    }
+
+    #[test]
+    fn markdown_inside_a_nested_woodshed_folder_is_still_imported() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("documents");
+        let note = dir.join("projects/woodshed/plan.md");
+        fs::create_dir_all(note.parent().unwrap()).unwrap();
+        fs::write(&note, "# Existing project plan\n").unwrap();
+
+        vault_import(dir.to_string_lossy().to_string()).unwrap();
+
+        assert!(vault_lib::is_imported_layout(&dir));
+        assert_eq!(
+            fs::read_to_string(note).unwrap(),
+            "# Existing project plan\n"
+        );
     }
 
     #[test]

@@ -44,7 +44,7 @@ pub struct AppState {
     /// frontend (after onboarding or on app boot if vault path is configured).
     pub watcher: Mutex<Option<watcher::VaultWatcher>>,
     /// id → path map for calendar events. Populated on startup by
-    /// watcher_start and maintained by event_create / event_update / event_delete.
+    /// watcher_start and maintained by event updates/deletes and calendar sync.
     pub events_index: Arc<state::EventIndex>,
     /// Date-bucketed cache of parsed vault-local events. Read by
     /// events_for_date instead of re-scanning + re-parsing `events/`
@@ -504,7 +504,6 @@ pub fn run() {
             tasks::tasks_all,
             daily::daily_get,
             daily::daily_save,
-            events::event_create,
             events::event_get,
             events::event_update,
             events::event_delete,

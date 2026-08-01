@@ -25,6 +25,7 @@ import {
   type EmailSummary,
   type Inbox,
   type MailFolder,
+  type Mailbox,
   type SyncStats,
 } from "@/lib/mail-lib/types";
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
@@ -33,7 +34,6 @@ import { isEditableElement } from "@/lib/dom/is-editable";
 import { ComposeDialog } from "@/components/mail/compose-dialog";
 
 const ALL_INBOXES = "__all__";
-type Mailbox = MailFolder | "drafts";
 const MAILBOXES: { id: Mailbox; label: string }[] = [
   { id: "inbox", label: "Inbox" },
   { id: "drafts", label: "Drafts" },
@@ -41,10 +41,19 @@ const MAILBOXES: { id: Mailbox; label: string }[] = [
   { id: "archive", label: "Archive" },
 ];
 
-export function MailInbox() {
+interface MailInboxProps {
+  mailbox?: Mailbox;
+}
+
+export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
   const navigate = useNavigate();
   const { collapsed } = useListPanel();
-  const [mailbox, setMailbox] = useState<Mailbox>("inbox");
+  const [localMailbox, setLocalMailbox] = useState<Mailbox>("inbox");
+  const mailbox = routeMailbox ?? localMailbox;
+  const mailboxSearch = useMemo(
+    () => (mailbox === "inbox" ? {} : { mailbox }),
+    [mailbox],
+  );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const folder: MailFolder = mailbox === "drafts" ? "inbox" : mailbox;
@@ -81,7 +90,12 @@ export function MailInbox() {
   }, [emails, filterInbox, mailbox]);
 
   function changeMailbox(next: Mailbox) {
-    setMailbox(next);
+    if (routeMailbox === undefined) setLocalMailbox(next);
+    void navigate({
+      to: "/mail",
+      search: next === "inbox" ? {} : { mailbox: next },
+      replace: true,
+    });
     setCursor(0);
     setSelected(new Set());
     setSearchQuery("");
@@ -156,6 +170,7 @@ export function MailInbox() {
         void navigate({
           to: "/mail/$id",
           params: { id: next.email.id },
+          search: mailboxSearch,
         });
       } else if (e.key === "e" || e.key === "E") {
         if (mailbox !== "inbox") return;
@@ -217,6 +232,7 @@ export function MailInbox() {
     liveSelected,
     markThreadRead,
     mailbox,
+    mailboxSearch,
   ]);
 
   useEffect(() => {
@@ -405,6 +421,7 @@ export function MailInbox() {
                     email={thread.email}
                     messageCount={thread.messageIds.length}
                     people={people}
+                    mailbox={mailbox}
                     isCursor={idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
                     onClick={() => {
@@ -457,6 +474,7 @@ interface EmailRowProps {
   email: EmailSummary;
   messageCount: number;
   people: PersonDto[];
+  mailbox: Mailbox;
   isCursor: boolean;
   isSelected: boolean;
   onClick: () => void;
@@ -467,6 +485,7 @@ function EmailRow({
   email,
   messageCount,
   people,
+  mailbox,
   isCursor,
   isSelected,
   onClick,
@@ -482,10 +501,15 @@ function EmailRow({
       : "hover:bg-foreground/[0.025]";
   const senderPerson = findPersonForMailSender(people, email);
   const senderName = senderPerson?.name ?? email.from;
+  const correspondent =
+    mailbox === "sent" && email.to?.length
+      ? email.to.join(", ")
+      : senderName;
   return (
     <Link
       to="/mail/$id"
       params={{ id: email.id }}
+      search={mailbox === "inbox" ? {} : { mailbox }}
       ref={ref}
       data-mail-thread-row
       onClick={onClick}
@@ -509,7 +533,7 @@ function EmailRow({
         )}
       </div>
       <div className="w-[160px] shrink-0 truncate text-sm font-medium">
-        {senderName}
+        {correspondent}
       </div>
       <div className="flex-1 min-w-0 flex items-baseline gap-2 overflow-hidden">
         <span className="text-sm font-medium truncate shrink-0 max-w-[45%]">

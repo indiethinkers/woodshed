@@ -663,8 +663,8 @@ impl IndexHandle {
             scan(subdir, &tx, &mut count)?;
         }
         scan_tables(vault_root, &tx, &mut count)?;
-        for path in crate::commands::notebook::collect_external_markdown_files(vault_root)
-            .map_err(anyhow::Error::msg)?
+        for path in
+            crate::vault::collect_external_markdown_files(vault_root).map_err(anyhow::Error::msg)?
         {
             match doc_from_path(vault_root, &path) {
                 Ok(Some(doc)) => {
@@ -1360,14 +1360,11 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
 }
 
 fn classify_vault_path(vault_root: &Path, rel: &str, abs_path: &Path) -> Option<Kind> {
-    classify_relative(rel).or_else(|| {
-        (crate::vault::is_imported_layout(vault_root)
-            && crate::vault::is_real_file(abs_path)
-            && abs_path.extension().and_then(|value| value.to_str()) == Some("md")
-            && !abs_path.starts_with(crate::vault::records_root(vault_root))
-            && !abs_path.starts_with(vault_root.join(".woodshed")))
-        .then_some(Kind::Note)
-    })
+    if crate::vault::is_external_content_path(vault_root, abs_path) {
+        return (abs_path.extension().and_then(|value| value.to_str()) == Some("md"))
+            .then_some(Kind::Note);
+    }
+    classify_relative(rel)
 }
 
 fn file_mtime_ms(path: &Path) -> i64 {
@@ -1593,6 +1590,8 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
         email.preview.clone(),
         email.from.clone(),
         email.from_email.clone(),
+        email.to.join(" "),
+        email.cc.join(" "),
         email.mentions.join(" "),
         email.links.join(" "),
     ]
@@ -2357,6 +2356,8 @@ mod tests {
             thread_id: "thread-1".to_string(),
             from: "Alex Example".to_string(),
             from_email: "alex@example.com".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
             subject: "Acme launch notes".to_string(),
             body: "Follow up with [[Sam Chen]].".to_string(),
             html: None,
@@ -2478,6 +2479,12 @@ mod tests {
             "# External research\n\nA synthetic imported note.",
         )
         .unwrap();
+        std::fs::create_dir_all(vault.join("tasks")).unwrap();
+        std::fs::write(
+            vault.join("tasks/ordinary.md"),
+            "# Ordinary folder note\n\nNot a Woodshed task.",
+        )
+        .unwrap();
         crate::vault::initialize_imported_layout(&vault).unwrap();
 
         let email = mail::EmailSummary {
@@ -2486,6 +2493,8 @@ mod tests {
             thread_id: "thread-1".to_string(),
             from: "Synthetic Sender".to_string(),
             from_email: "sender@example.test".to_string(),
+            to: vec!["recipient@example.test".to_string()],
+            cc: Vec::new(),
             subject: "Dispatched update".to_string(),
             body: "A synthetic sent message.".to_string(),
             html: None,
@@ -2509,12 +2518,22 @@ mod tests {
         let note_hits = idx.search("external research", 10).unwrap();
         assert_eq!(note_hits.len(), 1);
         assert_eq!(note_hits[0].kind, "note");
+        let canonical_folder_hits = idx.search("Ordinary folder note", 10).unwrap();
+        assert_eq!(canonical_folder_hits.len(), 1);
+        assert_eq!(canonical_folder_hits[0].kind, "note");
         let (sent, next) = idx
             .mail_folder_page("woodshed/sent/", Some("dispatched"), 0, 10)
             .unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].id, "sent-1");
         assert_eq!(next, None);
+        assert_eq!(
+            idx.mail_folder_page("woodshed/sent/", Some("recipient"), 0, 10)
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
         assert_eq!(
             std::fs::read_to_string(vault.join("Projects/research.md")).unwrap(),
             "# External research\n\nA synthetic imported note."

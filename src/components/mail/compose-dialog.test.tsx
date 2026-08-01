@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { sendMail, replyMail } = vi.hoisted(() => ({
+const { sendMail, replyMail, saveDraft } = vi.hoisted(() => ({
   sendMail: vi.fn(async () => ({
     messageId: "sent-message@example.test",
     threadId: "sent-message@example.test",
@@ -11,6 +11,11 @@ const { sendMail, replyMail } = vi.hoisted(() => ({
     messageId: "reply-message@example.test",
     threadId: "synthetic-thread",
     sentAt: "2026-07-28T12:00:00Z",
+  })),
+  saveDraft: vi.fn(async (input) => ({
+    ...input,
+    id: input.id ?? "01SYNTHETICDRAFT0000000000",
+    created: "2026-08-01T12:00:00Z",
   })),
 }));
 
@@ -28,7 +33,7 @@ vi.mock("@/lib/hooks/use-mail", () => ({
   }),
   useSendMail: () => sendMail,
   useReplyMail: () => replyMail,
-  useSaveDraft: () => vi.fn(),
+  useSaveDraft: () => saveDraft,
   useDeleteDraft: () => vi.fn(async () => {}),
 }));
 
@@ -38,6 +43,7 @@ describe("ComposeDialog", () => {
   beforeEach(() => {
     sendMail.mockClear();
     replyMail.mockClear();
+    saveDraft.mockClear();
   });
 
   it("resumes a saved reply draft with its original thread identity", async () => {
@@ -150,5 +156,45 @@ describe("ComposeDialog", () => {
         ],
       }),
     );
+  });
+
+  it("flushes the latest draft before closing", async () => {
+    const onClose = vi.fn();
+    render(
+      <ComposeDialog open mode={{ kind: "new" }} onClose={onClose} />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Subject"), {
+      target: { value: "Latest synthetic edit" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledOnce());
+    expect(saveDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "Latest synthetic edit" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the composer open when the final draft save fails", async () => {
+    const onClose = vi.fn();
+    saveDraft.mockRejectedValueOnce(new Error("synthetic save failure"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <ComposeDialog open mode={{ kind: "new" }} onClose={onClose} />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Subject"), {
+      target: { value: "Unsaved synthetic edit" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(
+      await screen.findByText(
+        "Draft could not be saved. Keep this window open and try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

@@ -24,6 +24,9 @@ export interface EmailSummary {
   threadId: string;
   from: string;
   fromEmail: string;
+  /** Persisted recipients; present on sent records and empty on legacy mail. */
+  to?: string[];
+  cc?: string[];
   subject: string;
   /** Full plaintext body (filled by sync's per-message expand or by mail_get_full). */
   body: string;
@@ -85,6 +88,16 @@ export interface MailPage {
 }
 
 export type MailFolder = "inbox" | "sent" | "archive";
+export type Mailbox = MailFolder | "drafts";
+
+export function isMailbox(value: unknown): value is Mailbox {
+  return (
+    value === "inbox" ||
+    value === "drafts" ||
+    value === "sent" ||
+    value === "archive"
+  );
+}
 
 /**
  * Metadata for a single attachment on an email. `id` is the MIME part

@@ -23,6 +23,7 @@ enum ChangeKind {
 struct VaultChangePayload {
     path: String, // vault-relative
     kind: ChangeKind,
+    external: bool,
 }
 
 fn change_to_payload(vault_root: &Path, change: &VaultChange) -> Option<VaultChangePayload> {
@@ -34,7 +35,21 @@ fn change_to_payload(vault_root: &Path, change: &VaultChange) -> Option<VaultCha
     Some(VaultChangePayload {
         path: rel.to_string_lossy().to_string(),
         kind,
+        external: crate::vault::is_external_content_path(vault_root, path),
     })
+}
+
+fn managed_change_section(vault_root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(vault_root).ok()?;
+    let mut segments = relative.iter().filter_map(|segment| segment.to_str());
+    let first = segments.next()?;
+    if crate::vault::is_imported_layout(vault_root) {
+        if first != crate::vault::IMPORTED_RECORDS_DIR {
+            return None;
+        }
+        return segments.next().map(String::from);
+    }
+    (first != ".woodshed").then(|| first.to_string())
 }
 
 #[tauri::command]
@@ -237,19 +252,7 @@ pub fn watcher_start(
             let path = match &change {
                 VaultChange::Modified(p) | VaultChange::Removed(p) => p,
             };
-            let mut relative_segments = path
-                .strip_prefix(&root_for_callback)
-                .ok()
-                .map(|r| r.iter().filter_map(|s| s.to_str()));
-            let top = relative_segments.as_mut().and_then(|segments| {
-                let first = segments.next()?;
-                if first == crate::vault::IMPORTED_RECORDS_DIR {
-                    segments.next()
-                } else {
-                    Some(first)
-                }
-            });
-            if let Some(seg) = top {
+            if let Some(seg) = managed_change_section(&root_for_callback, path) {
                 if seg == crate::vault::EVENTS_DIR
                     || seg == crate::vault::CADENCE_DIR
                     || seg == crate::vault::LEGACY_CALENDAR_DIR
@@ -329,6 +332,7 @@ mod tests {
         let change = VaultChange::Modified(PathBuf::from("/tmp/vault/tasks/abc.md"));
         let payload = change_to_payload(&vault, &change).unwrap();
         assert_eq!(payload.path, "tasks/abc.md");
+        assert!(!payload.external);
         matches!(payload.kind, ChangeKind::Modified);
     }
 
@@ -337,5 +341,25 @@ mod tests {
         let vault = PathBuf::from("/tmp/vault");
         let change = VaultChange::Modified(PathBuf::from("/elsewhere/foo.md"));
         assert!(change_to_payload(&vault, &change).is_none());
+    }
+
+    #[test]
+    fn imported_external_canonical_folder_is_not_a_managed_section() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path().join("adopted");
+        std::fs::create_dir_all(vault.join("people")).unwrap();
+        std::fs::write(vault.join("people/existing.md"), "# Existing note\n").unwrap();
+        crate::vault::initialize_imported_layout(&vault).unwrap();
+
+        let external = vault.join("people/existing.md");
+        let payload = change_to_payload(&vault, &VaultChange::Modified(external.clone())).unwrap();
+        assert!(payload.external);
+        assert_eq!(managed_change_section(&vault, &external), None);
+
+        let managed = vault.join("woodshed/people/person-example.md");
+        assert_eq!(
+            managed_change_section(&vault, &managed).as_deref(),
+            Some("people")
+        );
     }
 }

@@ -9,6 +9,7 @@ export const Route = createLazyFileRoute("/mail/$id")({
 
 function EmailView() {
   const { id } = useParams({ from: "/mail/$id" });
+  const { mailbox } = Route.useSearch();
   const { data: email, isLoading } = useEmail(id);
 
   if (isLoading) {
@@ -32,7 +33,11 @@ function EmailView() {
       {/* key on the message id so EmailDetail remounts on route change —
           state (cursor, inline-reply target, expanded messages) resets
           without needing a setState-in-effect inside the component. */}
-      <EmailDetail key={email.id} email={email} />
+      <EmailDetail
+        key={email.id}
+        email={email}
+        mailbox={mailbox ?? "inbox"}
+      />
     </ContentPanel>
   );
 }

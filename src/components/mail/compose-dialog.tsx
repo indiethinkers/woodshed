@@ -127,20 +127,47 @@ export function ComposeDialog({
     const run = autosaveChainRef.current
       .catch(() => undefined)
       .then(async () => {
-        try {
-          const saved = await saveDraftRef.current({
-            ...input,
-            id: draftIdRef.current,
-          });
-          draftIdRef.current = saved.id;
-          setDraftId(saved.id);
-          setDraftSavedAt(Date.now());
-        } catch (e) {
-          console.error("draft autosave failed", e);
-        }
+        const saved = await saveDraftRef.current({
+          ...input,
+          id: draftIdRef.current,
+        });
+        draftIdRef.current = saved.id;
+        setDraftId(saved.id);
+        setDraftSavedAt(Date.now());
       });
-    autosaveChainRef.current = run;
+    // Keep later autosaves moving after a provider/filesystem failure, while
+    // returning the unswallowed promise so an explicit close can stay open and
+    // show a recoverable error instead of losing the user's latest edit.
+    autosaveChainRef.current = run.catch((e) => {
+      console.error("draft autosave failed", e);
+    });
+    return run;
   }, []);
+
+  const currentDraftInput = useMemo<Omit<DraftSaveInput, "id">>(
+    () => ({
+      kind: draftKind,
+      fromInbox: fromInbox || undefined,
+      to: parseRecipients(to),
+      cc: parseRecipients(cc),
+      bcc: parseRecipients(bcc),
+      subject,
+      body,
+      sourceMessageId: draftSourceMessageId,
+      threadId: draftThreadId,
+    }),
+    [
+      draftKind,
+      fromInbox,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      draftSourceMessageId,
+      draftThreadId,
+    ],
+  );
 
   // Focus the most useful field on open: To when empty, Body otherwise.
   useEffect(() => {
@@ -161,37 +188,34 @@ export function ComposeDialog({
       body.trim().length > 0;
     if (!hasContent) return;
     const handle = window.setTimeout(() => {
-      queueDraftAutosave({
-        kind: draftKind,
-        fromInbox: fromInbox || undefined,
-        to: parseRecipients(to),
-        cc: parseRecipients(cc),
-        bcc: parseRecipients(bcc),
-        subject,
-        body,
-        sourceMessageId: draftSourceMessageId,
-        threadId: draftThreadId,
-      });
+      void queueDraftAutosave(currentDraftInput);
     }, 1200);
     return () => window.clearTimeout(handle);
   }, [
     open,
-    fromInbox,
     to,
-    cc,
-    bcc,
     subject,
     body,
-    draftKind,
-    draftSourceMessageId,
-    draftThreadId,
+    currentDraftInput,
     queueDraftAutosave,
   ]);
 
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback(async () => {
     if (status === "sending") return;
-    onClose();
-  }, [status, onClose]);
+    const hasContent =
+      to.trim().length > 0 ||
+      subject.trim().length > 0 ||
+      body.trim().length > 0;
+    try {
+      if (hasContent) {
+        await queueDraftAutosave(currentDraftInput);
+      }
+      onClose();
+    } catch {
+      setStatus("error");
+      setError("Draft could not be saved. Keep this window open and try again.");
+    }
+  }, [status, to, subject, body, queueDraftAutosave, currentDraftInput, onClose]);
 
   // Esc closes the dialog. Cmd/Ctrl-Enter sends.
   useEffect(() => {
@@ -199,7 +223,7 @@ export function ComposeDialog({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        handleClose();
+        void handleClose();
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {

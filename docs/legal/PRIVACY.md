@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** July 31, 2026
+**Effective:** July 26, 2026 · **Last updated:** August 1, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
