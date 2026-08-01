@@ -160,10 +160,10 @@ describe("DailyContent notes editor", () => {
       /\[data-daily-timestamp\]::before\s*\{[^}]*content:\s*attr\(data-time\);/s,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*height:\s*0;[\s\S]*min-height:\s*0;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:first-child\s*\{[^}]*height:\s*0;[^}]*min-height:\s*0;/,
     );
     expect(styles).toMatch(
-      /li:has\([\s\S]*> div\.react-renderer[\s\S]*> p:has\([\s\S]*\+ div\.react-renderer[\s\S]*\):has\(> \[data-daily-timestamp\]:only-child\)[\s\S]*> \[data-daily-timestamp\],[\s\S]*top:\s*1rem;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*> p:first-child\s*> \[data-daily-timestamp\]\s*\{[^}]*top:\s*1rem;/,
     );
     expect(styles).not.toMatch(
       /> p\s*> \[data-daily-timestamp\]\s*\{\s*top:\s*1rem;/,
@@ -175,19 +175,16 @@ describe("DailyContent notes editor", () => {
       /\.tiptap-content\s*\{[^}]*--embed-block-gap:\s*2rem;/,
     );
     expect(styles).toMatch(
-      /p[^,{]*:has\(\s*\+ div\.react-renderer\s*>\s*:is\(\[data-tweet-id\], \[data-youtube-resource\]\)\s*\)/s,
-    );
-    expect(styles).toMatch(
       /div\.react-renderer:has\([\s\S]*\[data-tweet-id\][\s\S]*\[data-youtube-resource\][\s\S]*\)\s*\{[^}]*margin-block:\s*var\(--embed-block-gap\);/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\[data-daily-timestamp\][\s\S]*\)\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
+      /\[data-daily-timestamps\][\s\S]*li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*li:has\([\s\S]*\)\s*\+ li[\s\S]*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
+      /li:has\(> div\.react-renderer\.cadence-standalone-embed\)\s*\+ li\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\) !important;/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*p:has\(> \[data-daily-timestamp\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\{[^}]*margin-block:\s*0;/,
+      /div\.react-renderer\.cadence-standalone-embed\s*\{[^}]*margin-block:\s*0;/,
     );
     expect(styles).toMatch(
       /\.post-embed-writing-block\s*\{[^}]*text-align:\s*left;/,
@@ -196,7 +193,7 @@ describe("DailyContent notes editor", () => {
       /p\.post-embed-writing-block\[data-post-embed-writing-block\]\[data-placeholder\]::before\s*\{[^}]*content:\s*attr\(data-placeholder\);/,
     );
     expect(styles).toMatch(
-      /\[data-daily-timestamps\][\s\S]*\+ div\.react-renderer:has\([\s\S]*\)\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
+      /div\.react-renderer\.cadence-standalone-embed\s*\+ \.post-embed-writing-block\s*\{[^}]*margin-top:\s*var\(--embed-block-gap\);/,
     );
   });
 

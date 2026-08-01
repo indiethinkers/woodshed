@@ -24,6 +24,11 @@ interface PostEmbedWritingBlockOptions {
   timestampedListItems: boolean;
 }
 
+interface EmbedInspection {
+  cadenceStandaloneEmbeds: Array<{ from: number; to: number }>;
+  trailingEmbed: TrailingEmbed | null;
+}
+
 function isSubstantive(node: PMNode): boolean {
   if (node.isText) return Boolean(node.textContent.trim());
   return node.isAtom && !NON_CONTENT_ATOMS.has(node.type.name);
@@ -84,10 +89,11 @@ function emptyLeadParagraph(node: PMNode | null | undefined): PMNode | null {
  * outline rows and timestamp atoms do not suppress the affordance, but any
  * later text, media, rule, or embed does.
  */
-function findTrailingEmbed(
+function inspectEmbeds(
   doc: PMNode,
   timestampedListItems: boolean,
-): TrailingEmbed | null {
+): EmbedInspection {
+  const cadenceStandaloneEmbeds: Array<{ from: number; to: number }> = [];
   const candidates: TrailingEmbed[] = [];
   let lastSubstantivePos = -1;
 
@@ -102,6 +108,18 @@ function findTrailingEmbed(
       ? topLevelListItemAt(doc, pos)
       : null;
     if (listItem) {
+      if (
+        parent.type.name === "listItem" &&
+        parent.childCount === 2 &&
+        parent.lastChild === node &&
+        parent.firstChild?.type.name === "paragraph" &&
+        !hasSubstantiveContent(parent.firstChild)
+      ) {
+        cadenceStandaloneEmbeds.push({
+          from: pos,
+          to: pos + node.nodeSize,
+        });
+      }
       const nextParagraph = emptyLeadParagraph(
         listItem.list.maybeChild(listItem.itemIndex + 1),
       );
@@ -146,8 +164,11 @@ function findTrailingEmbed(
   });
 
   const candidate = candidates.at(-1);
-  if (!candidate) return null;
-  return candidate.nodePos === lastSubstantivePos ? candidate : null;
+  return {
+    cadenceStandaloneEmbeds,
+    trailingEmbed:
+      candidate?.nodePos === lastSubstantivePos ? candidate : null,
+  };
 }
 
 function insertWritingBlock(
@@ -257,13 +278,17 @@ export const PostEmbedWritingBlock = Extension.create<PostEmbedWritingBlockOptio
         key: postEmbedWritingBlockKey,
         props: {
           decorations(state) {
-            const trailingEmbed = findTrailingEmbed(
+            const { cadenceStandaloneEmbeds, trailingEmbed } = inspectEmbeds(
               state.doc,
               timestampedListItems,
             );
-            if (!trailingEmbed) return null;
-            if (trailingEmbed.target.kind === "paragraph") {
-              return DecorationSet.create(state.doc, [
+            const decorations = cadenceStandaloneEmbeds.map(({ from, to }) =>
+              Decoration.node(from, to, {
+                class: "cadence-standalone-embed",
+              }),
+            );
+            if (trailingEmbed?.target.kind === "paragraph") {
+              decorations.push(
                 Decoration.node(
                   trailingEmbed.target.from,
                   trailingEmbed.target.to,
@@ -273,16 +298,20 @@ export const PostEmbedWritingBlock = Extension.create<PostEmbedWritingBlockOptio
                     "data-placeholder": "Start writing...",
                   },
                 ),
-              ]);
+              );
+            } else if (trailingEmbed) {
+              decorations.push(
+                Decoration.widget(
+                  trailingEmbed.target.pos,
+                  (view, getPos) =>
+                    createWritingButton(view, getPos, timestampedListItems),
+                  { side: 1, ignoreSelection: true },
+                ),
+              );
             }
-            return DecorationSet.create(state.doc, [
-              Decoration.widget(
-                trailingEmbed.target.pos,
-                (view, getPos) =>
-                  createWritingButton(view, getPos, timestampedListItems),
-                { side: 1, ignoreSelection: true },
-              ),
-            ]);
+            return decorations.length
+              ? DecorationSet.create(state.doc, decorations)
+              : null;
           },
         },
       }),

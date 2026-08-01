@@ -505,12 +505,54 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       ":scope > div.react-renderer + [data-post-embed-writing-block]",
     );
 
+    expect(
+      embedItem.querySelector(":scope > div.react-renderer"),
+    ).toHaveClass("cadence-standalone-embed");
     expect(postEmbedBlock).toHaveTextContent("Start writing...");
     expect(
       embedItem.querySelectorAll(
         ":scope > div.react-renderer + [data-post-embed-writing-block]",
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps ordinary embed margins when a Cadence row has lead text", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/314159265";
+    const { container } = mountOutlineEditor(
+      `- [09:30] Synthetic context\n\n  ${tweetUrl}`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
+  });
+
+  it("keeps ordinary embed margins when content follows in the same Cadence row", async () => {
+    const tweetUrl = "https://x.com/sample_account/status/271828182";
+    const { container } = mountOutlineEditor(
+      `- [09:30]\n\n  ${tweetUrl}\n\n  Synthetic follow-up`,
+      () => undefined,
+    );
+
+    const embedWrapper = await waitFor(() => {
+      const wrapper = container
+        .querySelector("[data-tweet-id]")
+        ?.closest("div.react-renderer");
+      expect(wrapper).toBeTruthy();
+      return wrapper!;
+    });
+
+    expect(embedWrapper).not.toHaveClass("cadence-standalone-embed");
+    expect(
+      container.querySelector("[data-post-embed-writing-block]"),
+    ).toBeNull();
   });
 
   it.each([
@@ -606,6 +648,9 @@ describe("TiptapEditor URL embeds (daily journal)", () => {
       expect(paragraph).toBeTruthy();
       expect(items).toHaveLength(2);
       expect(embedItem.querySelectorAll(":scope > p")).toHaveLength(1);
+      expect(
+        embedItem.querySelector(":scope > div.react-renderer"),
+      ).toHaveClass("cadence-standalone-embed");
       expect(document.activeElement).toHaveClass("tiptap-content");
     });
 

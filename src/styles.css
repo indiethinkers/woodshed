@@ -785,52 +785,17 @@
    distance above the card and below it. */
 .tiptap-content[data-daily-timestamps]
   > ul
-  > li:has(
-    > p:has(> [data-daily-timestamp]:only-child)
-      + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ),
-.tiptap-content[data-daily-timestamps]
-  > ul
-  > li:has(
-    > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
-      + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ) {
+  > li:has(> div.react-renderer.cadence-standalone-embed) {
   margin-top: var(--embed-block-gap) !important;
 }
 .tiptap-content[data-daily-timestamps]
   > ul
-  > li:has(
-    > p:has(> [data-daily-timestamp]:only-child)
-      + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  + li,
-.tiptap-content[data-daily-timestamps]
-  > ul
-  > li:has(
-    > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
-      + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
+  > li:has(> div.react-renderer.cadence-standalone-embed)
   + li {
   margin-top: var(--embed-block-gap) !important;
 }
 .tiptap-content[data-daily-timestamps]
-  > ul
-  > li
-  > p:has(> [data-daily-timestamp]:only-child)
-  + div.react-renderer:has(
-    > :is([data-tweet-id], [data-youtube-resource])
-  ),
-.tiptap-content[data-daily-timestamps]
-  > ul
-  > li
-  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
-  + div.react-renderer:has(
-    > :is([data-tweet-id], [data-youtube-resource])
-  ) {
+  div.react-renderer.cadence-standalone-embed {
   margin-block: 0;
 }
 .tiptap-content
@@ -1023,54 +988,18 @@
    and the card's top edge sits on the entry line, directly beside the dash.
    The embed shell is the wrapper's first child, so its own margin-top is
    already 0 via `.twitter-embed-shell:first-child`. */
-/* When the bullet's text is just the timestamp atom (the user pasted a tweet
-   right at the start of an entry), the paragraph's only in-flow content is
-   the trailing <br> — the timestamp span is absolutely positioned against
-   the li. The generic empty-paragraph collapse above misses it (`:only-child`
-   fails with the atom present), leaving the card one line below the dash.
-   Collapse the line box instead of `display: none` so the timestamp keeps
-   rendering; the moment the user types on that line the trailing break goes
-   away and the rule disengages. */
+/* The editor marks Cadence embeds whose lead paragraph has no substantive
+   content. Use that semantic marker instead of reconstructing emptiness from
+   browser-generated trailing breaks, which change as the caret moves. */
 .tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]:only-child),
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak) {
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p:first-child {
   height: 0;
   min-height: 0;
 }
 .tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]:only-child)
-  > [data-daily-timestamp],
-.tiptap-content[data-daily-timestamps]
-  li:has(
-    > div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  )
-  > p:has(
-    + div.react-renderer
-      > :is([data-tweet-id], [data-youtube-resource])
-  ):has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
+  li:has(> div.react-renderer.cadence-standalone-embed)
+  > p:first-child
   > [data-daily-timestamp] {
   top: 1rem;
 }
@@ -1124,18 +1053,7 @@
 .tiptap-content[data-daily-timestamps]
   > ul
   > li
-  > p:has(> [data-daily-timestamp]:only-child)
-  + div.react-renderer:has(
-    > :is([data-tweet-id], [data-youtube-resource])
-  )
-  + .post-embed-writing-block,
-.tiptap-content[data-daily-timestamps]
-  > ul
-  > li
-  > p:has(> [data-daily-timestamp]):has(> br.ProseMirror-trailingBreak)
-  + div.react-renderer:has(
-    > :is([data-tweet-id], [data-youtube-resource])
-  )
+  > div.react-renderer.cadence-standalone-embed
   + .post-embed-writing-block {
   margin-top: var(--embed-block-gap);
 }
