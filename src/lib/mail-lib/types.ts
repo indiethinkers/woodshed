@@ -84,6 +84,8 @@ export interface MailPage {
   nextOffset: number | null;
 }
 
+export type MailFolder = "inbox" | "sent" | "archive";
+
 /**
  * Metadata for a single attachment on an email. `id` is the MIME part
  * index ("0", "1", …). Callers pass it back through `mail_open_attachment`

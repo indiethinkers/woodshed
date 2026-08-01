@@ -1110,7 +1110,7 @@ fn epoch_seconds(date: &str) -> Option<i64> {
 /// Local inbox records belonging to one account, oldest first.
 fn account_inbox_records(vault: &std::path::Path, inbox: &str) -> Vec<EmailSummary> {
     let mut records: Vec<EmailSummary> =
-        crate::commands::mail::read_inbox_dir(&vault.join("inbox"))
+        crate::commands::mail::read_inbox_dir(&crate::vault::collection_dir(vault, "inbox"))
             .into_iter()
             .filter(|email| email.inbox == inbox)
             .collect();

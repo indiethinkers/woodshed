@@ -40,6 +40,11 @@ pub const LEGACY_CALENDAR_DIR: &str = "calendar";
 /// Legacy daily folder. Daily journal files now live under cadence/
 /// alongside their events; legacy vaults migrate at boot.
 pub const LEGACY_DAILY_DIR: &str = "daily";
+/// Imported Markdown folders keep their existing tree untouched. Woodshed's
+/// typed records live in this visible child so an existing `tasks/`, `people/`,
+/// or other coincidentally-named folder is never reinterpreted as app data.
+pub const IMPORTED_RECORDS_DIR: &str = "woodshed";
+const IMPORTED_LAYOUT_MARKER: &str = "imported-layout";
 
 pub const VAULT_SUBDIRS: &[&str] = &[
     "tasks",
@@ -58,11 +63,100 @@ pub const VAULT_SUBDIRS: &[&str] = &[
     "attachments",
 ];
 
+/// True when `vault_path` is an adopted Markdown tree rather than a native
+/// Woodshed vault. The marker contains no private data; its presence is the
+/// portable layout contract shared by every command.
+pub fn is_imported_layout(vault_path: &Path) -> bool {
+    let marker = vault_path.join(".woodshed").join(IMPORTED_LAYOUT_MARKER);
+    if !is_real_file(&marker) {
+        return false;
+    }
+    read_bounded(&marker, 64)
+        .map(|value| value.trim() == IMPORTED_RECORDS_DIR)
+        .unwrap_or(false)
+}
+
+/// Root containing Woodshed-managed collections. Native vaults use the vault
+/// root itself; adopted Markdown trees use `<vault_root>/woodshed/`.
+pub fn records_root(vault_path: &Path) -> PathBuf {
+    if is_imported_layout(vault_path) {
+        vault_path.join(IMPORTED_RECORDS_DIR)
+    } else {
+        vault_path.to_path_buf()
+    }
+}
+
+pub fn collection_dir(vault_path: &Path, subdir: &str) -> PathBuf {
+    records_root(vault_path).join(subdir)
+}
+
+/// Mark an existing Markdown folder as an imported-layout vault without
+/// moving or rewriting any user-authored file.
+pub fn initialize_imported_layout(vault_path: &Path) -> Result<()> {
+    if !is_real_directory(vault_path) {
+        anyhow::bail!(
+            "import root must be a real directory: {}",
+            vault_path.display()
+        );
+    }
+
+    let managed = vault_path.join(IMPORTED_RECORDS_DIR);
+    if managed.exists() && !is_real_directory(&managed) {
+        anyhow::bail!(
+            "reserved managed-record path is not a real directory: {}",
+            managed.display()
+        );
+    }
+    if is_real_directory(&managed) {
+        let occupied = std::fs::read_dir(&managed)
+            .with_context(|| format!("inspect managed-record directory {}", managed.display()))?
+            .next()
+            .transpose()?
+            .is_some();
+        if occupied && !is_imported_layout(vault_path) {
+            anyhow::bail!(
+                "{} already contains a non-empty '{}' folder; rename that folder before importing so Woodshed never claims existing files",
+                vault_path.display(),
+                IMPORTED_RECORDS_DIR
+            );
+        }
+    }
+
+    let internal = vault_path.join(".woodshed");
+    std::fs::create_dir_all(&internal)
+        .with_context(|| format!("create internal directory {}", internal.display()))?;
+    if !is_real_directory(&internal) {
+        anyhow::bail!(
+            "Woodshed internal path must be a real directory: {}",
+            internal.display()
+        );
+    }
+    let marker = internal.join(IMPORTED_LAYOUT_MARKER);
+    if marker.exists() && !is_real_file(&marker) {
+        anyhow::bail!(
+            "import layout marker must be a regular file: {}",
+            marker.display()
+        );
+    }
+    std::fs::write(&marker, format!("{IMPORTED_RECORDS_DIR}\n"))
+        .with_context(|| format!("write imported layout marker {}", marker.display()))?;
+    ensure_dirs(vault_path)
+}
+
 pub fn ensure_dirs(vault_path: &Path) -> Result<()> {
     std::fs::create_dir_all(vault_path)
         .with_context(|| format!("create vault root at {}", vault_path.display()))?;
+    let records_root = records_root(vault_path);
+    std::fs::create_dir_all(&records_root)
+        .with_context(|| format!("create managed records root {}", records_root.display()))?;
+    if !is_real_directory(&records_root) {
+        anyhow::bail!(
+            "managed records root must be a real directory: {}",
+            records_root.display()
+        );
+    }
     for sub in VAULT_SUBDIRS {
-        let p = vault_path.join(sub);
+        let p = records_root.join(sub);
         std::fs::create_dir_all(&p)
             .with_context(|| format!("create vault subdir {}", p.display()))?;
         let metadata = std::fs::symlink_metadata(&p)
@@ -79,11 +173,12 @@ pub fn ensure_dirs(vault_path: &Path) -> Result<()> {
 /// Boot migration normally ensures the new path exists, so this only
 /// matters for vaults restored from backup or with failed migrations.
 pub fn cadence_dir(vault: &Path) -> PathBuf {
-    let new = vault.join(CADENCE_DIR);
+    let records = records_root(vault);
+    let new = records.join(CADENCE_DIR);
     if is_real_directory(&new) {
         return new;
     }
-    let legacy = vault.join(LEGACY_CALENDAR_DIR);
+    let legacy = records.join(LEGACY_CALENDAR_DIR);
     if is_real_directory(&legacy) {
         return legacy;
     }
@@ -91,7 +186,7 @@ pub fn cadence_dir(vault: &Path) -> PathBuf {
 }
 
 pub fn resources_dir(vault: &Path) -> PathBuf {
-    vault.join(RESOURCES_DIR)
+    collection_dir(vault, RESOURCES_DIR)
 }
 
 /// Returns the areas directory. Unlike the other rename helpers there's
@@ -99,7 +194,7 @@ pub fn resources_dir(vault: &Path) -> PathBuf {
 /// directory. Un-migrated vaults are handled by the JSON read-fallback
 /// in `commands::areas`.
 pub fn areas_dir(vault: &Path) -> PathBuf {
-    vault.join(AREAS_DIR)
+    collection_dir(vault, AREAS_DIR)
 }
 
 /// Returns the events directory. Unlike cadence/resources there's
@@ -108,11 +203,11 @@ pub fn areas_dir(vault: &Path) -> PathBuf {
 /// per-file shape; un-migrated vaults still surface inline events via
 /// the cadence-file read-fallback in `commands::events`.
 pub fn events_dir(vault: &Path) -> PathBuf {
-    vault.join(EVENTS_DIR)
+    collection_dir(vault, EVENTS_DIR)
 }
 
 pub fn agent_dir(vault: &Path) -> PathBuf {
-    vault.join(AGENT_DIR)
+    collection_dir(vault, AGENT_DIR)
 }
 
 /// Validate a record identifier before it becomes a filesystem component.
@@ -309,7 +404,7 @@ fn confined_collection(
     let canonical_vault = vault
         .canonicalize()
         .map_err(|e| format!("resolve vault path {}: {e}", vault.display()))?;
-    let collection_path = vault.join(collection);
+    let collection_path = collection_dir(vault, collection);
     let metadata = std::fs::symlink_metadata(&collection_path).map_err(|e| {
         format!(
             "inspect vault collection {}: {e}",
@@ -346,7 +441,7 @@ pub fn ensure_vault_directory(
     let canonical_vault = vault
         .canonicalize()
         .map_err(|e| format!("resolve vault path {}: {e}", vault.display()))?;
-    ensure_directory_components(vault, components, &canonical_vault)
+    ensure_directory_components(&records_root(vault), components, &canonical_vault)
 }
 
 fn ensure_directory_components(
@@ -672,9 +767,27 @@ pub fn content_revision(content: &str) -> String {
 fn vault_root_and_rel_path(path: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut ancestor = path.parent();
     while let Some(dir) = ancestor {
+        // Existing Markdown in an adopted folder sits outside the canonical
+        // collection tree, so the portable import marker is its only safe
+        // vault-root boundary. This gives external notes the same recoverable
+        // revision history as Woodshed-managed records.
+        if is_imported_layout(dir) {
+            let rel = path.strip_prefix(dir).ok()?.to_path_buf();
+            return Some((dir.to_path_buf(), rel));
+        }
         let name = dir.file_name().and_then(OsStr::to_str);
         if name.is_some_and(|name| VAULT_SUBDIRS.contains(&name)) {
-            let root = dir.parent()?.to_path_buf();
+            let collection_root = dir.parent()?;
+            let root = if collection_root.file_name() == Some(OsStr::new(IMPORTED_RECORDS_DIR)) {
+                let candidate = collection_root.parent()?;
+                if is_imported_layout(candidate) {
+                    candidate.to_path_buf()
+                } else {
+                    collection_root.to_path_buf()
+                }
+            } else {
+                collection_root.to_path_buf()
+            };
             let rel = path.strip_prefix(&root).ok()?.to_path_buf();
             return Some((root, rel));
         }
@@ -728,6 +841,66 @@ mod tests {
         std::fs::write(vault.join("tasks").join("existing.md"), "x").unwrap();
         ensure_dirs(&vault).unwrap();
         assert!(vault.join("tasks").join("existing.md").exists());
+    }
+
+    #[test]
+    fn imported_layout_scaffolds_managed_records_without_touching_existing_files() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join("Projects")).unwrap();
+        std::fs::write(vault.join("Projects/plan.md"), "# Existing plan\n").unwrap();
+
+        initialize_imported_layout(&vault).unwrap();
+
+        assert!(is_imported_layout(&vault));
+        assert_eq!(
+            std::fs::read_to_string(vault.join("Projects/plan.md")).unwrap(),
+            "# Existing plan\n"
+        );
+        for sub in VAULT_SUBDIRS {
+            assert!(vault.join(IMPORTED_RECORDS_DIR).join(sub).is_dir());
+            assert!(!vault.join(sub).exists());
+        }
+    }
+
+    #[test]
+    fn imported_layout_refuses_to_claim_an_existing_managed_folder() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join(IMPORTED_RECORDS_DIR)).unwrap();
+        std::fs::write(vault.join(IMPORTED_RECORDS_DIR).join("mine.md"), "keep").unwrap();
+
+        let error = initialize_imported_layout(&vault).unwrap_err().to_string();
+
+        assert!(error.contains("never claims existing files"));
+        assert!(!vault.join(".woodshed/imported-layout").exists());
+        assert_eq!(
+            std::fs::read_to_string(vault.join(IMPORTED_RECORDS_DIR).join("mine.md")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn imported_file_edits_create_recoverable_revisions_at_the_vault_root() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-notes");
+        std::fs::create_dir_all(vault.join("Projects")).unwrap();
+        let note = vault.join("Projects/plan.md");
+        std::fs::write(&note, "Original content").unwrap();
+        initialize_imported_layout(&vault).unwrap();
+
+        write_atomic(&note, "Updated content").unwrap();
+
+        let revision_dir = vault.join(".woodshed/revisions/Projects/plan.md");
+        let revisions = std::fs::read_dir(revision_dir)
+            .unwrap()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(revisions[0].path()).unwrap(),
+            "Original content"
+        );
     }
 
     #[test]

@@ -8,11 +8,17 @@ export const Route = createFileRoute("/welcome")({
 });
 
 type Step = 1 | 2 | "scaffolding";
+type VaultMode = "import" | "new";
 
-const SCAFFOLD_STEPS = [
+const NEW_VAULT_STEPS = [
   "Creating folders…",
   "Seeding samples…",
   "Starting watcher…",
+];
+const IMPORT_STEPS = [
+  "Preparing Woodshed records…",
+  "Scanning Markdown…",
+  "Building the local index…",
 ];
 
 // Exported separately from the Route so the vitest suite can render
@@ -21,6 +27,7 @@ export function WelcomePage() {
   const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>(1);
+  const [vaultMode, setVaultMode] = useState<VaultMode>("import");
   const [vaultPath, setVaultPath] = useState<string>("");
   const [seedSamples, setSeedSamples] = useState(true);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -31,6 +38,8 @@ export function WelcomePage() {
   const [emailError, setEmailError] = useState<string | null>(null);
 
   const [scaffoldStep, setScaffoldStep] = useState(0);
+  const scaffoldSteps =
+    vaultMode === "import" ? IMPORT_STEPS : NEW_VAULT_STEPS;
 
   useEffect(() => {
     let cancelled = false;
@@ -47,10 +56,10 @@ export function WelcomePage() {
   useEffect(() => {
     if (step !== "scaffolding") return;
     const id = window.setInterval(() => {
-      setScaffoldStep((s) => (s + 1) % SCAFFOLD_STEPS.length);
+      setScaffoldStep((s) => (s + 1) % scaffoldSteps.length);
     }, 250);
     return () => window.clearInterval(id);
-  }, [step]);
+  }, [scaffoldSteps.length, step]);
 
   const isIcloudPath = vaultPath.includes("/Library/Mobile Documents/");
 
@@ -104,10 +113,14 @@ export function WelcomePage() {
     if (!validateProfile()) return;
     setStep("scaffolding");
     try {
-      await tauriInvoke<void>("vault_init", {
-        path: vaultPath,
-        seedSamples,
-      });
+      if (vaultMode === "import") {
+        await tauriInvoke<void>("vault_import", { path: vaultPath });
+      } else {
+        await tauriInvoke<void>("vault_init", {
+          path: vaultPath,
+          seedSamples,
+        });
+      }
       await tauriInvoke<void>("vault_path_set", { path: vaultPath });
       await tauriInvoke<void>("profile_set", {
         profile: {
@@ -131,6 +144,8 @@ export function WelcomePage() {
           <Step1
             vaultPath={vaultPath}
             setVaultPath={setVaultPath}
+            vaultMode={vaultMode}
+            setVaultMode={setVaultMode}
             seedSamples={seedSamples}
             setSeedSamples={setSeedSamples}
             isIcloudPath={isIcloudPath}
@@ -152,7 +167,7 @@ export function WelcomePage() {
           />
         )}
         {step === "scaffolding" && (
-          <Scaffolding subText={SCAFFOLD_STEPS[scaffoldStep]} />
+          <Scaffolding subText={scaffoldSteps[scaffoldStep]} />
         )}
       </div>
     </div>
@@ -174,6 +189,8 @@ function Logo() {
 function Step1({
   vaultPath,
   setVaultPath,
+  vaultMode,
+  setVaultMode,
   seedSamples,
   setSeedSamples,
   isIcloudPath,
@@ -183,6 +200,8 @@ function Step1({
 }: {
   vaultPath: string;
   setVaultPath: (p: string) => void;
+  vaultMode: VaultMode;
+  setVaultMode: (mode: VaultMode) => void;
   seedSamples: boolean;
   setSeedSamples: (s: boolean) => void;
   isIcloudPath: boolean;
@@ -199,12 +218,27 @@ function Step1({
 
       <div className="flex flex-col gap-3">
         <h1 className="text-[32px] leading-[1.1] font-semibold tracking-[-0.02em] text-foreground">
-          Where should your vault live?
+          Bring your files into Woodshed
         </h1>
         <p className="text-[15px] leading-[1.45] text-muted-foreground">
-          Woodshed stores everything as plain markdown files on your machine. You
-          can sync this folder via iCloud, Dropbox, or git later.
+          Open an existing Markdown folder without moving anything, or create a
+          clean vault for a fresh start.
         </p>
+      </div>
+
+      <div role="radiogroup" aria-label="Vault setup" className="grid grid-cols-2 gap-2">
+        <SetupChoice
+          active={vaultMode === "import"}
+          title="Open Markdown folder"
+          detail="Existing files appear in Notebook, in their current folders."
+          onClick={() => setVaultMode("import")}
+        />
+        <SetupChoice
+          active={vaultMode === "new"}
+          title="Create new vault"
+          detail="Start with Woodshed's native record structure."
+          onClick={() => setVaultMode("new")}
+        />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -237,15 +271,17 @@ function Step1({
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={seedSamples}
-          onChange={(e) => setSeedSamples(e.target.checked)}
-          className="h-4 w-4 rounded-sm border-border"
-        />
-        <span>Seed with sample content (recommended for first-time users)</span>
-      </label>
+      {vaultMode === "new" && (
+        <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={seedSamples}
+            onChange={(e) => setSeedSamples(e.target.checked)}
+            className="h-4 w-4 rounded-sm border-border"
+          />
+          <span>Seed with sample content (recommended for first-time users)</span>
+        </label>
+      )}
 
       <div className="flex flex-col gap-3 items-end">
         <button
@@ -264,6 +300,37 @@ function Step1({
         </button>
       </div>
     </div>
+  );
+}
+
+function SetupChoice({
+  active,
+  title,
+  detail,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className={`rounded-lg border p-3 text-left transition-colors ${
+        active
+          ? "border-foreground/30 bg-foreground/[0.045]"
+          : "border-border bg-background/35 hover:bg-foreground/[0.025]"
+      }`}
+    >
+      <span className="block text-[13px] font-semibold text-foreground">{title}</span>
+      <span className="mt-1.5 block text-[11.5px] leading-snug text-muted-foreground">
+        {detail}
+      </span>
+    </button>
   );
 }
 

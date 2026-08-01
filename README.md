@@ -66,9 +66,9 @@ every commit. Maintainer packaging instructions live in
 | Surface | What it does |
 |---|---|
 | **Cadence** | Combines the daily journal, calendar schedule, and task rail |
-| **Mail** | Unifies configured Gmail inboxes, threads, drafts, replies, and archive |
+| **Mail** | Unifies configured Gmail inboxes, searchable sent/archive folders, drafts, and replies |
 | **Agent** | Stores AI conversations as vault records and adds page-aware chat |
-| **Notebook** | Provides long-form Markdown editing with slash commands and embeds |
+| **Notebook** | Provides long-form Markdown editing plus folder browsing for adopted files |
 | **Resources** | Captures web links, metadata, highlights, and personal notes |
 | **People** | Acts as a personal CRM connected to events, notes, mail, and areas |
 | **Databases** | Supports resizable structured tables, board views, rows, and generated tag tables |
@@ -102,6 +102,11 @@ selection in app configuration; the vault can live anywhere the app can access.
 
 The repository and vault are independent. Neither path is derived from the
 other.
+
+Onboarding can also adopt an existing Markdown folder. Woodshed leaves those
+files in place and shows them in Notebook using their current folder hierarchy.
+Its typed records live under a visible `<vault_root>/woodshed/` child, while
+recoverable revisions and trash remain under `<vault_root>/.woodshed/`.
 
 ```text
 <vault_root>/
@@ -186,9 +191,10 @@ then invalidates the matching data.
 Onboarding asks for a vault location and profile information. The suggested
 location is only a default; choose any appropriate writable directory.
 
-Woodshed can scaffold an empty vault or add sample content. Settings later
-exposes the selected path, profile, appearance, integrations, Agent endpoint,
-and diagnostics.
+Woodshed can open an existing Markdown folder without moving its files, or
+scaffold a new vault with optional sample content. Settings later exposes the
+selected path, profile, appearance, integrations, Agent endpoint, and
+diagnostics.
 
 ### Optional integrations
 

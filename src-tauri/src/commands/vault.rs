@@ -13,11 +13,36 @@ const VAULT_GIT_BRANCH: &str = "main";
 #[tauri::command]
 pub fn vault_init(path: String, seed_samples: bool) -> Result<(), String> {
     let p = PathBuf::from(&path);
+    if p.exists() {
+        ensure_safe_to_adopt(&p)?;
+    }
     vault_lib::ensure_dirs(&p).map_err(|e| e.to_string())?;
     if seed_samples {
         seed::seed_all(&p)?;
     }
     Ok(())
+}
+
+/// Adopt an existing Markdown tree without moving or rewriting its files.
+/// Woodshed-managed records are scaffolded under the visible `woodshed/`
+/// child; the existing tree becomes path-backed Notebook content.
+#[tauri::command]
+pub fn vault_import(path: String) -> Result<(), String> {
+    let requested = PathBuf::from(path.trim());
+    let target = requested
+        .canonicalize()
+        .map_err(|e| format!("Cannot open {}: {e}", requested.display()))?;
+    if !target.is_dir() {
+        return Err(format!("{} is not a folder.", target.display()));
+    }
+    if looks_like_vault(&target)? {
+        return vault_lib::ensure_dirs(&target).map_err(|e| e.to_string());
+    }
+    if !contains_markdown(&target)? {
+        return Err("Choose a folder containing at least one Markdown file.".to_string());
+    }
+    vault_lib::initialize_imported_layout(&target)
+        .map_err(|e| format!("Cannot import folder: {e:#}"))
 }
 
 /// Point Woodshed at a different vault and relaunch.
@@ -45,13 +70,18 @@ pub fn vault_switch(app: tauri::AppHandle, path: String) -> Result<(), String> {
     // `daily/` contents into `cadence/` and rewrites every `.md` under
     // `resources/`. A mis-click in the folder picker must not be able to
     // rearrange someone's files.
-    ensure_safe_to_adopt(&target)?;
-
-    // Scaffold any missing canonical subdirs. Non-destructive: `ensure_dirs`
-    // creates what is absent and leaves existing data alone, so pointing at a
-    // folder that is already a vault is safe.
-    vault_lib::ensure_dirs(&target)
-        .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
+    if looks_like_vault(&target)? || folder_is_empty(&target)? {
+        vault_lib::ensure_dirs(&target)
+            .map_err(|e| format!("Cannot use {} as a vault: {e:#}", target.display()))?;
+    } else if contains_markdown(&target)? {
+        vault_lib::initialize_imported_layout(&target)
+            .map_err(|e| format!("Cannot import {}: {e:#}", target.display()))?;
+    } else {
+        return Err(format!(
+            "{} has files in it but no Markdown files Woodshed can open.",
+            target.display()
+        ));
+    }
 
     // Drop the derived caches that live in app data rather than in the vault.
     // Both would otherwise show the outgoing vault's content inside the
@@ -116,43 +146,89 @@ const VAULT_RECOGNITION_THRESHOLD: usize = 3;
 /// Dotfiles do not count as content: a `.git` directory is expected on a
 /// git-synced vault, and `.DS_Store` should never make a folder look occupied.
 fn ensure_safe_to_adopt(target: &Path) -> Result<(), String> {
-    let entries =
-        std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
-
-    let mut visible = 0usize;
-    let mut canonical = 0usize;
-    let mut has_woodshed_dir = false;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
-        let raw_name = entry.file_name();
-        let name = raw_name.to_string_lossy();
-
-        if name == ".woodshed" {
-            has_woodshed_dir = true;
-            continue;
-        }
-        if name.starts_with('.') {
-            continue;
-        }
-        visible += 1;
-        if vault_lib::VAULT_SUBDIRS.contains(&name.as_ref()) && entry.path().is_dir() {
-            canonical += 1;
-        }
-    }
-
-    let empty = visible == 0;
-    let looks_like_vault = has_woodshed_dir || canonical >= VAULT_RECOGNITION_THRESHOLD;
-    if empty || looks_like_vault {
+    if folder_is_empty(target)? || looks_like_vault(target)? {
         return Ok(());
     }
 
     Err(format!(
-        "{} has files in it but is not a Woodshed vault. Choose an empty folder \
-         or an existing vault — Woodshed creates its own folders here and may \
-         move files that match an older vault layout.",
+        "{} has files in it but is not a Woodshed vault. Choose an empty folder, \
+         an existing vault, or use Open Markdown folder so existing files stay in place.",
         target.display()
     ))
+}
+
+fn folder_is_empty(target: &Path) -> Result<bool, String> {
+    let entries =
+        std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn looks_like_vault(target: &Path) -> Result<bool, String> {
+    if vault_lib::is_imported_layout(target) {
+        return Ok(true);
+    }
+    let entries =
+        std::fs::read_dir(target).map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+    let mut canonical = 0usize;
+    let mut has_woodshed_dir = false;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Cannot read {}: {e}", target.display()))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == ".woodshed" {
+            has_woodshed_dir = true;
+            continue;
+        }
+        if vault_lib::VAULT_SUBDIRS.contains(&name.as_ref())
+            && vault_lib::is_real_directory(&entry.path())
+        {
+            canonical += 1;
+        }
+    }
+    Ok(has_woodshed_dir || canonical >= VAULT_RECOGNITION_THRESHOLD)
+}
+
+fn contains_markdown(target: &Path) -> Result<bool, String> {
+    let mut stack = vec![target.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if dir == target => {
+                return Err(format!("Cannot read the selected folder: {error}"));
+            }
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 50_000 {
+                return Err("Folder contains too many entries to inspect safely.".to_string());
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || name == vault_lib::IMPORTED_RECORDS_DIR {
+                continue;
+            }
+            if vault_lib::is_real_directory(&path) {
+                stack.push(path);
+            } else if vault_lib::is_real_file(&path)
+                && path.extension().and_then(OsStr::to_str) == Some("md")
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Drop the derived caches under `<app_data_dir>` that describe one vault's
@@ -579,6 +655,36 @@ mod tests {
             people, 0,
             "expected no seeded files when seed_samples=false"
         );
+    }
+
+    #[test]
+    fn vault_import_adopts_nested_markdown_without_moving_it() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("existing");
+        std::fs::create_dir_all(target.join("Projects")).unwrap();
+        std::fs::write(target.join("Projects/plan.md"), "# Plan\n").unwrap();
+
+        vault_import(target.to_string_lossy().to_string()).unwrap();
+
+        assert!(vault_lib::is_imported_layout(&target));
+        assert_eq!(
+            std::fs::read_to_string(target.join("Projects/plan.md")).unwrap(),
+            "# Plan\n"
+        );
+        assert!(target.join("woodshed/notebook").is_dir());
+    }
+
+    #[test]
+    fn vault_import_requires_markdown_content() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("existing");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("image.txt"), "not markdown").unwrap();
+
+        let error = vault_import(target.to_string_lossy().to_string()).unwrap_err();
+
+        assert!(error.contains("at least one Markdown file"));
+        assert!(!target.join(".woodshed").exists());
     }
 
     #[test]

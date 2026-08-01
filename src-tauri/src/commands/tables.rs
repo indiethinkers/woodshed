@@ -150,7 +150,7 @@ fn vault_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn tables_root(vault: &Path) -> PathBuf {
-    vault.join("tables")
+    vault_lib::collection_dir(vault, "tables")
 }
 
 pub(crate) fn table_dir(vault: &Path, id: &str) -> Result<PathBuf, String> {
@@ -461,7 +461,7 @@ pub(crate) fn read_all_tables_meta(vault: &Path) -> Result<Vec<TableMeta>, Strin
 // ---------------------------------------------------------------------------
 
 fn db_favorites_path(vault: &Path) -> PathBuf {
-    vault.join("data").join("database-favorites.json")
+    vault_lib::collection_dir(vault, "data").join("database-favorites.json")
 }
 
 /// Read the favorite keys (e.g. `tag:task`). Missing or unparseable file →

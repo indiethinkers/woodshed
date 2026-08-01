@@ -18,6 +18,10 @@ through Woodshed's bounded cache.
 ## Data stored on your device
 
 - The selected vault contains Markdown records, synced mail, and attachments.
+  If you adopt an existing Markdown folder, those files stay where they are and
+  appear in Notebook; new Woodshed-managed records live in a visible
+  `woodshed/` child of that folder. Recoverable revisions and trash remain under
+  the vault's `.woodshed/` directory.
 - The application-data directory contains non-secret preferences, a rebuildable
   SQLite search index, a rebuildable iCal event cache, durable Agent run records,
   and rotating local logs. Agent run records include submitted message context,

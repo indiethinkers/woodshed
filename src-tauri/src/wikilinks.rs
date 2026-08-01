@@ -227,7 +227,7 @@ pub(crate) fn remove_record_backlinks(
     }
     let mut files = Vec::new();
     for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault.join(subdir), &mut files)?;
+        collect_markdown_files(&crate::vault::collection_dir(vault, subdir), &mut files)?;
     }
     let mut changed = 0usize;
     for path in files {

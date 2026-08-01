@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   CalendarDays,
   FileText,
@@ -66,6 +66,7 @@ const COLUMNS: RecordColumn<NoteDto>[] = [
 
 export function NoteList() {
   const navigate = useNavigate();
+  const { folder } = useSearch({ from: "/notebook/" });
   const { data, isLoading, isError, refetch } = useAllNotes();
   const notes = data ?? [];
   const { create, update, remove } = useNoteMutations();
@@ -90,6 +91,14 @@ export function NoteList() {
       unit="notes"
       rows={notes}
       columns={columns}
+      prefilter={(rows) =>
+        folder
+          ? rows.filter(
+              (note) =>
+                note.folder === folder || note.folder?.startsWith(`${folder}/`),
+            )
+          : rows
+      }
       loading={isLoading}
       rowKey={(note) => note.id}
       rowHref={(note) => `/notebook/${note.id}`}

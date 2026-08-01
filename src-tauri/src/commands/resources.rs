@@ -894,7 +894,7 @@ fn rewrite_resource_backlinks_after_title_change(
 
     let mut files = Vec::new();
     for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault.join(subdir), &mut files)?;
+        collect_markdown_files(&vault_lib::collection_dir(vault, subdir), &mut files)?;
     }
 
     let mut changed = 0usize;

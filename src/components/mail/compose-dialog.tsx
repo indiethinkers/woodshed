@@ -95,9 +95,13 @@ export function ComposeDialog({
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  const draftKind = mode.kind === "reply" ? "reply" : "new";
-  const draftSourceMessageId = "source" in mode ? mode.source.id : undefined;
-  const draftThreadId = mode.kind === "reply" ? mode.source.threadId : undefined;
+  const draftKind = draft?.kind ?? (mode.kind === "reply" ? "reply" : "new");
+  const draftSourceMessageId =
+    draft?.sourceMessageId ?? ("source" in mode ? mode.source.id : undefined);
+  const draftThreadId =
+    draft?.threadId ?? (mode.kind === "reply" ? mode.source.threadId : undefined);
+  const isReply =
+    draftKind === "reply" && !!draftSourceMessageId && !!draftThreadId;
 
   // The parent drives "reset on a different message/mode" by changing the
   // `key` it passes to ComposeDialog — that remounts this component fresh,
@@ -227,7 +231,7 @@ export function ComposeDialog({
       setError("At least one recipient is required.");
       return;
     }
-    if (!subject.trim() && mode.kind !== "reply") {
+    if (!subject.trim() && !isReply) {
       setStatus("error");
       setError("Subject is required.");
       return;
@@ -236,10 +240,10 @@ export function ComposeDialog({
     setStatus("sending");
     setError(null);
     try {
-      if (mode.kind === "reply") {
+      if (isReply && draftSourceMessageId && draftThreadId) {
         const input: ReplyInput = {
-          inReplyToMessageId: mode.source.id,
-          threadId: mode.source.threadId,
+          inReplyToMessageId: draftSourceMessageId,
+          threadId: draftThreadId,
           fromInbox: fromInbox || undefined,
           to: recipients,
           cc: parseRecipients(cc),
@@ -269,7 +273,7 @@ export function ComposeDialog({
         );
       }
       setStatus("idle");
-      toast.success(toastMessage(mode), {
+      toast.success(toastMessage(mode, isReply), {
         description: recipients.join(", "),
       });
       onSent?.();
@@ -334,7 +338,7 @@ export function ComposeDialog({
   const fromInboxObj = inboxes.find((i) => i.inboxId === fromInbox);
 
   const titleLabel =
-    mode.kind === "reply"
+    isReply
       ? "Reply"
       : mode.kind === "forward"
         ? "Forward"
@@ -655,8 +659,8 @@ function FromRow({
   );
 }
 
-function toastMessage(mode: ComposeMode): string {
-  if (mode.kind === "reply") return "Reply sent";
+function toastMessage(mode: ComposeMode, isReply: boolean): string {
+  if (isReply) return "Reply sent";
   if (mode.kind === "forward") return "Forwarded";
   return "Email sent";
 }

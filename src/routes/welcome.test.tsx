@@ -26,9 +26,19 @@ describe("WelcomePage", () => {
 
   it("renders Step 1 with the headline and step indicator", () => {
     render(<WelcomePage />);
-    expect(screen.getByText("Where should your vault live?")).toBeInTheDocument();
+    expect(screen.getByText("Bring your files into Woodshed")).toBeInTheDocument();
     expect(screen.getByText("1 of 2")).toBeInTheDocument();
     expect(screen.getByLabelText("Vault location")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Open Markdown folder/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.queryByText(/Seed with sample content/)).not.toBeInTheDocument();
+  });
+
+  it("offers sample content only for a new vault", () => {
+    render(<WelcomePage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Create new vault/ }));
     expect(screen.getByText(/Seed with sample content/)).toBeInTheDocument();
   });
 

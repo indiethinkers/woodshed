@@ -23,7 +23,7 @@ const SEED_DATE: &str = "2026-04-25";
 
 pub fn seed_all(vault: &Path) -> Result<(), String> {
     for person in seed_people() {
-        let path = vault.join("people").join(format!("{}.md", person.id));
+        let path = crate::vault::collection_dir(vault, "people").join(format!("{}.md", person.id));
         let content = parsers::serialize_person(&person).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
@@ -40,13 +40,13 @@ pub fn seed_all(vault: &Path) -> Result<(), String> {
     }
 
     for task in seed_tasks() {
-        let path = vault.join("tasks").join(format!("{}.md", task.id));
+        let path = crate::vault::collection_dir(vault, "tasks").join(format!("{}.md", task.id));
         let content = parsers::serialize_task(&task).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
 
     for note in seed_notes() {
-        let path = vault.join("notebook").join(format!("{}.md", note.id));
+        let path = crate::vault::collection_dir(vault, "notebook").join(format!("{}.md", note.id));
         let content = parsers::serialize_note(&note).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
@@ -65,7 +65,7 @@ pub fn seed_all(vault: &Path) -> Result<(), String> {
     vault_lib::write_atomic(&journal_path, &journal_content).map_err(|e| e.to_string())?;
 
     let (budget_table, budget_rows) = seed_budget_table();
-    let budget_dir = vault.join("tables").join(&budget_table.id);
+    let budget_dir = crate::vault::collection_dir(vault, "tables").join(&budget_table.id);
     std::fs::create_dir_all(&budget_dir).map_err(|e| e.to_string())?;
     let schema_content =
         parsers::serialize_table_schema(&budget_table).map_err(|e| e.to_string())?;

@@ -329,7 +329,7 @@ fn scan_tasks(
 ) -> Result<(), String> {
     each_md_file(
         vault,
-        &vault.join("tasks"),
+        &vault_lib::collection_dir(vault, "tasks"),
         selected_paths,
         |path, content| {
             let task = match parsers::parse_task(&content) {
@@ -360,7 +360,7 @@ fn scan_notes(
 ) -> Result<(), String> {
     each_md_file(
         vault,
-        &vault.join("notebook"),
+        &vault_lib::collection_dir(vault, "notebook"),
         selected_paths,
         |path, content| {
             let note = match parsers::parse_note(&content) {
@@ -391,7 +391,7 @@ fn scan_people(
 ) -> Result<(), String> {
     each_md_file(
         vault,
-        &vault.join("people"),
+        &vault_lib::collection_dir(vault, "people"),
         selected_paths,
         |path, content| {
             let person = match parsers::parse_person(&content) {

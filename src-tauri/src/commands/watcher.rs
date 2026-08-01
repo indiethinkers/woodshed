@@ -61,6 +61,7 @@ pub fn watcher_start(
     // subdirs can miss empty folders the migration has no files to create.
     crate::vault::ensure_dirs(&vault_root)
         .map_err(|e| format!("validate vault directories: {e:#}"))?;
+    let records_root = crate::vault::records_root(&vault_root);
 
     // One-shot migration: calendar→cadence, spaces.json→areas.json,
     // daily/<d>.md→cadence/<d>.md,
@@ -69,7 +70,7 @@ pub fn watcher_start(
     // index sees post-migration paths, and before the watcher starts so
     // we don't fire change events for the moves themselves.
     let mut migration_changed = false;
-    match crate::vault::migrate_legacy_folders(&vault_root) {
+    match crate::vault::migrate_legacy_folders(&records_root) {
         Ok(report) => {
             migration_changed = report.cadence_files_moved
                 + report.resource_files_normalized
@@ -99,7 +100,7 @@ pub fn watcher_start(
         Err(e) => crate::log_error!("vault::migration", "{}", e),
     }
 
-    match crate::commands::mail::migrate_gmail_thread_ids(&vault_root) {
+    match crate::commands::mail::migrate_gmail_thread_ids(&records_root) {
         Ok(0) => {}
         Ok(count) => {
             migration_changed = true;
@@ -116,7 +117,7 @@ pub fn watcher_start(
     // for ~30 seconds and tried to write thousands of files; many made
     // it to disk before the renderer crashed, polluting cadence/. The
     // sweep is idempotent — finds nothing on a clean vault.
-    match crate::gcal::cache::cleanup_legacy_cadence_files(&vault_root) {
+    match crate::gcal::cache::cleanup_legacy_cadence_files(&records_root) {
         Ok(0) => {}
         Ok(n) => crate::log_info!("gcal::cleanup", "swept {n} legacy cadence/gcal-*.md files"),
         Err(e) => crate::log_error!("gcal::cleanup", "legacy sweep failed: {e}"),
@@ -236,11 +237,18 @@ pub fn watcher_start(
             let path = match &change {
                 VaultChange::Modified(p) | VaultChange::Removed(p) => p,
             };
-            let top = path
+            let mut relative_segments = path
                 .strip_prefix(&root_for_callback)
                 .ok()
-                .and_then(|r| r.iter().next())
-                .and_then(|s| s.to_str());
+                .map(|r| r.iter().filter_map(|s| s.to_str()));
+            let top = relative_segments.as_mut().and_then(|segments| {
+                let first = segments.next()?;
+                if first == crate::vault::IMPORTED_RECORDS_DIR {
+                    segments.next()
+                } else {
+                    Some(first)
+                }
+            });
             if let Some(seg) = top {
                 if seg == crate::vault::EVENTS_DIR
                     || seg == crate::vault::CADENCE_DIR
@@ -299,7 +307,10 @@ pub fn watcher_start(
     // present, so no second vault can accumulate another scope in this
     // process; a failed startup grants nothing.
     app.asset_protocol_scope()
-        .allow_directory(vault_root.join("attachments"), true)
+        .allow_directory(
+            crate::vault::collection_dir(&vault_root, "attachments"),
+            true,
+        )
         .map_err(|e| format!("allow vault attachments: {e}"))?;
 
     *watcher_guard = Some(watcher);
