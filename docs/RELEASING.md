@@ -13,7 +13,7 @@ shape as Logseq: users download platform installers from release assets.
 - [GitHub Packages documentation](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages)
 - [Tauri GitHub Actions guide](https://v2.tauri.app/distribute/pipelines/github/)
 
-## One-time repository setup
+## Signed installer setup
 
 Add these Actions secrets under **Settings → Secrets and variables → Actions**:
 
@@ -28,6 +28,12 @@ The release workflow validates that all six names are configured without
 printing their values. See Tauri's
 [macOS signing guide](https://v2.tauri.app/distribute/sign/macos/) for how to
 create the certificate and notarization credentials.
+
+Set the Actions repository variable `WOODSHED_SIGNED_RELEASES` to `true` to
+build signed installers automatically for version tags. Without that variable,
+tag pushes still validate the release metadata and dependencies but skip the
+installer jobs. A manual workflow dispatch always attempts a signed build and
+therefore requires all six secrets.
 
 ## Prepare a release
 
@@ -48,10 +54,21 @@ create the certificate and notarization credentials.
    git push origin vX.Y.Z
    ```
 
-The tag starts `.github/workflows/release.yml`. It checks out the tagged commit,
-audits dependencies, and builds separate Apple Silicon and Intel `.dmg` files.
-The workflow creates a draft GitHub Release with generated notes and uploads
-the installers both as release assets and workflow artifacts.
+The tag starts `.github/workflows/release.yml`, which checks out the tagged
+commit and validates its metadata and dependencies.
+
+For a source-only release, create the GitHub Release after tag validation passes:
+
+```sh
+gh release create vX.Y.Z --verify-tag --title "Woodshed vX.Y.Z" --generate-notes
+```
+
+GitHub adds the source `.zip` and `.tar.gz` archives automatically.
+
+When `WOODSHED_SIGNED_RELEASES=true`, the tag also builds separate Apple Silicon
+and Intel `.dmg` files. The workflow creates a draft GitHub Release with
+generated notes and uploads the installers both as release assets and workflow
+artifacts.
 
 ## Publish or retry
 

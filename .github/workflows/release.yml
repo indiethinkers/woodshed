@@ -1,8 +1,9 @@
 name: Release (Tauri)
 
-# Triggers a signed + notarized macOS .dmg build on every tag push (v*.*.*).
-# Pilot is macOS-only — Windows/Linux are post-raise. The runner targets the
-# native arch: macOS 15 arm64 plus GitHub's supported macOS 15 Intel image.
+# Validates every release tag (v*.*.*). Signed + notarized macOS .dmg builds
+# run when WOODSHED_SIGNED_RELEASES=true or this workflow is dispatched
+# manually. Pilot is macOS-only — Windows/Linux are post-raise. The runner
+# targets the native arch: macOS 15 arm64 plus GitHub's supported Intel image.
 
 on:
   push:
@@ -43,6 +44,7 @@ jobs:
         run: bun run release:check -- "$RELEASE_TAG"
 
       - name: Check signing configuration
+        if: github.event_name == 'workflow_dispatch' || vars.WOODSHED_SIGNED_RELEASES == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -71,6 +73,7 @@ jobs:
 
   build-tauri:
     needs: validate-release
+    if: github.event_name == 'workflow_dispatch' || vars.WOODSHED_SIGNED_RELEASES == 'true'
     permissions:
       contents: write
     strategy:
