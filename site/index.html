@@ -3,105 +3,187 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Woodshed — knowledge software for people who pay for tools that work</title>
-  <meta name="description" content="Woodshed is a desktop-first knowledge OS. Your notes, calendar, inbox, and the people they connect — in one markdown vault on your computer." />
+  <title>Woodshed — stop rebuilding context across apps</title>
+  <meta name="description" content="Woodshed is a macOS workspace connecting your calendar, inbox, notes, tasks, and people in local Markdown." />
 
-  <!-- Open Graph -->
-  <meta property="og:title" content="Woodshed" />
-  <meta property="og:description" content="A desktop-first knowledge OS. Local markdown, real graph." />
+  <link rel="canonical" href="https://woodshed.md/" />
+  <meta property="og:title" content="Woodshed — your work, connected" />
+  <meta property="og:description" content="Stop rebuilding context across your calendar, inbox, notes, tasks, and contacts. Keep the durable record in local Markdown." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://woodshed.md/" />
+  <meta property="og:image" content="https://woodshed.md/brand-mark.png" />
+  <meta name="twitter:card" content="summary" />
 
   <link rel="icon" type="image/png" href="brand-mark.png" />
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body class="landing">
+
+<a class="skip-link" href="#main">Skip to content</a>
 
 <header class="masthead">
-  <a class="brand" href="/" aria-label="Woodshed home">
-    <img class="brand-mark" src="brand-mark.png" alt="" aria-hidden="true" />
-    <span class="brand-name">Woodshed</span>
-  </a>
+  <div class="masthead-inner">
+    <a class="brand" href="/" aria-label="Woodshed home">
+      <img class="brand-mark" src="brand-mark.png" alt="" aria-hidden="true" />
+      <span class="brand-name">Woodshed</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#tour">How it works</a>
+      <a href="#why">Why Woodshed</a>
+      <a href="/privacy">Privacy</a>
+      <a class="nav-action" href="mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access">Request access</a>
+    </nav>
+  </div>
 </header>
 
-<main>
-
-  <section class="hero">
-    <h1 class="display">Knowledge software<br/>for people who pay for tools that work.</h1>
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <p class="eyebrow">A local-first workspace for relationship-heavy work</p>
+    <h1 id="hero-title">Stop rebuilding context every time you switch apps.</h1>
     <p class="lede">
-      Your notes, your calendar, your inbox, and the people they connect.
-      In one markdown vault. On your computer.
+      Woodshed connects your calendar, inbox, notes, tasks, and people. Prepare
+      for a meeting, capture the follow-up, and find the whole trail later—without
+      giving up control of your files.
     </p>
-    <p class="cta">
-      <a class="primary-action" href="mailto:hello@woodshed.md?subject=Woodshed%20early%20access&amp;body=I'd%20like%20early%20access.%20I%20currently%20use%3A%20%5BNotion%2C%20Superhuman%2C%20Obsidian%2C%20etc.%5D%0AWhat%20I'm%20hoping%20Woodshed%20fixes%3A%20%5B...%5D">
-        Request early access &nbsp;<span aria-hidden="true">→</span>
+    <div class="hero-actions">
+      <a class="primary-action" href="mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access">
+        Request pilot access <span aria-hidden="true">↗</span>
       </a>
-    </p>
-    <p class="meta">
-      Pilot opening Q3 2026 &nbsp;·&nbsp; macOS first &nbsp;·&nbsp; markdown forever
+      <a class="text-action" href="#tour">Take the 45-second tour <span aria-hidden="true">↓</span></a>
+    </div>
+    <p class="status-line">
+      <span>Source preview available</span>
+      <span>Pilot builds planned for Q3 2026</span>
+      <span>macOS first</span>
     </p>
   </section>
 
-  <section class="prose">
+  <section class="tour-section" id="tour" aria-labelledby="tour-title">
+    <div class="section-heading">
+      <p class="section-number">01 / The product</p>
+      <div>
+        <h2 id="tour-title">Capture context once.<br />Recover it wherever you work.</h2>
+        <p>One ordinary workday shows the difference.</p>
+      </div>
+    </div>
 
-    <h2>What it is</h2>
-    <p>
-      Woodshed is a desktop-first knowledge management application.
-      You pick a folder on your computer. Woodshed makes that folder
-      feel like a single workspace for everything you think about
-      and everyone you know. Each document is a plain
-      <code>.md</code> file you can open in any editor.
-    </p>
+    <figure class="product-tour">
+      <img src="product-tour.svg" alt="A three-step Woodshed workflow: plan the day, connect a person while writing, then reopen their complete context." />
+      <figcaption>Start with the day. Leave with a connected record.</figcaption>
+    </figure>
 
-    <h2>How it works</h2>
-    <p>
-      Type <code>[[Jamie Parker]]</code> in your daily journal and
-      Woodshed creates a person page for him. Mention
-      <code>#task</code> and a row appears in a tag table that
-      auto-aggregates across the whole vault. Connect Gmail and
-      Woodshed pulls Jamie Parker's recent emails onto his page,
-      read-only, indexed locally. Connect calendar and his next
-      meeting shows up too.
-    </p>
-    <p>
-      Wikilinks are the graph. Tags are the database. People are
-      the nodes. Your daily journal is the gravity well. The whole
-      thing is files in a folder you control.
-    </p>
-
-    <h2>Where your data lives</h2>
-    <p>
-      On your computer. There is no Woodshed server. Your markdown
-      files stay in your vault folder. The rebuildable local index lives
-      in Woodshed's app data directory. Gmail App Passwords use an
-      owner-only local file; calendar secrets use your operating system's
-      credential store. Nothing transmits to anyone we operate, because
-      we do not operate anything. The
-      <a href="/privacy">privacy policy</a> walks through this in
-      detail.
-    </p>
-
-    <h2>Who it's for</h2>
-    <p>
-      People who already pay for Notion or Superhuman or Notion
-      Calendar and find themselves wishing they spoke to each
-      other. People who like Obsidian's markdown discipline but
-      can't get past the aesthetic. People who manage other people,
-      or relationships, or clients, and want their software to
-      treat people as first-class.
-    </p>
-
+    <ol class="workflow">
+      <li>
+        <span class="workflow-index">01</span>
+        <h3>Start with the day</h3>
+        <p>Cadence puts today’s schedule, tasks, and working note in the same view.</p>
+      </li>
+      <li>
+        <span class="workflow-index">02</span>
+        <h3>Connect as you write</h3>
+        <p>Link a person or topic once. Woodshed carries that relationship into backlinks and related records.</p>
+      </li>
+      <li>
+        <span class="workflow-index">03</span>
+        <h3>Return with context</h3>
+        <p>Open a person later to recover the meetings, mail, notes, and follow-ups around them.</p>
+      </li>
+    </ol>
   </section>
 
+  <section class="problem-section" id="why" aria-labelledby="why-title">
+    <p class="section-number">02 / Why Woodshed</p>
+    <div class="problem-copy">
+      <h2 id="why-title">Your work is already connected.<br />Your software isn’t.</h2>
+      <p>
+        The meeting lives in a calendar, its notes in a document, the follow-up
+        in a task manager, and the relevant conversation in an inbox. Woodshed
+        makes those records parts of one trail instead of five separate searches.
+      </p>
+    </div>
+  </section>
+
+  <section class="outcomes" aria-label="Woodshed benefits">
+    <article>
+      <p class="outcome-mark" aria-hidden="true">⌁</p>
+      <h3>Run the day, not the apps</h3>
+      <p>Your daily note, schedule, and tasks share one working surface.</p>
+    </article>
+    <article>
+      <p class="outcome-mark" aria-hidden="true">◎</p>
+      <h3>Keep the human thread</h3>
+      <p>People connect the meetings, messages, notes, and work around a relationship.</p>
+    </article>
+    <article>
+      <p class="outcome-mark" aria-hidden="true">⌗</p>
+      <h3>Own the durable record</h3>
+      <p>Markdown stays readable, editable, and useful without Woodshed.</p>
+    </article>
+  </section>
+
+  <section class="ownership-section" aria-labelledby="ownership-title">
+    <div class="ownership-copy">
+      <p class="section-number">03 / Local by design</p>
+      <h2 id="ownership-title">The app is a lens.<br />Your files are the source of truth.</h2>
+      <p>
+        Choose a folder on your computer or adopt one you already use. Woodshed
+        turns its Markdown into a fast, connected workspace without requiring a
+        Woodshed account or hosted backend.
+      </p>
+      <a href="/privacy">Read the privacy model <span aria-hidden="true">→</span></a>
+    </div>
+    <dl class="ownership-facts">
+      <div>
+        <dt>Storage</dt>
+        <dd>Plain Markdown and local attachments</dd>
+      </div>
+      <div>
+        <dt>Network</dt>
+        <dd>Only configured integrations you invoke</dd>
+      </div>
+      <div>
+        <dt>Account</dt>
+        <dd>None</dd>
+      </div>
+      <div>
+        <dt>Telemetry</dt>
+        <dd>None</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="audience-section" aria-labelledby="audience-title">
+    <p class="section-number">04 / Who it is for</p>
+    <div>
+      <h2 id="audience-title">For people whose work runs on context.</h2>
+      <p>
+        Founders, managers, consultants, researchers, and anyone tired of
+        reconstructing a relationship or project across separate tools.
+      </p>
+      <p class="fit-note">
+        Woodshed is a single-player macOS workspace, not a hosted team wiki.
+        The source is public today; downloadable builds are not yet published.
+      </p>
+    </div>
+  </section>
+
+  <section class="closing-section" aria-labelledby="closing-title">
+    <p class="section-number">Pilot / Q3 2026</p>
+    <h2 id="closing-title">Keep the context.<br />Lose the app-hopping.</h2>
+    <a class="primary-action primary-action-light" href="mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access">
+      Request pilot access <span aria-hidden="true">↗</span>
+    </a>
+  </section>
 </main>
 
 <footer>
   <div class="footer-inner">
     <span class="copy">© 2026 Woodshed.</span>
-    <nav>
+    <nav aria-label="Footer navigation">
+      <a href="https://github.com/indiethinkers/woodshed">GitHub</a>
       <a href="/privacy">Privacy</a>
       <a href="/terms">Terms</a>
-      <a href="mailto:hello@woodshed.md">hello@woodshed.md</a>
+      <a href="mailto:hello@woodshed.md">Contact</a>
     </nav>
   </div>
 </footer>

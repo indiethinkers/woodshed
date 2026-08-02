@@ -1,7 +1,8 @@
 {
   "name": "woodshed",
   "version": "0.1.0",
-  "description": "Desktop-first, local-first knowledge management app",
+  "description": "A macOS workspace connecting calendar, inbox, notes, tasks, and people in local Markdown.",
+  "homepage": "https://woodshed.md",
   "license": "Apache-2.0",
   "repository": "github:indiethinkers/woodshed",
   "packageManager": "bun@1.3.13",
