@@ -6,5 +6,6 @@ export const Route = createLazyFileRoute("/mail/")({
 });
 
 export function MailIndex() {
-  return <MailInbox />;
+  const { mailbox } = Route.useSearch();
+  return <MailInbox mailbox={mailbox ?? "inbox"} />;
 }

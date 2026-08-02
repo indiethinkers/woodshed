@@ -6,11 +6,12 @@ use crate::parsers::{self, Note as ParsedNote};
 use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::wikilinks::{
-    collect_markdown_files, creation_trace_text, labels_match, push_unique_label,
-    replace_wikilink_labels, safe_wikilink_label, WIKILINK_REWRITE_DIRS,
+    collect_rewrite_markdown_files, creation_trace_text, labels_match, push_unique_label,
+    replace_wikilink_labels, safe_wikilink_label,
 };
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -30,6 +31,11 @@ pub struct NoteDto {
     pub tags: Vec<String>,
     pub favorite: bool,
     pub body: String,
+    /// Existing Markdown outside Woodshed's managed notebook collection.
+    pub external: bool,
+    /// Original parent directory relative to the selected vault.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 impl NoteDto {
@@ -43,6 +49,22 @@ impl NoteDto {
             .strip_prefix(vault)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| abs_path.to_string_lossy().to_string());
+        let managed_notebook = vault_lib::collection_dir(vault, "notebook");
+        let external = !abs_path.starts_with(&managed_notebook);
+        let folder = external.then(|| {
+            abs_path
+                .parent()
+                .and_then(|parent| parent.strip_prefix(vault).ok())
+                .map(|parent| {
+                    let value = parent.to_string_lossy().to_string();
+                    if value.is_empty() {
+                        ".".to_string()
+                    } else {
+                        value
+                    }
+                })
+                .unwrap_or_else(|| ".".to_string())
+        });
         NoteDto {
             id: note.id,
             path: rel,
@@ -53,6 +75,8 @@ impl NoteDto {
             tags: note.tags,
             favorite: note.favorite,
             body: note.body,
+            external,
+            folder,
         }
     }
 }
@@ -175,6 +199,115 @@ fn write_note(state: &State<AppState>, abs_path: &Path, note: &ParsedNote) -> Re
     vault_lib::write_atomic(abs_path, &serialized).map_err(|e| e.to_string())
 }
 
+fn write_external_body(
+    state: &State<AppState>,
+    abs_path: &Path,
+    original: &str,
+    body: &str,
+) -> Result<(), String> {
+    let next = replace_markdown_body(original, body);
+    if let Some(watcher) = state.watcher.lock_recover().as_ref() {
+        watcher.record_self_write(abs_path);
+    }
+    vault_lib::write_atomic(abs_path, &next).map_err(|e| e.to_string())
+}
+
+fn write_external_metadata(
+    state: &State<AppState>,
+    abs_path: &Path,
+    original: &str,
+    title: Option<&str>,
+    area: Option<&Option<String>>,
+    tags: Option<&[String]>,
+    favorite: Option<bool>,
+) -> Result<(), String> {
+    let next = patch_markdown_frontmatter(original, title, area, tags, favorite)?;
+    if let Some(watcher) = state.watcher.lock_recover().as_ref() {
+        watcher.record_self_write(abs_path);
+    }
+    vault_lib::write_atomic(abs_path, &next).map_err(|e| e.to_string())
+}
+
+fn frontmatter_parts(content: &str) -> Option<(&str, &str)> {
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
+    let mut offset = 0usize;
+    for line in rest.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed == "---" {
+            let yaml = &rest[..offset];
+            let body = &rest[offset + line.len()..];
+            return Some((yaml, body.trim_start_matches(['\r', '\n'])));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+fn replace_markdown_body(original: &str, body: &str) -> String {
+    if let Some((yaml, _)) = frontmatter_parts(original) {
+        if body.is_empty() {
+            format!("---\n{yaml}---\n")
+        } else {
+            format!("---\n{yaml}---\n\n{body}")
+        }
+    } else {
+        body.to_string()
+    }
+}
+
+fn patch_markdown_frontmatter(
+    original: &str,
+    title: Option<&str>,
+    area: Option<&Option<String>>,
+    tags: Option<&[String]>,
+    favorite: Option<bool>,
+) -> Result<String, String> {
+    let (raw_yaml, body) = frontmatter_parts(original).unwrap_or(("", original));
+    let mut map: serde_yaml::Mapping = if raw_yaml.trim().is_empty() {
+        serde_yaml::Mapping::new()
+    } else {
+        serde_yaml::from_str(raw_yaml).map_err(|error| {
+            format!("cannot update metadata because YAML frontmatter is invalid: {error}")
+        })?
+    };
+    let key = |value: &str| serde_yaml::Value::String(value.to_string());
+    if let Some(title) = title {
+        map.insert(key("title"), key(title));
+    }
+    if let Some(area) = area {
+        match area {
+            Some(area) => {
+                map.insert(key("area"), key(area));
+            }
+            None => {
+                map.remove(key("area"));
+                map.remove(key("space"));
+            }
+        }
+    }
+    if let Some(tags) = tags {
+        map.insert(
+            key("tags"),
+            serde_yaml::Value::Sequence(tags.iter().map(|tag| key(tag)).collect()),
+        );
+    }
+    if let Some(favorite) = favorite {
+        if favorite {
+            map.insert(key("favorite"), serde_yaml::Value::Bool(true));
+        } else {
+            map.remove(key("favorite"));
+        }
+    }
+    let yaml = serde_yaml::to_string(&map).map_err(|error| error.to_string())?;
+    if body.trim().is_empty() {
+        Ok(format!("---\n{yaml}---\n"))
+    } else {
+        Ok(format!("---\n{yaml}---\n\n{}", body.trim()))
+    }
+}
+
 fn index_note(
     app: &AppHandle,
     state: &State<AppState>,
@@ -190,24 +323,120 @@ fn index_note(
     }
 }
 
-fn unindex_note(app: &AppHandle, state: &State<AppState>, id: &str) {
+fn unindex_note(app: &AppHandle, state: &State<AppState>, vault: &Path, path: &Path) {
     if let Ok(idx) = state.ensure_index(app) {
-        let rel = format!("notebook/{}.md", id);
+        let rel = path
+            .strip_prefix(vault)
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
         if let Err(e) = idx.delete_by_path(&rel) {
-            eprintln!("unindex note {}: {}", id, e);
+            eprintln!("unindex note failed: {e}");
         }
     }
 }
 
 pub(crate) fn read_note(vault: &Path, abs_path: &Path) -> Result<NoteDto, String> {
     let content = vault_lib::read_record(abs_path).map_err(|e| e.to_string())?;
-    let parsed = parsers::parse_note(&content).map_err(|e| format!("{:#}", e))?;
+    let parsed = parse_note_at_path(vault, abs_path, &content)?;
     Ok(NoteDto::from_parsed(
         parsed,
         vault,
         abs_path,
         vault_lib::content_revision(&content),
     ))
+}
+
+pub(crate) fn parse_note_at_path(
+    vault: &Path,
+    abs_path: &Path,
+    content: &str,
+) -> Result<ParsedNote, String> {
+    let external = vault_lib::is_imported_layout(vault)
+        && !abs_path.starts_with(vault_lib::records_root(vault));
+    if !external {
+        return parsers::parse_note(content).map_err(|e| format!("{e:#}"));
+    }
+
+    use gray_matter::{engine::YAML, Matter};
+    let parsed = Matter::<YAML>::new().parse(content);
+    let map = parsed.data.as_ref().and_then(|data| data.as_hashmap().ok());
+    let string_field = |name: &str| {
+        map.as_ref()
+            .and_then(|values| values.get(name))
+            .and_then(|value| value.as_string().ok())
+            .filter(|value| !value.trim().is_empty())
+    };
+    let body = if parsed.data.is_some() {
+        parsed.content.trim().to_string()
+    } else {
+        content.trim().to_string()
+    };
+    let title = string_field("title")
+        .or_else(|| markdown_heading(&body))
+        .unwrap_or_else(|| title_from_path(abs_path));
+    let rel = abs_path
+        .strip_prefix(vault)
+        .map_err(|_| "note path escapes configured vault".to_string())?;
+    let id = format!("file-{}", short_path_hash(rel));
+    let created = string_field("created").unwrap_or_else(|| file_time(abs_path));
+    let area = string_field("area").or_else(|| string_field("space"));
+    let tags = map
+        .as_ref()
+        .and_then(|values| values.get("tags"))
+        .and_then(|value| value.as_vec().ok())
+        .map(|items| {
+            items
+                .into_iter()
+                .filter_map(|item| item.as_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let favorite = map
+        .as_ref()
+        .and_then(|values| values.get("favorite"))
+        .and_then(|value| value.as_bool().ok())
+        .unwrap_or(false);
+    Ok(ParsedNote {
+        id,
+        title,
+        area,
+        created,
+        tags,
+        favorite,
+        body,
+    })
+}
+
+fn markdown_heading(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.strip_prefix("# ").map(str::trim))
+        .filter(|title| !title.is_empty())
+        .map(String::from)
+}
+
+fn title_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Untitled")
+        .replace(['-', '_'], " ")
+}
+
+fn short_path_hash(path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn file_time(path: &Path) -> String {
+    let time = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok())
+        .unwrap_or(std::time::UNIX_EPOCH);
+    chrono::DateTime::<chrono::Local>::from(time).to_rfc3339()
 }
 
 fn validate_note_identity(
@@ -265,10 +494,7 @@ fn rewrite_note_backlinks_after_title_change(
         return Ok(0);
     }
 
-    let mut files = Vec::new();
-    for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault.join(subdir), &mut files)?;
-    }
+    let files = collect_rewrite_markdown_files(vault)?;
 
     let mut changed = 0usize;
     for path in files {
@@ -297,7 +523,8 @@ pub fn note_create(
     input: NoteCreate,
 ) -> Result<NoteDto, String> {
     let vault = vault_root(&app)?;
-    std::fs::create_dir_all(vault.join("notebook")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(vault_lib::collection_dir(&vault, "notebook"))
+        .map_err(|e| e.to_string())?;
 
     let id = unique_id(&vault, &slugify_title(&input.title))?;
     let path = note_path(&vault, &id)?;
@@ -332,10 +559,9 @@ pub fn note_create(
 #[tauri::command]
 pub fn note_get(app: AppHandle, id: String) -> Result<Option<NoteDto>, String> {
     let vault = vault_root(&app)?;
-    let path = note_path(&vault, &id)?;
-    if !path.exists() {
+    let Some(path) = find_note_path(&vault, &id, None)? else {
         return Ok(None);
-    }
+    };
     read_note(&vault, &path).map(Some)
 }
 
@@ -347,9 +573,10 @@ pub fn note_update_body(
     input: NoteBodyUpdate,
 ) -> Result<NoteDto, String> {
     let vault = vault_root(&app)?;
-    let path = note_path(&vault, &id)?;
+    let path = find_note_path(&vault, &id, input.expected_path.as_deref())?
+        .ok_or_else(|| format!("note not found: {id}"))?;
     let content = vault_lib::read_record(&path).map_err(|e| e.to_string())?;
-    let mut note = parsers::parse_note(&content).map_err(|e| format!("{:#}", e))?;
+    let mut note = parse_note_at_path(&vault, &path, &content)?;
     validate_note_identity(
         &vault,
         &path,
@@ -366,7 +593,11 @@ pub fn note_update_body(
         return read_note(&vault, &path);
     }
     note.body = input.body;
-    write_note(&state, &path, &note)?;
+    if is_external_note_path(&vault, &path) {
+        write_external_body(&state, &path, &content, &note.body)?;
+    } else {
+        write_note(&state, &path, &note)?;
+    }
     index_note(&app, &state, &vault, &path, &note);
     read_note(&vault, &path)
 }
@@ -379,9 +610,10 @@ pub fn note_update_title(
     input: NoteTitleUpdate,
 ) -> Result<NoteDto, String> {
     let vault = vault_root(&app)?;
-    let path = note_path(&vault, &id)?;
+    let path = find_note_path(&vault, &id, input.expected_path.as_deref())?
+        .ok_or_else(|| format!("note not found: {id}"))?;
     let content = vault_lib::read_record(&path).map_err(|e| e.to_string())?;
-    let mut note = parsers::parse_note(&content).map_err(|e| format!("{:#}", e))?;
+    let mut note = parse_note_at_path(&vault, &path, &content)?;
     validate_note_identity(
         &vault,
         &path,
@@ -400,7 +632,11 @@ pub fn note_update_title(
         return read_note(&vault, &path);
     }
     note.title = next.to_string();
-    write_note(&state, &path, &note)?;
+    if is_external_note_path(&vault, &path) {
+        write_external_metadata(&state, &path, &content, Some(&note.title), None, None, None)?;
+    } else {
+        write_note(&state, &path, &note)?;
+    }
     index_note(&app, &state, &vault, &path, &note);
     rewrite_note_backlinks_after_title_change(&app, &state, &vault, &note, &old_title, &id)?;
     read_note(&vault, &path)
@@ -414,9 +650,13 @@ pub fn note_update_metadata(
     input: NoteMetadataUpdate,
 ) -> Result<NoteDto, String> {
     let vault = vault_root(&app)?;
-    let path = note_path(&vault, &id)?;
+    let path = find_note_path(&vault, &id, input.expected_path.as_deref())?
+        .ok_or_else(|| format!("note not found: {id}"))?;
     let content = vault_lib::read_record(&path).map_err(|e| e.to_string())?;
-    let mut note = parsers::parse_note(&content).map_err(|e| format!("{:#}", e))?;
+    let mut note = parse_note_at_path(&vault, &path, &content)?;
+    let area_update = input.area.clone();
+    let tags_update = input.tags.clone();
+    let favorite_update = input.favorite;
     validate_note_identity(
         &vault,
         &path,
@@ -434,7 +674,19 @@ pub fn note_update_metadata(
     if let Some(favorite) = input.favorite {
         note.favorite = favorite;
     }
-    write_note(&state, &path, &note)?;
+    if is_external_note_path(&vault, &path) {
+        write_external_metadata(
+            &state,
+            &path,
+            &content,
+            None,
+            area_update.as_ref(),
+            tags_update.as_deref(),
+            favorite_update,
+        )?;
+    } else {
+        write_note(&state, &path, &note)?;
+    }
     index_note(&app, &state, &vault, &path, &note);
     read_note(&vault, &path)
 }
@@ -442,7 +694,9 @@ pub fn note_update_metadata(
 #[tauri::command]
 pub fn note_delete(app: AppHandle, state: State<AppState>, id: String) -> Result<(), String> {
     let vault = vault_root(&app)?;
-    let path = note_path(&vault, &id)?;
+    let Some(path) = find_note_path(&vault, &id, None)? else {
+        return Ok(());
+    };
     // Capture the labels its creation trace was logged under *before* the file
     // is gone, so we can scrub that backlink from the day's journal.
     let mut labels = vec![id.clone()];
@@ -456,7 +710,7 @@ pub fn note_delete(app: AppHandle, state: State<AppState>, id: String) -> Result
         vault_lib::snapshot_existing_file(&path, None).map_err(|e| e.to_string())?;
         vault_lib::move_to_trash(&vault, &path)?;
     }
-    unindex_note(&app, &state, &id);
+    unindex_note(&app, &state, &vault, &path);
     if let Err(e) = crate::wikilinks::remove_record_backlinks(&app, &state, &vault, &labels) {
         eprintln!("scrub backlinks for note {}: {}", id, e);
     }
@@ -470,7 +724,7 @@ pub async fn notes_all(app: AppHandle) -> Result<Vec<NoteDto>, String> {
 }
 
 pub(crate) fn read_all_notes(vault: &Path) -> Result<Vec<NoteDto>, String> {
-    let dir = vault.join("notebook");
+    let dir = vault_lib::collection_dir(vault, "notebook");
     if !vault_lib::is_real_directory(&dir) {
         return Ok(Vec::new());
     }
@@ -488,9 +742,62 @@ pub(crate) fn read_all_notes(vault: &Path) -> Result<Vec<NoteDto>, String> {
             Err(e) => eprintln!("skipping {}: {}", path.display(), e),
         }
     }
+    if vault_lib::is_imported_layout(vault) {
+        for path in vault_lib::collect_external_markdown_files(vault)? {
+            match read_note(vault, &path) {
+                Ok(note) => out.push(note),
+                Err(_) => eprintln!("skipping unreadable imported Markdown note"),
+            }
+        }
+    }
     // Newest first — date-grouping in the list panel buckets by created day.
     out.sort_by(|a, b| b.created.cmp(&a.created));
     Ok(out)
+}
+
+fn is_external_note_path(vault: &Path, path: &Path) -> bool {
+    vault_lib::is_imported_layout(vault) && !path.starts_with(vault_lib::records_root(vault))
+}
+
+fn find_note_path(
+    vault: &Path,
+    id: &str,
+    expected_path: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(expected) = expected_path {
+        let candidate = vault.join(expected);
+        if vault_lib::is_real_file(&candidate)
+            && candidate.extension().and_then(|value| value.to_str()) == Some("md")
+        {
+            let canonical_vault = vault.canonicalize().map_err(|error| error.to_string())?;
+            let canonical = candidate
+                .canonicalize()
+                .map_err(|error| error.to_string())?;
+            if canonical.starts_with(&canonical_vault) {
+                let note = read_note(vault, &candidate)?;
+                if note.id == id {
+                    return Ok(Some(candidate));
+                }
+            }
+        }
+        return Err("note path changed on disk; reload before saving".to_string());
+    }
+    let managed = note_path(vault, id)?;
+    if vault_lib::is_real_file(&managed) {
+        return Ok(Some(managed));
+    }
+    if !vault_lib::is_imported_layout(vault) {
+        return Ok(None);
+    }
+    for path in vault_lib::collect_external_markdown_files(vault)? {
+        if read_note(vault, &path)
+            .map(|note| note.id == id)
+            .unwrap_or(false)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -594,5 +901,70 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let vault = tmp.path().to_path_buf();
         assert!(read_all_notes(&vault).unwrap().is_empty());
+    }
+
+    #[test]
+    fn imported_markdown_appears_as_path_backed_notebook_notes() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing");
+        std::fs::create_dir_all(vault.join("Projects/Research")).unwrap();
+        std::fs::write(
+            vault.join("Projects/Research/launch-plan.md"),
+            "# Launch plan\n\nKeep the original path.",
+        )
+        .unwrap();
+        std::fs::write(
+            vault.join("Projects/Research/typed-note.md"),
+            "---\ntype: note\nid: native\ntitle: Typed external note\ncreated: 2026-01-02T10:00:00Z\ntags: []\n---\n\nExisting content.",
+        )
+        .unwrap();
+        vault_lib::initialize_imported_layout(&vault).unwrap();
+        write_sample_note(&vault, "native", "Native note", "2026-01-01T10:00:00Z");
+
+        let notes = read_all_notes(&vault).unwrap();
+        let imported = notes.iter().find(|note| note.external).unwrap();
+
+        assert_eq!(imported.title, "Launch plan");
+        assert_eq!(imported.path, "Projects/Research/launch-plan.md");
+        assert_eq!(imported.folder.as_deref(), Some("Projects/Research"));
+        assert!(imported.id.starts_with("file-"));
+        let typed = notes
+            .iter()
+            .find(|note| note.path.ends_with("typed-note.md"))
+            .unwrap();
+        assert!(typed.id.starts_with("file-"));
+        assert_ne!(typed.id, "native");
+        assert!(notes
+            .iter()
+            .any(|note| note.id == "native" && !note.external));
+    }
+
+    #[test]
+    fn external_metadata_updates_preserve_unknown_frontmatter() {
+        let original = "---\nowner: example\ntags:\n  - old\n---\n\nOriginal body";
+
+        let updated = patch_markdown_frontmatter(
+            original,
+            Some("Updated title"),
+            None,
+            Some(&["new".to_string()]),
+            Some(true),
+        )
+        .unwrap();
+
+        assert!(updated.contains("owner: example"));
+        assert!(updated.contains("title: Updated title"));
+        assert!(updated.contains("favorite: true"));
+        assert!(updated.contains("- new"));
+        assert!(updated.ends_with("Original body"));
+    }
+
+    #[test]
+    fn external_body_updates_keep_frontmatter_verbatim() {
+        let original = "---\nowner: example\n# keep this comment\n---\n\nOld body";
+        assert_eq!(
+            replace_markdown_body(original, "New body"),
+            "---\nowner: example\n# keep this comment\n---\n\nNew body"
+        );
     }
 }

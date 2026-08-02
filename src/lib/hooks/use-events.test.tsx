@@ -272,39 +272,3 @@ describe("useEventMutations.remove — optimistic delete", () => {
     ).toEqual(["e_001", "e_002"]);
   });
 });
-
-describe("useEventMutations.create", () => {
-  let qc: QueryClient;
-
-  beforeEach(() => {
-    invokeMock.mockReset();
-    qc = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-  });
-
-  it("inserts the created event into the matching date list", async () => {
-    qc.setQueryData(["events", "2026-04-25"], []);
-
-    const created = makeEvent({ id: "e_new", title: "Standup" });
-    invokeMock.mockResolvedValueOnce(created);
-
-    const { result } = renderHook(() => useEventMutations(), {
-      wrapper: makeWrapper(qc),
-    });
-
-    act(() => {
-      result.current.create.mutate({
-        title: "Standup",
-        date: "2026-04-25T09:00:00-04:00",
-        duration: 15,
-        area: "woodshed",
-      });
-    });
-
-    await waitFor(() => expect(result.current.create.isSuccess).toBe(true));
-
-    const list = qc.getQueryData<EventDto[]>(["events", "2026-04-25"]);
-    expect(list?.map((e) => e.id)).toContain("e_new");
-  });
-});

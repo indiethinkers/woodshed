@@ -85,6 +85,13 @@ afterEach(() => {
 });
 
 describe("ScheduleBlock event rows", () => {
+  it("does not offer local event creation", () => {
+    render(<ScheduleBlock date="2026-05-18" variant="sidebar" />);
+
+    expect(screen.queryByText("+ Event")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add event/i })).not.toBeInTheDocument();
+  });
+
   it("marks ended events as completed without muting active or upcoming events", () => {
     mocks.events = [
       makeEvent({

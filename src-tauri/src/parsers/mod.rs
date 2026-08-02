@@ -38,7 +38,7 @@ pub enum RecurringRule {
 }
 
 /// Origin of an event. `None` on the parsed struct means vault-local
-/// (user created via "+ Add event"); explicit variants flag externally
+/// (legacy vault-local record); explicit variants flag externally
 /// synced events. iCal is read-only; future variants (Google OAuth,
 /// Outlook) will carry write support.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

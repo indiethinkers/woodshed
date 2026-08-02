@@ -13,10 +13,12 @@ import {
   mailArchiveOne,
   mailDeleteOne,
   mailDraftDelete,
+  mailDraftsList,
   mailDraftSave,
   mailGetFull,
   mailGetLocal,
   mailInboxPage,
+  mailFolderPage,
   mailMarkRead,
   mailReply,
   mailSend,
@@ -32,6 +34,7 @@ import {
   type EmailSummary,
   type Inbox,
   type MailPage,
+  type MailFolder,
   type MailSyncResult,
   type ReplyInput,
   type SendResult,
@@ -180,12 +183,21 @@ function showArchivedEmail(qc: QueryClient, id: string) {
  * the watcher's path-routed invalidator (vault-events.ts) flips the
  * `["emails"]` key whenever inbox/ files land or change.
  */
-export function useMail() {
+export function useMailFolder(folder: MailFolder, search = "", enabled = true) {
+  const normalizedSearch = search.trim();
+  const queryKey =
+    folder === "inbox" && !normalizedSearch
+      ? (["emails"] as const)
+      : (["emails", folder, normalizedSearch] as const);
   const { data, ...query } = useInfiniteQuery({
-    queryKey: ["emails"],
-    queryFn: ({ pageParam }) => mailInboxPage(pageParam, 200),
+    queryKey,
+    queryFn: ({ pageParam }) =>
+      folder === "inbox" && !normalizedSearch
+        ? mailInboxPage(pageParam, 200)
+        : mailFolderPage(folder, normalizedSearch, pageParam, 200),
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
+    enabled,
   });
   const { data: hiddenArchiveIds = EMPTY_ARCHIVE_IDS } = useQuery<string[]>({
     queryKey: HIDDEN_ARCHIVE_IDS_KEY,
@@ -196,15 +208,28 @@ export function useMail() {
   });
   const visibleData = useMemo(() => {
     if (!data) return undefined;
-    const hiddenIds = new Set(hiddenArchiveIds);
+    const hiddenIds = new Set(folder === "inbox" ? hiddenArchiveIds : []);
     return data.pages
       .flatMap((page) => page.items)
       .filter((email) => !hiddenIds.has(email.id));
-  }, [data, hiddenArchiveIds]);
+  }, [data, folder, hiddenArchiveIds]);
   return {
     ...query,
     data: visibleData,
   };
+}
+
+export function useMail() {
+  return useMailFolder("inbox");
+}
+
+export function useDrafts(search = "", enabled = true) {
+  const normalizedSearch = search.trim();
+  return useQuery<DraftDto[]>({
+    queryKey: ["drafts", normalizedSearch],
+    queryFn: () => mailDraftsList(normalizedSearch),
+    enabled,
+  });
 }
 
 /** Consumers that genuinely aggregate the entire inbox (person activity and
@@ -440,11 +465,12 @@ export function useArchiveOne() {
     try {
       await cancelExistingReads;
       await archiveRequest;
-      await qc.cancelQueries({ queryKey: ["emails"], exact: true });
+      await qc.cancelQueries({ queryKey: ["emails"] });
       qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
         updateCachedEmails(old, (email) => (email.id === id ? null : email)),
       );
       showArchivedEmail(qc, id);
+      qc.invalidateQueries({ queryKey: ["emails"] });
       qc.invalidateQueries({ queryKey: ["email", id] });
       qc.invalidateQueries({ queryKey: ["thread"] });
     } catch (e) {

@@ -329,7 +329,7 @@ fn scan_tasks(
 ) -> Result<(), String> {
     each_md_file(
         vault,
-        &vault.join("tasks"),
+        &vault_lib::collection_dir(vault, "tasks"),
         selected_paths,
         |path, content| {
             let task = match parsers::parse_task(&content) {
@@ -358,29 +358,40 @@ fn scan_notes(
     selected_paths: Option<&HashSet<String>>,
     rows: &mut Vec<TagTableRow>,
 ) -> Result<(), String> {
+    let mut push_note = |path: PathBuf, content: String| {
+        let note = match crate::commands::notebook::parse_note_at_path(vault, &path, &content) {
+            Ok(note) => note,
+            Err(_) => return,
+        };
+        if !(tags_match(&note.tags, want) || body_has_inline_tag(&note.body, want)) {
+            return;
+        }
+        rows.push(TagTableRow {
+            id: note.id,
+            title: note.title,
+            type_: "note".into(),
+            date: note.created,
+            area: note.area.unwrap_or_default(),
+            path: rel(vault, &path),
+            event: None,
+        });
+    };
     each_md_file(
         vault,
-        &vault.join("notebook"),
+        &vault_lib::collection_dir(vault, "notebook"),
         selected_paths,
-        |path, content| {
-            let note = match parsers::parse_note(&content) {
-                Ok(n) => n,
-                Err(_) => return,
-            };
-            if !(tags_match(&note.tags, want) || body_has_inline_tag(&note.body, want)) {
-                return;
-            }
-            rows.push(TagTableRow {
-                id: note.id,
-                title: note.title,
-                type_: "note".into(),
-                date: note.created,
-                area: note.area.unwrap_or_default(),
-                path: rel(vault, &path),
-                event: None,
-            });
-        },
-    )
+        &mut push_note,
+    )?;
+    for path in vault_lib::collect_external_markdown_files(vault)? {
+        if selected_paths.is_some_and(|selected| !selected.contains(&rel(vault, &path))) {
+            continue;
+        }
+        let Ok(content) = vault_lib::read_record(&path) else {
+            continue;
+        };
+        push_note(path, content);
+    }
+    Ok(())
 }
 
 fn scan_people(
@@ -391,7 +402,7 @@ fn scan_people(
 ) -> Result<(), String> {
     each_md_file(
         vault,
-        &vault.join("people"),
+        &vault_lib::collection_dir(vault, "people"),
         selected_paths,
         |path, content| {
             let person = match parsers::parse_person(&content) {
@@ -1056,6 +1067,26 @@ mod tests {
         assert!(tags_match(&tags, "event"));
         assert!(tags_match(&tags, "sponsor"));
         assert!(!tags_match(&tags, "task"));
+    }
+
+    #[test]
+    fn imported_markdown_contributes_note_rows_to_tag_tables() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("adopted");
+        std::fs::create_dir_all(vault.join("people")).unwrap();
+        std::fs::write(
+            vault.join("people/ordinary.md"),
+            "# Ordinary note\n\nA synthetic #focus item.\n",
+        )
+        .unwrap();
+        crate::vault::initialize_imported_layout(&vault).unwrap();
+
+        let mut rows = Vec::new();
+        scan_notes(&vault, "focus", None, &mut rows).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].type_, "note");
+        assert_eq!(rows[0].path, "people/ordinary.md");
     }
 
     #[test]

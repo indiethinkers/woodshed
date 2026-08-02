@@ -7,20 +7,25 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  X,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useListPanel } from "@/components/layout/list-panel-context-internal";
 import {
   useArchiveOne,
+  useDrafts,
   useInboxes,
-  useMail,
+  useMailFolder,
   useMarkRead,
   useRefreshMail,
 } from "@/lib/hooks/use-mail";
 import {
   shouldShowUnreadIndicator,
+  type DraftDto,
   type EmailSummary,
   type Inbox,
+  type MailFolder,
+  type Mailbox,
   type SyncStats,
 } from "@/lib/mail-lib/types";
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
@@ -29,31 +34,72 @@ import { isEditableElement } from "@/lib/dom/is-editable";
 import { ComposeDialog } from "@/components/mail/compose-dialog";
 
 const ALL_INBOXES = "__all__";
+const MAILBOXES: { id: Mailbox; label: string }[] = [
+  { id: "inbox", label: "Inbox" },
+  { id: "drafts", label: "Drafts" },
+  { id: "sent", label: "Sent" },
+  { id: "archive", label: "Archive" },
+];
 
-export function MailInbox() {
+interface MailInboxProps {
+  mailbox?: Mailbox;
+}
+
+export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
   const navigate = useNavigate();
   const { collapsed } = useListPanel();
+  const [localMailbox, setLocalMailbox] = useState<Mailbox>("inbox");
+  const mailbox = routeMailbox ?? localMailbox;
+  const mailboxSearch = useMemo(
+    () => (mailbox === "inbox" ? {} : { mailbox }),
+    [mailbox],
+  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const folder: MailFolder = mailbox === "drafts" ? "inbox" : mailbox;
   const {
     data: emails = [],
     isLoading,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useMail();
+  } = useMailFolder(
+    folder,
+    mailbox === "drafts" ? "" : searchQuery,
+    mailbox !== "drafts",
+  );
+  const { data: drafts = [], isLoading: draftsLoading } = useDrafts(
+    mailbox === "drafts" ? searchQuery : "",
+    mailbox === "drafts",
+  );
   const { data: inboxes = [], isLoading: inboxesLoading } = useInboxes();
   const { data: people = [] } = useAllPeople();
   const archiveOne = useArchiveOne();
   const markRead = useMarkRead();
   const [filterInbox, setFilterInbox] = useState<string>(ALL_INBOXES);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [activeDraft, setActiveDraft] = useState<DraftDto | undefined>();
 
   const visibleThreads = useMemo(() => {
+    if (mailbox === "drafts") return [];
     const filtered =
-      filterInbox === ALL_INBOXES
+      mailbox !== "inbox" || filterInbox === ALL_INBOXES
         ? emails
         : emails.filter((e) => e.inbox === filterInbox);
     return collapseMailThreads(filtered);
-  }, [emails, filterInbox]);
+  }, [emails, filterInbox, mailbox]);
+
+  function changeMailbox(next: Mailbox) {
+    if (routeMailbox === undefined) setLocalMailbox(next);
+    void navigate({
+      to: "/mail",
+      search: next === "inbox" ? {} : { mailbox: next },
+      replace: true,
+    });
+    setCursor(0);
+    setSelected(new Set());
+    setSearchQuery("");
+  }
 
   // Raw cursor is monotonic from user input; the rendered cursor clamps
   // into range at render time so a shrinking list (refresh, filter change)
@@ -120,12 +166,14 @@ export function MailInbox() {
         const next = visibleThreads[cursor];
         if (!next) return;
         e.preventDefault();
-        markThreadRead(next);
+        if (mailbox === "inbox") markThreadRead(next);
         void navigate({
           to: "/mail/$id",
           params: { id: next.email.id },
+          search: mailboxSearch,
         });
       } else if (e.key === "e" || e.key === "E") {
+        if (mailbox !== "inbox") return;
         // Archive — Superhuman / Gmail convention. If there's a multi-
         // selection, archive every selected thread; otherwise archive
         // the focused row.
@@ -153,6 +201,7 @@ export function MailInbox() {
           }
         });
       } else if (e.key === "a" || e.key === "A") {
+        if (mailbox !== "inbox") return;
         // Toggle select-all of visible. Empty list = no-op.
         e.preventDefault();
         if (visibleThreads.length === 0) return;
@@ -169,6 +218,7 @@ export function MailInbox() {
       } else if (e.key === "c" || e.key === "C") {
         // Compose — Gmail convention.
         e.preventDefault();
+        setActiveDraft(undefined);
         setComposeOpen(true);
       }
     }
@@ -181,20 +231,27 @@ export function MailInbox() {
     archiveOne,
     liveSelected,
     markThreadRead,
+    mailbox,
+    mailboxSearch,
   ]);
 
   useEffect(() => {
     rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  const activeEmail = visibleThreads[cursor]?.email;
+  const activeEmail =
+    mailbox === "drafts" ? undefined : visibleThreads[cursor]?.email;
+  const mailboxLabel =
+    MAILBOXES.find((candidate) => candidate.id === mailbox)?.label ?? "Mail";
   const detailPanelWidthClass = "w-[300px]";
   const unreadCount = useMemo(
     () =>
-      visibleThreads.filter((thread) =>
-        shouldShowUnreadIndicator(thread.email),
-      ).length,
-    [visibleThreads],
+      mailbox === "inbox"
+        ? visibleThreads.filter((thread) =>
+            shouldShowUnreadIndicator(thread.email),
+          ).length
+        : 0,
+    [mailbox, visibleThreads],
   );
 
   return (
@@ -218,15 +275,38 @@ export function MailInbox() {
             fold are simply clipped by the shell's `overflow-hidden`. */}
         <ScrollArea className="flex-1 min-h-0">
           <div className="px-8 py-6">
+            <nav
+              aria-label="Mail folders"
+              className="mb-5 flex items-center gap-1 border-b border-border"
+            >
+              {MAILBOXES.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={mailbox === item.id ? "page" : undefined}
+                  onClick={() => changeMailbox(item.id)}
+                  className={`relative px-3 pb-2 text-[13px] transition-colors ${
+                    mailbox === item.id
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {item.label}
+                  {mailbox === item.id && (
+                    <span className="absolute inset-x-2 -bottom-px h-px bg-foreground" />
+                  )}
+                </button>
+              ))}
+            </nav>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold flex items-baseline gap-2">
-                Inbox
+                {mailboxLabel}
                 {unreadCount > 0 && (
                   <span className="text-muted-foreground text-base font-normal">
                     {unreadCount}
                   </span>
                 )}
-                {liveSelected.size > 0 && (
+                {mailbox === "inbox" && liveSelected.size > 0 && (
                   <span className="text-violet-500 text-[12px] font-normal">
                     {liveSelected.size} selected
                     <span className="text-muted-foreground/70 ml-1.5">
@@ -236,23 +316,28 @@ export function MailInbox() {
                 )}
               </h1>
               <div className="flex items-center gap-2 text-muted-foreground">
-                {inboxes.length > 1 && (
+                {mailbox === "inbox" && inboxes.length > 1 && (
                   <InboxFilter
                     inboxes={inboxes}
                     value={filterInbox}
                     onChange={setFilterInbox}
                   />
                 )}
-                <SyncRefreshButton
-                  inboxId={
-                    filterInbox === ALL_INBOXES ? undefined : filterInbox
-                  }
-                />
+                {mailbox === "inbox" && (
+                  <SyncRefreshButton
+                    inboxId={
+                      filterInbox === ALL_INBOXES ? undefined : filterInbox
+                    }
+                  />
+                )}
                 <button
                   type="button"
                   aria-label="Compose"
                   title="Compose (c)"
-                  onClick={() => setComposeOpen(true)}
+                  onClick={() => {
+                    setActiveDraft(undefined);
+                    setComposeOpen(true);
+                  }}
                   className="p-1.5 rounded hover:bg-foreground/[0.06] hover:text-foreground transition-colors"
                 >
                   <Pencil className="h-4 w-4" strokeWidth={1.75} />
@@ -260,6 +345,11 @@ export function MailInbox() {
                 <button
                   type="button"
                   aria-label="Search"
+                  aria-pressed={searchOpen}
+                  onClick={() => {
+                    if (searchOpen) setSearchQuery("");
+                    setSearchOpen((current) => !current);
+                  }}
                   className="p-1.5 rounded hover:bg-foreground/[0.06] hover:text-foreground transition-colors"
                 >
                   <Search className="h-4 w-4" strokeWidth={1.75} />
@@ -267,9 +357,60 @@ export function MailInbox() {
               </div>
             </div>
 
-            {visibleThreads.length === 0 ? (
-              <EmptyInbox
-                isLoading={isLoading || inboxesLoading}
+            {searchOpen && (
+              <div className="mb-4 flex h-9 items-center gap-2 rounded-md border border-border bg-foreground/[0.02] px-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring)]">
+                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  autoFocus
+                  type="search"
+                  aria-label="Search mail"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder={`Search ${mailboxLabel.toLowerCase()}`}
+                  className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onClick={() => setSearchQuery("")}
+                    className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {mailbox === "drafts" ? (
+              drafts.length === 0 ? (
+                <EmptyMailFolder
+                  folder="drafts"
+                  isLoading={draftsLoading}
+                  searching={!!searchQuery.trim()}
+                  hasInboxes={inboxes.length > 0}
+                />
+              ) : (
+                <div className="space-y-px">
+                  {drafts.map((draft) => (
+                    <DraftRow
+                      key={draft.id}
+                      draft={draft}
+                      onClick={() => {
+                        setActiveDraft(draft);
+                        setComposeOpen(true);
+                      }}
+                    />
+                  ))}
+                </div>
+              )
+            ) : visibleThreads.length === 0 ? (
+              <EmptyMailFolder
+                folder={mailbox}
+                isLoading={
+                  isLoading || (mailbox === "inbox" && inboxesLoading)
+                }
+                searching={!!searchQuery.trim()}
                 hasInboxes={inboxes.length > 0}
               />
             ) : (
@@ -280,11 +421,12 @@ export function MailInbox() {
                     email={thread.email}
                     messageCount={thread.messageIds.length}
                     people={people}
+                    mailbox={mailbox}
                     isCursor={idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
                     onClick={() => {
                       setCursor(idx);
-                      markThreadRead(thread);
+                      if (mailbox === "inbox") markThreadRead(thread);
                     }}
                     ref={(el) => {
                       rowRefs.current[idx] = el;
@@ -317,7 +459,11 @@ export function MailInbox() {
             defaultFromInbox:
               filterInbox === ALL_INBOXES ? undefined : filterInbox,
           }}
-          onClose={() => setComposeOpen(false)}
+          draft={activeDraft}
+          onClose={() => {
+            setComposeOpen(false);
+            setActiveDraft(undefined);
+          }}
         />
       )}
     </div>
@@ -328,6 +474,7 @@ interface EmailRowProps {
   email: EmailSummary;
   messageCount: number;
   people: PersonDto[];
+  mailbox: Mailbox;
   isCursor: boolean;
   isSelected: boolean;
   onClick: () => void;
@@ -338,6 +485,7 @@ function EmailRow({
   email,
   messageCount,
   people,
+  mailbox,
   isCursor,
   isSelected,
   onClick,
@@ -353,10 +501,15 @@ function EmailRow({
       : "hover:bg-foreground/[0.025]";
   const senderPerson = findPersonForMailSender(people, email);
   const senderName = senderPerson?.name ?? email.from;
+  const correspondent =
+    mailbox === "sent" && email.to?.length
+      ? email.to.join(", ")
+      : senderName;
   return (
     <Link
       to="/mail/$id"
       params={{ id: email.id }}
+      search={mailbox === "inbox" ? {} : { mailbox }}
       ref={ref}
       data-mail-thread-row
       onClick={onClick}
@@ -380,7 +533,7 @@ function EmailRow({
         )}
       </div>
       <div className="w-[160px] shrink-0 truncate text-sm font-medium">
-        {senderName}
+        {correspondent}
       </div>
       <div className="flex-1 min-w-0 flex items-baseline gap-2 overflow-hidden">
         <span className="text-sm font-medium truncate shrink-0 max-w-[45%]">
@@ -399,6 +552,45 @@ function EmailRow({
         {formatRelativeDate(email.date)}
       </span>
     </Link>
+  );
+}
+
+function DraftRow({
+  draft,
+  onClick,
+}: {
+  draft: DraftDto;
+  onClick: () => void;
+}) {
+  const recipients = draft.to.length
+    ? draft.to.join(", ")
+    : "No recipients";
+  const preview = draft.body.replace(/\s+/g, " ").trim();
+  return (
+    <button
+      type="button"
+      data-mail-draft-row
+      onClick={onClick}
+      className="flex w-full items-center gap-4 rounded-md px-4 py-2.5 text-left transition-colors hover:bg-foreground/[0.025]"
+    >
+      <div className="w-2 shrink-0" />
+      <div className="w-[160px] shrink-0 truncate text-sm font-medium">
+        {recipients}
+      </div>
+      <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+        <span className="max-w-[45%] shrink-0 truncate text-sm font-medium">
+          {draft.subject.trim() || "No subject"}
+        </span>
+        {preview && (
+          <span className="truncate text-sm text-muted-foreground">
+            {preview}
+          </span>
+        )}
+      </div>
+      <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+        {formatRelativeDate(draft.created)}
+      </span>
+    </button>
   );
 }
 
@@ -589,18 +781,33 @@ function InboxFilter({
   );
 }
 
-function EmptyInbox({
+function EmptyMailFolder({
+  folder,
   isLoading,
+  searching,
   hasInboxes,
 }: {
+  folder: Mailbox;
   isLoading: boolean;
+  searching: boolean;
   hasInboxes: boolean;
 }) {
   // Stay blank during initial load so the no-inboxes setup screen
   // doesn't flash for users who do have inboxes — the inboxes query
   // returns [] until it resolves.
   if (isLoading) return null;
-  if (!hasInboxes) {
+  if (searching) {
+    const label =
+      MAILBOXES.find((candidate) => candidate.id === folder)?.label ?? "mail";
+    return (
+      <div className="py-12 text-center">
+        <p className="text-sm text-muted-foreground">
+          No matching {label.toLowerCase()}.
+        </p>
+      </div>
+    );
+  }
+  if (folder === "inbox" && !hasInboxes) {
     return (
       <div className="py-12 text-center space-y-3">
         <p className="text-sm text-muted-foreground">No mail accounts yet.</p>
@@ -613,6 +820,25 @@ function EmptyInbox({
             Settings
           </Link>
           . Your account shows up here as soon as you paste your App Password.
+        </p>
+      </div>
+    );
+  }
+  if (folder === "drafts") {
+    return (
+      <div className="space-y-2 py-12 text-center">
+        <p className="text-sm text-muted-foreground">No saved drafts.</p>
+        <p className="text-[13px] text-muted-foreground">
+          Start a message and close it; Woodshed saves it here automatically.
+        </p>
+      </div>
+    );
+  }
+  if (folder === "sent" || folder === "archive") {
+    return (
+      <div className="py-12 text-center">
+        <p className="text-sm text-muted-foreground">
+          {folder === "sent" ? "No sent mail yet." : "No archived mail."}
         </p>
       </div>
     );

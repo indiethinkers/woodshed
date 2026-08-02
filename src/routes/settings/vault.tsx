@@ -115,7 +115,7 @@ export function VaultSettingsPage() {
     <SettingsPage section="Vault">
       <SettingsGroup
         label="Location"
-        description="You can point Woodshed at an empty folder or at another vault; the one you leave is never touched."
+        description="Switch to another vault or adopt an existing Markdown folder without moving its files; the folder you leave is never touched."
       >
         <div className="flex items-center gap-3">
           <span className="min-w-0 flex-1 px-2 py-1 rounded-sm bg-muted font-mono text-[14px] text-foreground break-all">
@@ -150,10 +150,10 @@ export function VaultSettingsPage() {
               {pendingPath}
             </code>
             <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
-              Woodshed will relaunch and re-index. It creates its own folders
-              here, and brings older vault layouts up to date — so this has to
-              be an empty folder or a vault, not a folder of other documents.
-              The vault you are leaving is not touched.
+              Woodshed will relaunch and re-index. Existing Markdown stays in
+              place and appears in Notebook. For an existing document folder,
+              new Woodshed records live under a visible woodshed/ child. The
+              vault you are leaving is not touched.
             </p>
             {pendingPath.includes("/Library/Mobile Documents/") && (
               <p className="mt-2 text-[12px] leading-snug text-amber-600 dark:text-amber-500">

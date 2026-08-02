@@ -30,6 +30,10 @@ export interface NoteDto {
   tags: string[];
   favorite: boolean;
   body: string;
+  /** True for an existing Markdown file outside Woodshed's managed subtree. */
+  external?: boolean;
+  /** Original parent folder relative to the selected vault. */
+  folder?: string;
 }
 
 export interface NoteCreateInput {

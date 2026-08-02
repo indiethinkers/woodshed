@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailSummary } from "@/lib/mail-lib/types";
+import type { DraftDto, EmailSummary } from "@/lib/mail-lib/types";
 
 const mocks = vi.hoisted(() => ({
   emails: [] as EmailSummary[],
+  drafts: [] as DraftDto[],
+  folderQuery: vi.fn(),
   archiveOne: vi.fn(),
   markRead: vi.fn(),
   navigate: vi.fn(),
@@ -14,14 +16,23 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({
     children,
     params,
+    search,
     to: _to,
     ...props
   }: React.ComponentProps<"a"> & {
     children: ReactNode;
     params?: { id?: string };
+    search?: { mailbox?: string };
     to?: string;
   }) => (
-    <a {...props} href={params?.id ? `/mail/${params.id}` : "#"}>
+    <a
+      {...props}
+      href={
+        params?.id
+          ? `/mail/${params.id}${search?.mailbox ? `?mailbox=${search.mailbox}` : ""}`
+          : "#"
+      }
+    >
       {children}
     </a>
   ),
@@ -62,9 +73,21 @@ vi.mock("@/lib/hooks/use-mail", () => ({
     ],
     isLoading: false,
   }),
-  useMail: () => ({ data: mocks.emails, isLoading: false }),
+  useMailFolder: (folder: string, query: string) => {
+    mocks.folderQuery(folder, query);
+    return { data: mocks.emails, isLoading: false };
+  },
+  useDrafts: () => ({ data: mocks.drafts, isLoading: false }),
   useMarkRead: () => mocks.markRead,
   useRefreshMail: () => vi.fn(),
+}));
+
+vi.mock("@/components/mail/compose-dialog", () => ({
+  ComposeDialog: ({ draft }: { draft?: DraftDto }) => (
+    <div role="dialog" aria-label="Synthetic compose">
+      {draft?.subject ?? "New message"}
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/hooks/use-people", () => ({
@@ -79,6 +102,8 @@ import { MailInbox } from "./mail-inbox";
 
 beforeEach(() => {
   mocks.emails = [];
+  mocks.drafts = [];
+  mocks.folderQuery.mockReset();
   mocks.archiveOne.mockReset();
   mocks.markRead.mockReset();
   mocks.markRead.mockResolvedValue(undefined);
@@ -87,7 +112,7 @@ beforeEach(() => {
 });
 
 describe("MailInbox", () => {
-  it("renders the Mail sidebar without a mode switch", () => {
+  it("renders the complete mail folders in the existing Mail surface", () => {
     const { container } = render(<MailInbox />);
 
     const sidebar = container.querySelector(
@@ -95,12 +120,58 @@ describe("MailInbox", () => {
     );
 
     expect(sidebar).toBeInTheDocument();
-    expect(
-      screen.queryByRole("group", { name: "Mail view" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Mail folders" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Drafts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Archive all" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("queries the selected folder and search text", async () => {
+    render(<MailInbox />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search mail" }), {
+      target: { value: "synthetic update" },
+    });
+
+    await waitFor(() =>
+      expect(mocks.folderQuery).toHaveBeenLastCalledWith(
+        "sent",
+        "synthetic update",
+      ),
+    );
+  });
+
+  it("shows recipients instead of the sender in Sent", () => {
+    mocks.emails = [
+      email({
+        labels: ["sent", "read"],
+        to: ["recipient@example.test"],
+      }),
+    ];
+    const { container } = render(<MailInbox />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sent" }));
+
+    const row = container.querySelector("[data-mail-thread-row]");
+    expect(row).toHaveTextContent("recipient@example.test");
+    expect(row).not.toHaveTextContent("Avery Example");
+  });
+
+  it("reopens a saved draft from the Drafts folder", () => {
+    mocks.drafts = [draft()];
+    render(<MailInbox />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Drafts" }));
+    fireEvent.click(screen.getByText("Synthetic draft"));
+
+    expect(
+      screen.getByRole("dialog", { name: "Synthetic compose" }),
+    ).toHaveTextContent("Synthetic draft");
   });
 
   // A flex item defaults to `min-height: auto`, so without `min-h-0` the
@@ -142,6 +213,14 @@ describe("MailInbox", () => {
 
     const row = container.querySelector("[data-mail-thread-row]")!;
     expect(row).toHaveAttribute("href", "/mail/message-1");
+  });
+
+  it("preserves the selected mailbox when opening a message", () => {
+    mocks.emails = [email({ id: "message-1", labels: ["sent", "read"] })];
+    const { container } = render(<MailInbox mailbox="sent" />);
+
+    const row = container.querySelector("[data-mail-thread-row]")!;
+    expect(row).toHaveAttribute("href", "/mail/message-1?mailbox=sent");
   });
 
   it("marks every unread message in a thread when its row is opened", async () => {
@@ -222,5 +301,21 @@ function email(overrides: Partial<EmailSummary>): EmailSummary {
     path: "",
     attachments: [],
     ...overrides,
+  };
+}
+
+function draft(): DraftDto {
+  return {
+    id: "01SYNTHETICDRAFT0000000000",
+    created: "2026-07-23T09:00:00-07:00",
+    kind: "new",
+    fromInbox: "gmail:mail@example.com",
+    to: ["recipient@example.test"],
+    cc: [],
+    bcc: [],
+    subject: "Synthetic draft",
+    body: "Durable draft content",
+    sourceMessageId: null,
+    threadId: null,
   };
 }

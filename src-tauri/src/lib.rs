@@ -44,7 +44,7 @@ pub struct AppState {
     /// frontend (after onboarding or on app boot if vault path is configured).
     pub watcher: Mutex<Option<watcher::VaultWatcher>>,
     /// id → path map for calendar events. Populated on startup by
-    /// watcher_start and maintained by event_create / event_update / event_delete.
+    /// watcher_start and maintained by event updates/deletes and calendar sync.
     pub events_index: Arc<state::EventIndex>,
     /// Date-bucketed cache of parsed vault-local events. Read by
     /// events_for_date instead of re-scanning + re-parsing `events/`
@@ -485,6 +485,7 @@ pub fn run() {
             agent_cmd::agent_chat_update,
             agent_cmd::agent_chat_delete,
             vault_cmd::vault_init,
+            vault_cmd::vault_import,
             vault_cmd::vault_switch,
             vault_cmd::vault_is_icloud,
             vault_cmd::vault_git_sync,
@@ -503,7 +504,6 @@ pub fn run() {
             tasks::tasks_all,
             daily::daily_get,
             daily::daily_save,
-            events::event_create,
             events::event_get,
             events::event_update,
             events::event_delete,
@@ -557,12 +557,14 @@ pub fn run() {
             mail::mail_get_full,
             mail::mail_open_attachment,
             mail::mail_inbox_page,
+            mail::mail_folder_page,
             mail::mail_get_local,
             mail::mail_thread,
             mail::mail_mark_read,
             mail::mail_archive_one,
             mail::mail_delete_one,
             mail::mail_draft_save,
+            mail::mail_drafts_list,
             mail::mail_draft_delete,
             mail::email_body_render,
             gmail_cmd::gmail_account_set,

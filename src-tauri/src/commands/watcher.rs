@@ -23,6 +23,7 @@ enum ChangeKind {
 struct VaultChangePayload {
     path: String, // vault-relative
     kind: ChangeKind,
+    external: bool,
 }
 
 fn change_to_payload(vault_root: &Path, change: &VaultChange) -> Option<VaultChangePayload> {
@@ -34,7 +35,21 @@ fn change_to_payload(vault_root: &Path, change: &VaultChange) -> Option<VaultCha
     Some(VaultChangePayload {
         path: rel.to_string_lossy().to_string(),
         kind,
+        external: crate::vault::is_external_content_path(vault_root, path),
     })
+}
+
+fn managed_change_section(vault_root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(vault_root).ok()?;
+    let mut segments = relative.iter().filter_map(|segment| segment.to_str());
+    let first = segments.next()?;
+    if crate::vault::is_imported_layout(vault_root) {
+        if first != crate::vault::IMPORTED_RECORDS_DIR {
+            return None;
+        }
+        return segments.next().map(String::from);
+    }
+    (first != ".woodshed").then(|| first.to_string())
 }
 
 #[tauri::command]
@@ -61,6 +76,7 @@ pub fn watcher_start(
     // subdirs can miss empty folders the migration has no files to create.
     crate::vault::ensure_dirs(&vault_root)
         .map_err(|e| format!("validate vault directories: {e:#}"))?;
+    let records_root = crate::vault::records_root(&vault_root);
 
     // One-shot migration: calendar→cadence, spaces.json→areas.json,
     // daily/<d>.md→cadence/<d>.md,
@@ -69,7 +85,7 @@ pub fn watcher_start(
     // index sees post-migration paths, and before the watcher starts so
     // we don't fire change events for the moves themselves.
     let mut migration_changed = false;
-    match crate::vault::migrate_legacy_folders(&vault_root) {
+    match crate::vault::migrate_legacy_folders(&records_root) {
         Ok(report) => {
             migration_changed = report.cadence_files_moved
                 + report.resource_files_normalized
@@ -99,7 +115,7 @@ pub fn watcher_start(
         Err(e) => crate::log_error!("vault::migration", "{}", e),
     }
 
-    match crate::commands::mail::migrate_gmail_thread_ids(&vault_root) {
+    match crate::commands::mail::migrate_gmail_thread_ids(&records_root) {
         Ok(0) => {}
         Ok(count) => {
             migration_changed = true;
@@ -116,7 +132,7 @@ pub fn watcher_start(
     // for ~30 seconds and tried to write thousands of files; many made
     // it to disk before the renderer crashed, polluting cadence/. The
     // sweep is idempotent — finds nothing on a clean vault.
-    match crate::gcal::cache::cleanup_legacy_cadence_files(&vault_root) {
+    match crate::gcal::cache::cleanup_legacy_cadence_files(&records_root) {
         Ok(0) => {}
         Ok(n) => crate::log_info!("gcal::cleanup", "swept {n} legacy cadence/gcal-*.md files"),
         Err(e) => crate::log_error!("gcal::cleanup", "legacy sweep failed: {e}"),
@@ -236,12 +252,7 @@ pub fn watcher_start(
             let path = match &change {
                 VaultChange::Modified(p) | VaultChange::Removed(p) => p,
             };
-            let top = path
-                .strip_prefix(&root_for_callback)
-                .ok()
-                .and_then(|r| r.iter().next())
-                .and_then(|s| s.to_str());
-            if let Some(seg) = top {
+            if let Some(seg) = managed_change_section(&root_for_callback, path) {
                 if seg == crate::vault::EVENTS_DIR
                     || seg == crate::vault::CADENCE_DIR
                     || seg == crate::vault::LEGACY_CALENDAR_DIR
@@ -299,7 +310,10 @@ pub fn watcher_start(
     // present, so no second vault can accumulate another scope in this
     // process; a failed startup grants nothing.
     app.asset_protocol_scope()
-        .allow_directory(vault_root.join("attachments"), true)
+        .allow_directory(
+            crate::vault::collection_dir(&vault_root, "attachments"),
+            true,
+        )
         .map_err(|e| format!("allow vault attachments: {e}"))?;
 
     *watcher_guard = Some(watcher);
@@ -318,6 +332,7 @@ mod tests {
         let change = VaultChange::Modified(PathBuf::from("/tmp/vault/tasks/abc.md"));
         let payload = change_to_payload(&vault, &change).unwrap();
         assert_eq!(payload.path, "tasks/abc.md");
+        assert!(!payload.external);
         matches!(payload.kind, ChangeKind::Modified);
     }
 
@@ -326,5 +341,25 @@ mod tests {
         let vault = PathBuf::from("/tmp/vault");
         let change = VaultChange::Modified(PathBuf::from("/elsewhere/foo.md"));
         assert!(change_to_payload(&vault, &change).is_none());
+    }
+
+    #[test]
+    fn imported_external_canonical_folder_is_not_a_managed_section() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path().join("adopted");
+        std::fs::create_dir_all(vault.join("people")).unwrap();
+        std::fs::write(vault.join("people/existing.md"), "# Existing note\n").unwrap();
+        crate::vault::initialize_imported_layout(&vault).unwrap();
+
+        let external = vault.join("people/existing.md");
+        let payload = change_to_payload(&vault, &VaultChange::Modified(external.clone())).unwrap();
+        assert!(payload.external);
+        assert_eq!(managed_change_section(&vault, &external), None);
+
+        let managed = vault.join("woodshed/people/person-example.md");
+        assert_eq!(
+            managed_change_section(&vault, &managed).as_deref(),
+            Some("people")
+        );
     }
 }

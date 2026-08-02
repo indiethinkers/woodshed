@@ -26,57 +26,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
-use ulid::Ulid;
 
 const STORE_FILE: &str = "config.json";
-
-// Cap the slug portion so a long event title doesn't blow out filenames.
-const EVENT_SLUG_MAX: usize = 40;
-// Trailing entropy. Crockford base32 (32^8 ≈ 1.1 trillion) is plenty for
-// per-vault collision avoidance without making the ID unreadable.
-const EVENT_ID_SUFFIX_LEN: usize = 8;
-
-fn build_event_id(title: &str) -> String {
-    let slug = truncate_slug(&slugify(title), EVENT_SLUG_MAX);
-    let ulid_str = Ulid::new().to_string();
-    let suffix = &ulid_str[ulid_str.len() - EVENT_ID_SUFFIX_LEN..];
-    if slug.is_empty() {
-        format!("e_{}", suffix)
-    } else {
-        format!("e_{}_{}", slug, suffix)
-    }
-}
-
-fn slugify(input: &str) -> String {
-    let mut out = String::new();
-    let mut last_dash = true;
-    for c in input.chars() {
-        if c.is_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    if out.ends_with('-') {
-        out.pop();
-    }
-    out
-}
-
-fn truncate_slug(slug: &str, max_len: usize) -> String {
-    if slug.len() <= max_len {
-        return slug.to_string();
-    }
-    let head = &slug[..max_len];
-    if let Some(last_dash) = head.rfind('-') {
-        if last_dash >= max_len / 2 {
-            return head[..last_dash].to_string();
-        }
-    }
-    head.to_string()
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,25 +159,6 @@ impl EventDto {
             body: event.body,
         }
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EventCreate {
-    pub title: String,
-    pub date: String,
-    pub duration: u32,
-    pub area: String,
-    #[serde(default)]
-    pub attendees: Vec<String>,
-    #[serde(default)]
-    pub recurring: Option<RecurringRule>,
-    #[serde(default)]
-    pub subtitle: Option<String>,
-    #[serde(default)]
-    pub body: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -574,46 +506,6 @@ fn materialize_ical_occurrence_file(
     state.events_cache.upsert(abs_path.clone(), event.clone());
     index_event_in_search(app, state, vault, &abs_path, &event);
     Ok(())
-}
-
-#[tauri::command]
-pub fn event_create(
-    app: AppHandle,
-    state: State<AppState>,
-    input: EventCreate,
-) -> Result<EventDto, String> {
-    let vault = vault_root(&app)?;
-
-    let id = build_event_id(&input.title);
-    let abs_path = event_path(&vault, &id)?;
-    let event = ParsedEvent {
-        id: id.clone(),
-        title: input.title,
-        subtitle: input.subtitle,
-        date: input.date,
-        duration: input.duration,
-        area: input.area,
-        attendees: input.attendees,
-        recurring: input.recurring.unwrap_or(RecurringRule::None),
-        // Vault-local events: no provider, writable by default.
-        provider: None,
-        account_id: None,
-        external_id: None,
-        writable: None,
-        rrule_original: None,
-        local_metadata_overrides: Vec::new(),
-        tags: input.tags,
-        body: input.body.unwrap_or_default(),
-    };
-
-    write_event(&state, &abs_path, &event)?;
-    state.events_index.insert(id.clone(), abs_path.clone());
-    state.events_cache.upsert(abs_path.clone(), event.clone());
-    index_event_in_search(&app, &state, &vault, &abs_path, &event);
-
-    let mut dto = EventDto::from_parsed(event, &vault, &abs_path);
-    enrich_resolved_attendees(&mut dto, &state);
-    Ok(dto)
 }
 
 #[tauri::command]
@@ -1922,40 +1814,6 @@ mod tests {
         // Legacy whole-UID dismissal still blocks the detail page.
         let whole = dismissed_with("gcal_A", &[uid], &[]);
         assert!(is_dismissed(&whole, Some("gcal_A"), Some(uid), None));
-    }
-
-    #[test]
-    fn build_event_id_includes_title_slug_and_short_ulid() {
-        let id = build_event_id("1:1 with Alex");
-        assert!(id.starts_with("e_1-1-with-alex_"), "got id {id}");
-        let suffix = id.rsplit('_').next().unwrap();
-        assert_eq!(suffix.len(), EVENT_ID_SUFFIX_LEN);
-    }
-
-    #[test]
-    fn build_event_id_truncates_long_titles_at_word_boundary() {
-        let title = "Quarterly planning sync with engineering leadership team";
-        let id = build_event_id(title);
-        let slug_with_prefix = id.rsplit_once('_').unwrap().0; // strip "_<suffix>"
-        let slug = slug_with_prefix.strip_prefix("e_").unwrap();
-        assert!(slug.len() <= EVENT_SLUG_MAX, "slug too long: {slug}");
-        assert!(!slug.ends_with('-'), "slug ends with dash: {slug}");
-    }
-
-    #[test]
-    fn build_event_id_handles_empty_title() {
-        let id = build_event_id("");
-        assert!(id.starts_with("e_"), "got id {id}");
-        // "e_" + 8-char ulid suffix → 10 chars total, no extra underscore.
-        assert_eq!(id.len(), 2 + EVENT_ID_SUFFIX_LEN);
-    }
-
-    #[test]
-    fn slugify_collapses_punctuation_and_strips_edges() {
-        assert_eq!(slugify("Hello, World!"), "hello-world");
-        assert_eq!(slugify("---Trim me---"), "trim-me");
-        assert_eq!(slugify("AI / ML"), "ai-ml");
-        assert_eq!(slugify(""), "");
     }
 
     fn setup_vault() -> (TempDir, PathBuf) {

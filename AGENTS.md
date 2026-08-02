@@ -224,12 +224,13 @@ the attachment asset scope, and opens the search index, and it refuses to run
 twice — so `vault_switch` discards the derived search index, writes the new
 path, and restarts rather than rebuilding that state in process.
 
-Adopting a folder writes to it. `ensure_dirs` scaffolds every entry in
-`VAULT_SUBDIRS`, and the migration on the next boot renames the contents of
-`calendar/` and `daily/` into `cadence/` and rewrites frontmatter under
-`resources/`. `vault_switch` therefore accepts only a folder that is empty
-apart from dotfiles, or that already reads as a vault — it has `.woodshed/`, or
-at least three canonical subdirectories. The folder being left behind is never
+Adopting a Markdown folder writes only Woodshed's layout marker, internal state,
+and a visible `woodshed/` child. Existing Markdown remains at its original path
+and appears in Notebook using its existing folder hierarchy. All managed
+collections and migrations are confined to `<vault_root>/woodshed/`; coincidental
+folders such as `<vault_root>/tasks/` or `<vault_root>/people/` remain imported
+Notebook content. Empty folders and recognized native vaults continue to use the
+native layout below. The folder being left behind during a switch is never
 touched.
 
 ```text
@@ -252,13 +253,25 @@ touched.
 └── .woodshed/      Recoverable trash and record revisions
 ```
 
+An adopted Markdown folder keeps its pre-existing tree alongside the managed
+subtree:
+
+```text
+<vault_root>/
+├── <existing folders and Markdown>   User-authored Notebook content, unchanged
+├── woodshed/                         Managed collections in the native shape above
+└── .woodshed/                        Layout marker, recoverable trash, revisions
+```
+
 Vaults created by older builds may still contain retired `sweep/` Markdown
 records. The app no longer scaffolds or uses that directory, but it deliberately
 leaves those user-owned files untouched so they can be inspected, moved, or
 deleted outside Woodshed.
 
-`vault_init` creates required directories without overwriting existing data.
-Missing runtime directories may also be created by their owning command.
+`vault_init` creates required native-layout directories without overwriting
+existing data. `vault_import` creates the adopted layout without moving or
+reinterpreting existing Markdown. Missing runtime directories may also be
+created by their owning command.
 
 ### Non-vault state
 

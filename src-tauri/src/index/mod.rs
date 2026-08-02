@@ -253,23 +253,50 @@ impl IndexHandle {
         Ok(())
     }
 
-    pub fn mail_inbox_page(
+    pub fn mail_folder_page(
         &self,
+        path_prefix: &str,
+        query: Option<&str>,
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<mail::EmailSummary>, Option<usize>)> {
         let conn = self.conn.lock_recover();
-        let mut stmt = conn.prepare(
-            "SELECT summary_json FROM mail_summaries \
-             WHERE path LIKE 'inbox/%' \
-             ORDER BY date_ms DESC, path \
-             LIMIT ?1 OFFSET ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![(limit + 1) as i64, offset as i64], |row| {
-                row.get::<_, String>(0)
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let search = query.map(str::trim).filter(|value| !value.is_empty());
+        let rows = if let Some(raw_query) = search {
+            let Some(fts_query) = build_fts_query(raw_query) else {
+                return Ok((Vec::new(), None));
+            };
+            let mut stmt = conn.prepare(
+                "SELECT ms.summary_json FROM documents_fts f \
+                 JOIN documents d ON d.rowid = f.rowid \
+                 JOIN mail_summaries ms ON ms.path = d.path \
+                 WHERE f.documents_fts MATCH ?1 \
+                   AND substr(ms.path, 1, length(?2)) = ?2 \
+                 ORDER BY rank, ms.date_ms DESC, ms.path \
+                 LIMIT ?3 OFFSET ?4",
+            )?;
+            let rows = stmt
+                .query_map(
+                    params![fts_query, path_prefix, (limit + 1) as i64, offset as i64],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT summary_json FROM mail_summaries \
+                 WHERE substr(path, 1, length(?1)) = ?1 \
+                 ORDER BY date_ms DESC, path \
+                 LIMIT ?2 OFFSET ?3",
+            )?;
+            let rows = stmt
+                .query_map(
+                    params![path_prefix, (limit + 1) as i64, offset as i64],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
         let has_more = rows.len() > limit;
         let items = rows
             .into_iter()
@@ -278,6 +305,14 @@ impl IndexHandle {
             .collect::<Result<Vec<_>>>()?;
         let next_offset = has_more.then_some(offset.saturating_add(items.len()));
         Ok((items, next_offset))
+    }
+
+    pub fn mail_inbox_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<mail::EmailSummary>, Option<usize>)> {
+        self.mail_folder_page("inbox/", None, offset, limit)
     }
 
     pub fn mail_thread_paths(&self, thread_id: &str) -> Result<Vec<String>> {
@@ -581,7 +616,7 @@ impl IndexHandle {
                 if !seen.insert(subdir.to_string()) {
                     return Ok(());
                 }
-                let dir = vault_root.join(subdir);
+                let dir = crate::vault::collection_dir(vault_root, subdir);
                 if !crate::vault::is_real_directory(&dir) {
                     return Ok(());
                 }
@@ -628,6 +663,18 @@ impl IndexHandle {
             scan(subdir, &tx, &mut count)?;
         }
         scan_tables(vault_root, &tx, &mut count)?;
+        for path in
+            crate::vault::collect_external_markdown_files(vault_root).map_err(anyhow::Error::msg)?
+        {
+            match doc_from_path(vault_root, &path) {
+                Ok(Some(doc)) => {
+                    upsert_with(&tx, &doc)?;
+                    count += 1;
+                }
+                Ok(None) => {}
+                Err(_) => eprintln!("index: skipped unreadable imported Markdown note"),
+            }
+        }
         tx.execute(
             "INSERT INTO index_metadata (key, value) VALUES ('normalized_tags_v1', '1') \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -660,7 +707,7 @@ impl IndexHandle {
             Ok(r) => r.to_string_lossy().to_string(),
             Err(_) => return Ok(()),
         };
-        let kind = classify_relative(&rel);
+        let kind = classify_vault_path(vault_root, &rel, abs_path);
         if !abs_path.exists() {
             if matches!(kind, Some(Kind::Table)) {
                 let table_prefix = rel.trim_end_matches("_schema.md");
@@ -843,7 +890,7 @@ fn backfill_document_tags(conn: &Connection) -> Result<()> {
 }
 
 fn scan_tables(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut usize) -> Result<()> {
-    let root = vault_root.join("tables");
+    let root = crate::vault::collection_dir(vault_root, "tables");
     if !crate::vault::is_real_directory(&root) {
         return Ok(());
     }
@@ -1221,7 +1268,10 @@ impl Kind {
 /// router to decide whether a change is index-relevant.
 pub fn classify_relative(rel_path: &str) -> Option<Kind> {
     let mut parts = rel_path.split('/');
-    let first = parts.next()?;
+    let mut first = parts.next()?;
+    if first == crate::vault::IMPORTED_RECORDS_DIR {
+        first = parts.next()?;
+    }
     // Cadence files split by filename: a date-shaped basename
     // (`YYYY-MM-DD.md`) is a daily journal with inline events;
     // anything else (rare; legacy event files) is an event.
@@ -1257,7 +1307,7 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
         Err(_) => return Ok(None),
     };
     let rel_str = rel.to_string_lossy().to_string();
-    let kind = match classify_relative(&rel_str) {
+    let kind = match classify_vault_path(vault_root, &rel_str, abs_path) {
         Some(k) => k,
         None => return Ok(None),
     };
@@ -1277,7 +1327,7 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
         Kind::Daily => parsers::parse_daily(&content)
             .ok()
             .map(|d| project_daily(&d, &rel_str, updated_at)),
-        Kind::Note => parsers::parse_note(&content)
+        Kind::Note => crate::commands::notebook::parse_note_at_path(vault_root, abs_path, &content)
             .ok()
             .map(|n| project_note(&n, &rel_str, updated_at)),
         Kind::Person => parsers::parse_person(&content)
@@ -1307,6 +1357,14 @@ fn doc_from_path(vault_root: &Path, abs_path: &Path) -> Result<Option<IndexedDoc
         }),
     };
     Ok(doc)
+}
+
+fn classify_vault_path(vault_root: &Path, rel: &str, abs_path: &Path) -> Option<Kind> {
+    if crate::vault::is_external_content_path(vault_root, abs_path) {
+        return (abs_path.extension().and_then(|value| value.to_str()) == Some("md"))
+            .then_some(Kind::Note);
+    }
+    classify_relative(rel)
 }
 
 fn file_mtime_ms(path: &Path) -> i64 {
@@ -1532,6 +1590,8 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
         email.preview.clone(),
         email.from.clone(),
         email.from_email.clone(),
+        email.to.join(" "),
+        email.cc.join(" "),
         email.mentions.join(" "),
         email.links.join(" "),
     ]
@@ -2296,6 +2356,8 @@ mod tests {
             thread_id: "thread-1".to_string(),
             from: "Alex Example".to_string(),
             from_email: "alex@example.com".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
             subject: "Acme launch notes".to_string(),
             body: "Follow up with [[Sam Chen]].".to_string(),
             html: None,
@@ -2383,6 +2445,17 @@ mod tests {
         let (second_page, next) = idx.mail_inbox_page(next.unwrap(), 1).unwrap();
         assert_eq!(second_page[0].id, "msg-2");
         assert_eq!(next, None);
+        let (matches, next) = idx
+            .mail_folder_page("inbox/", Some("launch"), 0, 10)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "msg-1");
+        assert_eq!(next, None);
+        assert!(idx
+            .mail_folder_page("sent/", Some("launch"), 0, 10)
+            .unwrap()
+            .0
+            .is_empty());
         assert_eq!(
             idx.mail_thread_paths("thread-1").unwrap(),
             vec!["inbox/acme-launch.md"]
@@ -2392,6 +2465,79 @@ mod tests {
         assert_eq!(outgoing.len(), 1);
         assert!(outgoing[0].resolved);
         assert_eq!(outgoing[0].type_.as_deref(), Some("mail"));
+    }
+
+    #[test]
+    fn rebuild_from_imported_folder_indexes_existing_notes_and_managed_mail() {
+        use crate::commands::mail;
+
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("existing-markdown");
+        std::fs::create_dir_all(vault.join("Projects")).unwrap();
+        std::fs::write(
+            vault.join("Projects/research.md"),
+            "# External research\n\nA synthetic imported note.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(vault.join("tasks")).unwrap();
+        std::fs::write(
+            vault.join("tasks/ordinary.md"),
+            "# Ordinary folder note\n\nNot a Woodshed task.",
+        )
+        .unwrap();
+        crate::vault::initialize_imported_layout(&vault).unwrap();
+
+        let email = mail::EmailSummary {
+            id: "sent-1".to_string(),
+            message_id: "sent-1@example.test".to_string(),
+            thread_id: "thread-1".to_string(),
+            from: "Synthetic Sender".to_string(),
+            from_email: "sender@example.test".to_string(),
+            to: vec!["recipient@example.test".to_string()],
+            cc: Vec::new(),
+            subject: "Dispatched update".to_string(),
+            body: "A synthetic sent message.".to_string(),
+            html: None,
+            preview: "A synthetic sent message.".to_string(),
+            date: "2026-07-31T10:00:00Z".to_string(),
+            read: true,
+            viewed: true,
+            labels: vec!["sent".to_string(), "read".to_string()],
+            mentions: Vec::new(),
+            links: Vec::new(),
+            inbox: "gmail:sender@example.test".to_string(),
+            path: String::new(),
+            attachments: Vec::new(),
+        };
+        let sent_path = crate::vault::collection_dir(&vault, "sent").join("update.md");
+        std::fs::write(&sent_path, mail::render_email_md(&email)).unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("index.db")).unwrap();
+        idx.rebuild_from_vault(&vault).unwrap();
+
+        let note_hits = idx.search("external research", 10).unwrap();
+        assert_eq!(note_hits.len(), 1);
+        assert_eq!(note_hits[0].kind, "note");
+        let canonical_folder_hits = idx.search("Ordinary folder note", 10).unwrap();
+        assert_eq!(canonical_folder_hits.len(), 1);
+        assert_eq!(canonical_folder_hits[0].kind, "note");
+        let (sent, next) = idx
+            .mail_folder_page("woodshed/sent/", Some("dispatched"), 0, 10)
+            .unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].id, "sent-1");
+        assert_eq!(next, None);
+        assert_eq!(
+            idx.mail_folder_page("woodshed/sent/", Some("recipient"), 0, 10)
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(vault.join("Projects/research.md")).unwrap(),
+            "# External research\n\nA synthetic imported note."
+        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Popover } from "@base-ui/react/popover";
 import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { DaybookSectionHeader } from "./daybook-section-header";
 import { extractDate } from "./task-sidebar";
@@ -9,15 +8,13 @@ import { useEvents, type EventDto } from "@/lib/hooks/use-events";
 import { useGcalAccounts, useGcalSync } from "@/lib/hooks/use-gcal";
 import { useToday } from "@/lib/hooks/use-today";
 import { cn } from "@/lib/utils";
-import { NewEventForm } from "./new-event-form";
 import { useFixedNowMs } from "@/lib/demo-clock";
 
 const SCHEDULE_COLLAPSED_STORAGE_KEY = "woodshed:cadence:schedule-collapsed";
 const EMPTY_EVENTS: EventDto[] = [];
 
 /** `page` = the wide content-panel block (non-Tauri/web). `sidebar` = the
- *  compact form that lives below the tasks in the inner list panel — tighter
- *  padding, and "+ Event" opens in a popover instead of a wide inline form. */
+ * compact schedule that lives below tasks in the inner list panel. */
 type ScheduleVariant = "page" | "sidebar";
 
 /**
@@ -44,7 +41,6 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
   const events = eventsData ?? EMPTY_EVENTS;
   const { data: gcalAccounts = [] } = useGcalAccounts();
   const sync = useGcalSync();
-  const [adding, setAdding] = useState(false);
   // Explicit collapse override, persisted across day navigation and remounts.
   // null = follow the default (collapsed only when the day is wrapped);
   // true/false = the user's choice, which sticks for every day until they
@@ -122,67 +118,23 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
       <DaybookSectionHeader
         label="Schedule"
         right={
-          <div className="flex items-center justify-end gap-3">
-            {hasCalendarSource && (
-              <button
-                type="button"
-                onClick={() => sync.mutate()}
-                disabled={sync.isPending}
-                title="Pull the latest events from your Google Calendars"
-                aria-label="Sync calendars"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground disabled:opacity-50"
-              >
-                <RefreshCw
-                  className={`h-3.5 w-3.5 ${sync.isPending ? "animate-spin" : ""}`}
-                  strokeWidth={1.8}
-                />
-              </button>
-            )}
-            {variant === "sidebar" ? (
-              // The narrow column can't host the wide inline form, so the
-              // creator floats in a popover anchored to the trigger.
-              <Popover.Root open={adding} onOpenChange={setAdding}>
-                <Popover.Trigger className="whitespace-nowrap text-[14px] text-muted-foreground transition-colors hover:text-foreground">
-                  + Event
-                </Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Positioner
-                    className="z-50"
-                    sideOffset={8}
-                    align="end"
-                  >
-                    <Popover.Popup className="w-[320px] rounded-md bg-popover text-popover-foreground shadow-lg outline-none">
-                      <NewEventForm
-                        date={date}
-                        onCreated={() => setAdding(false)}
-                        onCancel={() => setAdding(false)}
-                      />
-                    </Popover.Popup>
-                  </Popover.Positioner>
-                </Popover.Portal>
-              </Popover.Root>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setAdding((current) => !current)}
-                className="whitespace-nowrap text-[14px] text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {adding ? "Cancel" : "+ Event"}
-              </button>
-            )}
-          </div>
+          hasCalendarSource ? (
+            <button
+              type="button"
+              onClick={() => sync.mutate()}
+              disabled={sync.isPending}
+              title="Pull the latest events from your Google Calendars"
+              aria-label="Sync calendars"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${sync.isPending ? "animate-spin" : ""}`}
+                strokeWidth={1.8}
+              />
+            </button>
+          ) : undefined
         }
       />
-
-      {variant === "page" && adding && (
-        <div className="mt-8 max-w-[840px]">
-          <NewEventForm
-            date={date}
-            onCreated={() => setAdding(false)}
-            onCancel={() => setAdding(false)}
-          />
-        </div>
-      )}
 
       <div className={listClass}>
         {events.length === 0 ? (

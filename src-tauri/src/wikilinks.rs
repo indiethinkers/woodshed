@@ -68,6 +68,17 @@ pub(crate) fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> Resu
     Ok(())
 }
 
+pub(crate) fn collect_rewrite_markdown_files(vault: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    for subdir in WIKILINK_REWRITE_DIRS {
+        collect_markdown_files(&vault_lib::collection_dir(vault, subdir), &mut files)?;
+    }
+    files.extend(vault_lib::collect_external_markdown_files(vault)?);
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 pub(crate) fn replace_wikilink_labels(
     raw: &str,
     old_labels: &[String],
@@ -225,10 +236,7 @@ pub(crate) fn remove_record_backlinks(
     if labels.is_empty() {
         return Ok(0);
     }
-    let mut files = Vec::new();
-    for subdir in WIKILINK_REWRITE_DIRS {
-        collect_markdown_files(&vault.join(subdir), &mut files)?;
-    }
+    let files = collect_rewrite_markdown_files(vault)?;
     let mut changed = 0usize;
     for path in files {
         let raw = crate::vault::read_record(&path).map_err(|e| e.to_string())?;
@@ -273,6 +281,20 @@ mod tests {
             creation_trace_text(" Deep Work in the age of AI "),
             "[[Deep Work in the age of AI]]"
         );
+    }
+
+    #[test]
+    fn rewrite_scan_includes_external_imported_markdown() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path().join("adopted");
+        std::fs::create_dir_all(vault.join("Projects")).unwrap();
+        let external = vault.join("Projects/plan.md");
+        std::fs::write(&external, "See [[Synthetic target]].\n").unwrap();
+        crate::vault::initialize_imported_layout(&vault).unwrap();
+
+        let files = collect_rewrite_markdown_files(&vault).unwrap();
+
+        assert!(files.contains(&external));
     }
 
     #[test]

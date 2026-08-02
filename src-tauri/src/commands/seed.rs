@@ -7,10 +7,10 @@
 // single source of truth for the demo dataset.
 
 use crate::parsers::{
-    self, CalcFn, Column, ColumnType, DailyJournal, Event as ParsedEvent, FilterCombineOp,
-    Note as ParsedNote, NumberFormat, Person as ParsedPerson, RecurringRule,
-    Resource as ParsedResource, Row as ParsedRow, SelectOption, SortDirection,
-    Table as ParsedTable, Task as ParsedTask, TaskStatus, View, ViewFilter, ViewFilters, ViewSort,
+    self, CalcFn, Column, ColumnType, DailyJournal, FilterCombineOp, Note as ParsedNote,
+    NumberFormat, Person as ParsedPerson, Resource as ParsedResource, Row as ParsedRow,
+    SelectOption, SortDirection, Table as ParsedTable, Task as ParsedTask, TaskStatus, View,
+    ViewFilter, ViewFilters, ViewSort,
 };
 use crate::vault as vault_lib;
 use std::collections::BTreeMap;
@@ -23,30 +23,19 @@ const SEED_DATE: &str = "2026-04-25";
 
 pub fn seed_all(vault: &Path) -> Result<(), String> {
     for person in seed_people() {
-        let path = vault.join("people").join(format!("{}.md", person.id));
+        let path = crate::vault::collection_dir(vault, "people").join(format!("{}.md", person.id));
         let content = parsers::serialize_person(&person).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
 
-    // Events are file-per-event in `events/<id>.md`. Each one carries
-    // its own body so the user has an obvious "open the event page" UX
-    // for taking meeting notes.
-    let events_dir = vault_lib::events_dir(vault);
-    std::fs::create_dir_all(&events_dir).map_err(|e| e.to_string())?;
-    for event in seed_events() {
-        let path = events_dir.join(format!("{}.md", event.id));
-        let content = parsers::serialize_event(&event).map_err(|e| e.to_string())?;
-        vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
-    }
-
     for task in seed_tasks() {
-        let path = vault.join("tasks").join(format!("{}.md", task.id));
+        let path = crate::vault::collection_dir(vault, "tasks").join(format!("{}.md", task.id));
         let content = parsers::serialize_task(&task).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
 
     for note in seed_notes() {
-        let path = vault.join("notebook").join(format!("{}.md", note.id));
+        let path = crate::vault::collection_dir(vault, "notebook").join(format!("{}.md", note.id));
         let content = parsers::serialize_note(&note).map_err(|e| e.to_string())?;
         vault_lib::write_atomic(&path, &content).map_err(|e| e.to_string())?;
     }
@@ -65,7 +54,7 @@ pub fn seed_all(vault: &Path) -> Result<(), String> {
     vault_lib::write_atomic(&journal_path, &journal_content).map_err(|e| e.to_string())?;
 
     let (budget_table, budget_rows) = seed_budget_table();
-    let budget_dir = vault.join("tables").join(&budget_table.id);
+    let budget_dir = crate::vault::collection_dir(vault, "tables").join(&budget_table.id);
     std::fs::create_dir_all(&budget_dir).map_err(|e| e.to_string())?;
     let schema_content =
         parsers::serialize_table_schema(&budget_table).map_err(|e| e.to_string())?;
@@ -181,51 +170,6 @@ fn seed_people() -> Vec<ParsedPerson> {
             "quinn.morgan@example.com",
             "woodshed",
             "Example planning partner used in the Cadence schedule.",
-        ),
-    ]
-}
-
-fn seed_events() -> Vec<ParsedEvent> {
-    vec![
-        event(
-            "e_seed_jamie_1on1",
-            "1:1 with [[Jamie Parker]]",
-            "2026-04-25T09:00:00-04:00",
-            30,
-            "personal",
-            &["jamie-parker"],
-            RecurringRule::Weekly,
-            "Catch up on the freelance roster. Check in on Indie Thinkers issue cadence.",
-        ),
-        event(
-            "e_seed_design_review",
-            "Design review",
-            "2026-04-25T11:30:00-04:00",
-            45,
-            "woodshed",
-            &["sam-chen", "morgan-diaz"],
-            RecurringRule::None,
-            "Review the partner-dashboard mocks. Sam owns systems feedback; Morgan covers data flows.",
-        ),
-        event(
-            "e_seed_quinn_q2",
-            "[[Quinn Morgan]] — Q2 planning",
-            "2026-04-25T14:00:00-04:00",
-            60,
-            "woodshed",
-            &["quinn-morgan"],
-            RecurringRule::None,
-            "Q2 OKRs draft. Bring revenue forecast and the platform team's capacity numbers.",
-        ),
-        event(
-            "e_seed_standup",
-            "Engineering standup",
-            "2026-04-25T08:30:00-04:00",
-            15,
-            "woodshed",
-            &["sam-chen", "morgan-diaz", "taylor-brooks", "cameron-patel"],
-            RecurringRule::Daily,
-            "Daily 15-minute standup. What landed, what's blocked, what's next.",
         ),
     ]
 }
@@ -684,37 +628,6 @@ fn person(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn event(
-    id: &str,
-    title: &str,
-    date: &str,
-    duration: u32,
-    area: &str,
-    attendees: &[&str],
-    recurring: RecurringRule,
-    body: &str,
-) -> ParsedEvent {
-    ParsedEvent {
-        id: id.to_string(),
-        title: title.to_string(),
-        subtitle: None,
-        date: date.to_string(),
-        duration,
-        area: area.to_string(),
-        attendees: attendees.iter().map(|s| s.to_string()).collect(),
-        recurring,
-        provider: None,
-        account_id: None,
-        external_id: None,
-        writable: None,
-        rrule_original: None,
-        local_metadata_overrides: Vec::new(),
-        tags: vec![],
-        body: body.to_string(),
-    }
-}
-
 fn note(id: &str, title: &str, area: &str, created: &str, tags: &[&str], body: &str) -> ParsedNote {
     ParsedNote {
         id: id.to_string(),
@@ -811,8 +724,8 @@ mod tests {
             .unwrap()
             .count();
 
-        // Events live one-per-file in events/ now (used to be inline
-        // in cadence/<date>.md frontmatter).
+        // Sample data intentionally does not create local-only events: those
+        // would look like calendar events without syncing to Google Calendar.
         let events = std::fs::read_dir(vault_lib::events_dir(&vault))
             .unwrap()
             .filter_map(|e| e.ok())
@@ -832,7 +745,7 @@ mod tests {
             .count();
 
         assert!(people >= 5, "expected several people, got {}", people);
-        assert!(events >= 3, "expected several events, got {}", events);
+        assert_eq!(events, 0, "expected no locally-created sample events");
         assert!(tasks >= 3, "expected several tasks, got {}", tasks);
         assert!(notes >= 2, "expected several notes, got {}", notes);
         assert!(
@@ -872,10 +785,6 @@ mod tests {
         for p in seed_people() {
             let s = parsers::serialize_person(&p).unwrap();
             assert_eq!(parsers::parse_person(&s).unwrap(), p);
-        }
-        for e in seed_events() {
-            let s = parsers::serialize_event(&e).unwrap();
-            assert_eq!(parsers::parse_event(&s).unwrap(), e);
         }
         for t in seed_tasks() {
             let s = parsers::serialize_task(&t).unwrap();

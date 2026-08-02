@@ -115,14 +115,28 @@ describe("invalidateForPath", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["areas"] });
   });
 
-  it("falls back to coarse invalidation for unknown sections", () => {
+  it("routes nested Markdown from an adopted folder to Notebook", () => {
     invalidateForPath(queryClient, "weird/path.md");
-    expect(invalidateSpy).toHaveBeenCalledWith();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith();
   });
 
-  it("ignores paths without a section", () => {
+  it("treats canonical-looking folders as Notebook when the watcher marks them external", () => {
+    invalidateForPath(
+      queryClient,
+      "people/existing.md",
+      "modified",
+      true,
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["people"] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["events"] });
+  });
+
+  it("routes root Markdown from an adopted folder to Notebook", () => {
     invalidateForPath(queryClient, "lonely.md");
-    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["notes"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["search"] });
   });
 });
 

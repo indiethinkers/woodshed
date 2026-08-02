@@ -206,9 +206,9 @@ function EventDetailInner({ event }: { event: EventDto }) {
           />
         </PropertyRow>
         {event.subtitle && (
-          // Subtitle is rare — only set when the event creation form
-          // captured a location/secondary line. Render it as a property
-          // so it shares the same column rhythm as the rest of the page.
+          // Calendar providers use the subtitle for a location or secondary
+          // line. Render it as a property so it shares the same column rhythm
+          // as the rest of the page.
           <PropertyRow label="Location">
             <span className="text-foreground/85">{event.subtitle}</span>
           </PropertyRow>

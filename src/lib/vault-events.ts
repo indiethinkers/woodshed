@@ -3,8 +3,8 @@ import { woodshedClient } from "@/lib/woodshed-client";
 
 // VaultChange payload shape, matching Rust src-tauri/src/watcher/mod.rs.
 export type VaultChange =
-  | { kind: "modified"; path: string }
-  | { kind: "removed"; path: string };
+  | { kind: "modified"; path: string; external?: boolean }
+  | { kind: "removed"; path: string; external?: boolean };
 
 export function invalidateAfterIndexRebuild(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ["emails"] });
@@ -36,12 +36,43 @@ export function invalidateForPath(
   queryClient: QueryClient,
   path: string,
   _kind: VaultChange["kind"] = "modified",
+  external = false,
 ): void {
   const segments = path.split("/").filter(Boolean);
-  if (segments.length < 2) {
+  if (external && path.endsWith(".md")) {
+    queryClient.invalidateQueries({ queryKey: ["notes"] });
+    queryClient.invalidateQueries({ queryKey: ["search"] });
+    queryClient.invalidateQueries({ queryKey: ["wikilinkTargets"] });
+    queryClient.invalidateQueries({ queryKey: ["tagTable"] });
+    queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
+    queryClient.invalidateQueries({ queryKey: ["backlinks"] });
+    queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
     return;
   }
-  const [section, ...rest] = segments;
+  if (segments.length < 2) {
+    // Root-level Markdown is a valid Notebook record in an adopted folder.
+    // There is no section name to route through the switch below, so refresh
+    // the source list and every index-backed projection directly.
+    if (segments.length === 1 && path.endsWith(".md")) {
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.invalidateQueries({ queryKey: ["search"] });
+      queryClient.invalidateQueries({ queryKey: ["wikilinkTargets"] });
+      queryClient.invalidateQueries({ queryKey: ["tagTable"] });
+      queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
+      queryClient.invalidateQueries({ queryKey: ["backlinks"] });
+      queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
+    }
+    return;
+  }
+  let [section, ...rest] = segments;
+
+  // Adopted Markdown folders keep Woodshed-managed collections under the
+  // visible `woodshed/` child. Strip that layout prefix so every existing
+  // invalidation rule continues to describe the logical collection.
+  if (section === "woodshed") {
+    [section, ...rest] = rest;
+    if (!section) return;
+  }
 
   // `.woodshed/` is app-internal state, not user-authored vault content.
   // In particular, every atomic chat autosave snapshots the previous chat
@@ -175,8 +206,13 @@ export function invalidateForPath(
       break;
     }
     default:
-      // Unknown section — best-effort coarse invalidation.
-      queryClient.invalidateQueries();
+      // In an adopted Markdown tree, ordinary `.md` files outside the managed
+      // subtree are Notebook records regardless of their original folder.
+      if (path.endsWith(".md")) {
+        queryClient.invalidateQueries({ queryKey: ["notes"] });
+      } else {
+        queryClient.invalidateQueries();
+      }
   }
 }
 
@@ -185,6 +221,6 @@ export function invalidateForPath(
 // from Rust, so this is a no-op until Phase 2 lands.
 export function vaultEventListener(queryClient: QueryClient): () => void {
   return woodshedClient().subscribeVaultChanges((change) => {
-    invalidateForPath(queryClient, change.path, change.kind);
+    invalidateForPath(queryClient, change.path, change.kind, change.external);
   });
 }

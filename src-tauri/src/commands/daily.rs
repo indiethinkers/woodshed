@@ -7,7 +7,7 @@
 // Daily files own the inline events array. daily_save is body-only —
 // reading the existing file first and writing only `body` back so the
 // frontend's autosave loop can't clobber events. Mutations to the
-// events array go through the event_create/update/delete commands in
+// events array go through the event update/delete commands in
 // commands/events.rs.
 
 use crate::parsers;

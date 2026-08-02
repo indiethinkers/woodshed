@@ -42,17 +42,20 @@ Deletion moves records to `.woodshed/trash/<operation-id>/` for recovery.
 Vault readers open regular files with no-follow semantics and enforce limits on
 the open file descriptor, closing the usual symlink-check/read race. Atomic
 writes use randomized, exclusively-created temporary files.
-Before overwriting a record, Woodshed retains up to 50 no-follow revision
-snapshots for that record; the oldest snapshots are pruned after a successful
-new snapshot so autosave history cannot grow without bound.
+Before overwriting a record—including Markdown opened from an adopted folder—
+Woodshed retains up to 50 no-follow revision snapshots for that record; the
+oldest snapshots are pruned after a successful new snapshot so autosave history
+cannot grow without bound. Adopting a Markdown folder does not move its existing
+files. Woodshed's typed records live in a visible `woodshed/` child, while the
+portable `.woodshed/imported-layout` marker selects that storage layout.
 
 `index.db` and `gcal-cache/` are derived and rebuildable. The SQLite index stores
 FTS content plus normalized tag and wikilink edges so reads do not repeatedly
-parse the entire vault. Tag views read only the indexed matching paths. Inbox
-list transport is backed by paginated SQLite summary rows; it neither scans the
-inbox nor crosses IPC with the whole corpus. Message bodies and HTML load only
-for an opened message, and thread lookup selects bounded indexed paths before
-opening matching records.
+parse the entire vault. Tag views read only the indexed matching paths. Mail
+folder list transport is backed by paginated SQLite summary rows; it neither
+scans the mail folder nor crosses IPC with the whole corpus. Message bodies and HTML load
+only for an opened message, and thread lookup selects bounded indexed paths
+before opening matching records.
 
 Agent turns are process-owned background jobs recorded as bounded JSON files in
 `agent-runs/` under the application-data directory. A run stores its stable id,

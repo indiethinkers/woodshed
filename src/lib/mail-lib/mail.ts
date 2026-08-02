@@ -16,6 +16,7 @@ import type {
   Inbox,
   MailSyncResult,
   MailPage,
+  MailFolder,
   ReplyInput,
   SendResult,
 } from "./types";
@@ -48,6 +49,23 @@ export async function mailInboxPage(
       items: [],
       nextOffset: null,
     }
+  );
+}
+
+/** Read one indexed page from a durable mail folder, optionally through FTS. */
+export async function mailFolderPage(
+  folder: MailFolder,
+  query = "",
+  offset = 0,
+  limit = 200,
+): Promise<MailPage> {
+  return (
+    (await tauriInvoke<MailPage>("mail_folder_page", {
+      folder,
+      query: query.trim() || null,
+      offset,
+      limit,
+    })) ?? { items: [], nextOffset: null }
   );
 }
 
@@ -231,6 +249,14 @@ export async function mailReply(input: ReplyInput): Promise<SendResult | null> {
 
 export async function mailDraftSave(input: DraftSaveInput): Promise<DraftDto | null> {
   return tauriInvoke<DraftDto>("mail_draft_save", { input });
+}
+
+export async function mailDraftsList(query = ""): Promise<DraftDto[]> {
+  return (
+    (await tauriInvoke<DraftDto[]>("mail_drafts_list", {
+      query: query.trim() || null,
+    })) ?? []
+  );
 }
 
 export async function mailDraftDelete(id: string): Promise<void> {

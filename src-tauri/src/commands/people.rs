@@ -116,14 +116,15 @@ fn resolve_avatar_for_dto(vault: &Path, raw: Option<String>) -> Option<String> {
         return None;
     }
 
-    let attachments_dir = vault.join("attachments");
-    let people_dir = vault.join(&managed_prefix);
+    let records_root = vault_lib::records_root(vault);
+    let attachments_dir = records_root.join("attachments");
+    let people_dir = records_root.join(&managed_prefix);
     if !vault_lib::is_real_directory(&attachments_dir) || !vault_lib::is_real_directory(&people_dir)
     {
         return None;
     }
     let managed_dir = people_dir.canonicalize().ok()?;
-    let unresolved = vault.join(relative);
+    let unresolved = records_root.join(relative);
     if !vault_lib::is_real_file(&unresolved) {
         return None;
     }
@@ -296,7 +297,8 @@ pub fn person_create(
     input: PersonCreate,
 ) -> Result<PersonDto, String> {
     let vault = vault_root(&app)?;
-    std::fs::create_dir_all(vault.join("people")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(vault_lib::collection_dir(&vault, "people"))
+        .map_err(|e| e.to_string())?;
 
     let id = unique_id(&vault, &slugify_name(&input.name))?;
     let path = person_path(&vault, &id)?;
@@ -414,7 +416,8 @@ fn create_minimal_person(
     vault: &Path,
     name: String,
 ) -> Result<String, String> {
-    std::fs::create_dir_all(vault.join("people")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(vault_lib::collection_dir(vault, "people"))
+        .map_err(|e| e.to_string())?;
     let id = unique_id(vault, &slugify_name(&name))?;
     let path = person_path(vault, &id)?;
     let mut person = ParsedPerson {
@@ -577,7 +580,7 @@ pub fn person_avatar_clear(
 }
 
 fn avatar_attachments_dir(vault: &Path) -> PathBuf {
-    vault.join("attachments").join("people")
+    vault_lib::collection_dir(vault, "attachments").join("people")
 }
 
 /// Normalize a user-supplied extension to the small whitelist we
@@ -674,7 +677,7 @@ pub async fn people_all(app: AppHandle) -> Result<Vec<PersonDto>, String> {
 /// (same tolerance as `read_all_people`).
 pub fn build_email_index(vault: &Path) -> Vec<crate::state::PersonRef> {
     let mut out: Vec<crate::state::PersonRef> = Vec::new();
-    let dir = vault.join("people");
+    let dir = vault_lib::collection_dir(vault, "people");
     if !vault_lib::is_real_directory(&dir) {
         return out;
     }
@@ -719,7 +722,7 @@ pub fn refresh_email_index(state: &State<AppState>, vault: &Path) {
 }
 
 pub(crate) fn read_all_people(vault: &Path) -> Result<Vec<PersonDto>, String> {
-    let dir = vault.join("people");
+    let dir = vault_lib::collection_dir(vault, "people");
     if !vault_lib::is_real_directory(&dir) {
         return Ok(Vec::new());
     }

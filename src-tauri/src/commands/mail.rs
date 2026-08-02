@@ -48,6 +48,12 @@ pub struct EmailSummary {
     /// no display-name part.
     pub from: String,
     pub from_email: String,
+    /// Persisted recipients. Older received records omit these and deserialize
+    /// to empty lists; sent records always include them.
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
     pub subject: String,
     /// Full plaintext body when available (filled by mail_get_full or by
     /// the per-message expand step in mail_sync_recent). Empty when only
@@ -113,8 +119,6 @@ pub struct Attachment {
 pub struct EmailFull {
     #[serde(flatten)]
     pub summary: EmailSummary,
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +126,24 @@ pub struct EmailFull {
 pub struct MailPage {
     pub items: Vec<EmailSummary>,
     pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MailFolder {
+    Inbox,
+    Sent,
+    Archive,
+}
+
+impl MailFolder {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::Sent => "sent",
+            Self::Archive => "archive",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -451,7 +473,7 @@ fn email_filename(subject: &str, message_id: &str) -> String {
 ///
 /// Returns None when no file in that folder matches.
 pub(crate) fn find_email_path(vault: &Path, sub: &str, message_id: &str) -> Option<PathBuf> {
-    let dir = vault.join(sub);
+    let dir = vault_lib::collection_dir(vault, sub);
     if !vault_lib::is_real_directory(&dir) {
         return None;
     }
@@ -596,8 +618,7 @@ fn merged_viewed_state(existing: &EmailSummary, incoming: &EmailSummary) -> bool
 /// One sub-dir per message: `attachments/mail/<message-id>/`. Gmail writes
 /// here eagerly during sync.
 pub(crate) fn attachment_dir(vault: &Path, message_id: &str) -> PathBuf {
-    vault
-        .join("attachments")
+    vault_lib::collection_dir(vault, "attachments")
         .join("mail")
         .join(safe_dir_component(message_id))
 }
@@ -740,6 +761,8 @@ pub(crate) fn build_email_summary(
         thread_id,
         from,
         from_email,
+        to: Vec::new(),
+        cc: Vec::new(),
         subject,
         body,
         html,
@@ -910,7 +933,7 @@ pub(crate) fn trash_orphaned_html_siblings(vault: &Path, state: &State<AppState>
     // between writing its markdown and writing its sibling.
     let _guard = state.mail_mutations.lock_recover();
     for sub in &["inbox", "sent", "archive"] {
-        for path in orphaned_html_siblings(&vault.join(sub)) {
+        for path in orphaned_html_siblings(&vault_lib::collection_dir(vault, sub)) {
             record_self_write(state, &path);
             if let Err(e) = vault_lib::move_to_trash(vault, &path) {
                 eprintln!("mail: could not trash an orphaned html sibling in {sub}/: {e}");
@@ -980,7 +1003,7 @@ pub(crate) fn migrate_legacy_filenames(
     state: &State<AppState>,
 ) -> Result<(), String> {
     for sub in &["inbox", "sent", "archive"] {
-        let dir = vault.join(sub);
+        let dir = vault_lib::collection_dir(vault, sub);
         if !vault_lib::is_real_directory(&dir) {
             continue;
         }
@@ -1037,7 +1060,7 @@ pub(crate) fn migrate_legacy_filenames(
 pub(crate) fn migrate_gmail_thread_ids(vault: &Path) -> Result<usize, String> {
     let mut changed = 0;
     for sub in ["inbox", "sent", "archive"] {
-        let dir = vault.join(sub);
+        let dir = vault_lib::collection_dir(vault, sub);
         if !vault_lib::is_real_directory(&dir) {
             continue;
         }
@@ -1088,12 +1111,29 @@ pub fn mail_inbox_page(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<MailPage, String> {
-    let _vault = vault_root(&app)?;
+    mail_folder_page(app, state, MailFolder::Inbox, None, offset, limit)
+}
+
+#[tauri::command]
+pub fn mail_folder_page(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    folder: MailFolder,
+    query: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<MailPage, String> {
+    let vault = vault_root(&app)?;
+    let folder_path = vault_lib::collection_dir(&vault, folder.as_str());
+    let relative = folder_path
+        .strip_prefix(&vault)
+        .map_err(|_| "mail folder escapes the configured vault".to_string())?;
+    let path_prefix = format!("{}/", relative.to_string_lossy());
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(200).clamp(1, 200);
     let (items, next_offset) = state
         .ensure_index(&app)?
-        .mail_inbox_page(offset, limit)
+        .mail_folder_page(&path_prefix, query.as_deref(), offset, limit)
         .map_err(|error| error.to_string())?;
     Ok(MailPage { items, next_offset })
 }
@@ -1146,8 +1186,6 @@ pub(crate) fn email_date_cmp(a: &EmailSummary, b: &EmailSummary) -> std::cmp::Or
 
 /// Return the full message (summary + to/cc) for `id`. Gmail sync stores
 /// the full body and attachments locally, so this reads straight from disk.
-/// `to`/`cc` aren't persisted in the local summary and come back empty —
-/// the detail view already has the sender from the summary.
 #[tauri::command]
 pub fn mail_get_full(app: AppHandle, id: String) -> Result<EmailFull, String> {
     let id = strip_brackets(&id);
@@ -1158,11 +1196,7 @@ pub fn mail_get_full(app: AppHandle, id: String) -> Result<EmailFull, String> {
 }
 
 fn email_full_from_local(summary: EmailSummary) -> EmailFull {
-    EmailFull {
-        summary,
-        to: Vec::new(),
-        cc: Vec::new(),
-    }
+    EmailFull { summary }
 }
 
 /// Resolve a known attachment beneath its message directory and open it with
@@ -1192,8 +1226,9 @@ pub fn mail_open_attachment(
         return Err("attachment metadata contains an unsafe filename".to_string());
     }
     let dir = attachment_dir(&vault, &message_id);
-    if !vault_lib::is_real_directory(&vault.join("attachments"))
-        || !vault_lib::is_real_directory(&vault.join("attachments").join("mail"))
+    let attachments = vault_lib::collection_dir(&vault, "attachments");
+    if !vault_lib::is_real_directory(&attachments)
+        || !vault_lib::is_real_directory(&attachments.join("mail"))
         || !vault_lib::is_real_directory(&dir)
     {
         return Err("attachment directory is missing or unsafe".to_string());
@@ -1234,16 +1269,65 @@ pub(crate) fn mail_get_local_inner(vault: &Path, id: &str) -> Result<Option<Emai
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
+pub fn mail_drafts_list(app: AppHandle, query: Option<String>) -> Result<Vec<DraftDto>, String> {
+    let vault = vault_root(&app)?;
+    let dir = vault_lib::collection_dir(&vault, "drafts");
+    read_drafts_dir(&dir, query.as_deref())
+}
+
+fn read_drafts_dir(dir: &Path, query: Option<&str>) -> Result<Vec<DraftDto>, String> {
+    const MAX_DRAFTS: usize = 10_000;
+    if !vault_lib::is_real_directory(dir) {
+        return Ok(Vec::new());
+    }
+    let search = query
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase);
+    let mut drafts = std::fs::read_dir(dir)
+        .map_err(|error| format!("read drafts: {error}"))?
+        .flatten()
+        .take(MAX_DRAFTS)
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|value| value.to_str()) == Some("md")
+                && vault_lib::is_real_file(&path))
+            .then(|| load_draft_from_path(&path))
+            .flatten()
+        })
+        .filter(|draft| {
+            let Some(search) = search.as_deref() else {
+                return true;
+            };
+            draft.subject.to_lowercase().contains(search)
+                || draft.body.to_lowercase().contains(search)
+                || draft
+                    .to
+                    .iter()
+                    .chain(&draft.cc)
+                    .chain(&draft.bcc)
+                    .any(|recipient| recipient.to_lowercase().contains(search))
+        })
+        .collect::<Vec<_>>();
+    drafts.sort_by(|left, right| right.created.cmp(&left.created));
+    Ok(drafts)
+}
+
+#[tauri::command]
 pub fn mail_draft_save(
     app: AppHandle,
     state: State<'_, AppState>,
     input: DraftSaveInput,
 ) -> Result<DraftDto, String> {
     let vault = vault_root(&app)?;
-    std::fs::create_dir_all(vault.join("drafts")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(vault_lib::collection_dir(&vault, "drafts"))
+        .map_err(|e| e.to_string())?;
 
     let id = input.id.unwrap_or_else(|| Ulid::new().to_string());
-    let created = chrono::Local::now().to_rfc3339();
+    let path = drafts_path(&vault, &id)?;
+    let created = load_draft_from_path(&path)
+        .map(|draft| draft.created)
+        .unwrap_or_else(|| chrono::Local::now().to_rfc3339());
     let dto = DraftDto {
         id: id.clone(),
         created,
@@ -1257,7 +1341,6 @@ pub fn mail_draft_save(
         source_message_id: input.source_message_id,
         thread_id: input.thread_id,
     };
-    let path = drafts_path(&vault, &id)?;
     record_self_write(&state, &path);
     vault_lib::write_atomic(&path, &render_draft_md(&dto)).map_err(|e| e.to_string())?;
     Ok(dto)
@@ -1526,7 +1609,7 @@ pub(crate) fn reconcile_gmail_inbox(
     live.extend(just_synced.iter().map(|s| strip_brackets(s)));
 
     let mut archived = 0usize;
-    for mut summary in read_inbox_dir(&vault.join("inbox")) {
+    for mut summary in read_inbox_dir(&vault_lib::collection_dir(vault, "inbox")) {
         if summary.inbox.as_str() != inbox_id {
             continue;
         }
@@ -1613,9 +1696,15 @@ pub fn mail_thread(
         .map_err(|error| error.to_string())?
     {
         let mut components = Path::new(&relative).components();
-        let Some(std::path::Component::Normal(sub)) = components.next() else {
+        let Some(std::path::Component::Normal(mut sub)) = components.next() else {
             continue;
         };
+        if sub == std::ffi::OsStr::new(vault_lib::IMPORTED_RECORDS_DIR) {
+            let Some(std::path::Component::Normal(next)) = components.next() else {
+                continue;
+            };
+            sub = next;
+        }
         let Some(std::path::Component::Normal(filename)) = components.next() else {
             continue;
         };
@@ -1627,7 +1716,10 @@ pub fn mail_thread(
         let Some(filename) = filename.to_str() else {
             continue;
         };
-        let dir = vault.join(sub);
+        let Some(sub) = sub.to_str() else {
+            continue;
+        };
+        let dir = vault_lib::collection_dir(&vault, sub);
         let Ok(path) = vault_lib::confined_file_path(&vault, &dir, filename) else {
             continue;
         };
@@ -1662,6 +1754,8 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
          inbox: {inbox}\n\
          from: {from}\n\
          from_email: {from_email}\n\
+         to: [{to}]\n\
+         cc: [{cc}]\n\
          subject: {subject}\n\
          preview: {preview}\n\
          date: {date}\n\
@@ -1678,6 +1772,8 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
         inbox = json_string(&email.inbox),
         from = yaml_string(&email.from),
         from_email = json_string(&email.from_email),
+        to = comma_join(&email.to),
+        cc = comma_join(&email.cc),
         subject = yaml_string(&email.subject),
         preview = yaml_string(&email.preview),
         date = email.date,
@@ -1746,6 +1842,43 @@ pub(crate) fn render_draft_md(d: &DraftDto) -> String {
     )
 }
 
+pub(crate) fn load_draft_from_path(path: &Path) -> Option<DraftDto> {
+    let content = vault_lib::read_record(path).ok()?;
+    parse_draft_md(&content)
+}
+
+fn parse_draft_md(content: &str) -> Option<DraftDto> {
+    use gray_matter::{engine::YAML, Matter};
+    let parsed = Matter::<YAML>::new().parse(content);
+    let map = parsed.data?.as_hashmap().ok()?;
+    let optional_string = |key: &str| {
+        map.get(key)
+            .and_then(|value| value.as_string().ok())
+            .filter(|value| !value.trim().is_empty())
+    };
+    let kind = match map.get("kind")?.as_string().ok()?.as_str() {
+        "new" => DraftKind::New,
+        "reply" => DraftKind::Reply,
+        _ => return None,
+    };
+    Some(DraftDto {
+        id: map.get("id")?.as_string().ok()?,
+        created: map.get("created")?.as_string().ok()?,
+        kind,
+        from_inbox: optional_string("from_inbox"),
+        to: pod_string_array(map.get("to")),
+        cc: pod_string_array(map.get("cc")),
+        bcc: pod_string_array(map.get("bcc")),
+        subject: map
+            .get("subject")
+            .and_then(|value| value.as_string().ok())
+            .unwrap_or_default(),
+        body: parsed.content.trim().to_string(),
+        source_message_id: optional_string("source_message_id"),
+        thread_id: optional_string("thread_id"),
+    })
+}
+
 fn parse_email_md(content: &str) -> Option<EmailSummary> {
     parse_email_md_yaml(content).or_else(|| {
         let repaired = repair_legacy_misquoted_sender(content)?;
@@ -1774,6 +1907,8 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         .and_then(|v| v.as_string().ok())?;
     let from = map.get("from")?.as_string().ok()?;
     let from_email = map.get("from_email")?.as_string().ok()?;
+    let to = pod_string_array(map.get("to"));
+    let cc = pod_string_array(map.get("cc"));
     let subject = map.get("subject")?.as_string().ok()?;
     let date = map.get("date")?.as_string().ok()?;
     let read = map
@@ -1801,6 +1936,8 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         thread_id: thread,
         from,
         from_email,
+        to,
+        cc,
         subject,
         body,
         html: None,
@@ -2039,6 +2176,8 @@ mod tests {
             thread_id: "thread-1".into(),
             from: "Alex Rivera".into(),
             from_email: "alex@example.com".into(),
+            to: vec!["recipient@example.test".into()],
+            cc: vec!["copy@example.test".into()],
             subject: "Lunch tomorrow?".into(),
             body,
             html: None,
@@ -2066,6 +2205,8 @@ mod tests {
         assert_eq!(parsed.inbox, original.inbox);
         assert_eq!(parsed.from, original.from);
         assert_eq!(parsed.from_email, original.from_email);
+        assert_eq!(parsed.to, original.to);
+        assert_eq!(parsed.cc, original.cc);
         assert_eq!(parsed.subject, original.subject);
         assert_eq!(parsed.body, original.body);
         assert_eq!(parsed.preview, original.preview);
@@ -2075,6 +2216,92 @@ mod tests {
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[test]
+    fn render_draft_md_roundtrips_for_resuming() {
+        let original = DraftDto {
+            id: "01SYNTHETICDRAFT0000000000".into(),
+            created: "2026-07-31T10:00:00Z".into(),
+            kind: DraftKind::Reply,
+            from_inbox: Some("gmail:sender@example.test".into()),
+            to: vec!["recipient@example.test".into()],
+            cc: vec!["copy@example.test".into()],
+            bcc: Vec::new(),
+            subject: "Synthetic follow-up".into(),
+            body: "A durable draft body.".into(),
+            source_message_id: Some("source-message@example.test".into()),
+            thread_id: Some("thread-example".into()),
+        };
+
+        let parsed = parse_draft_md(&render_draft_md(&original)).expect("parse draft");
+
+        assert_eq!(parsed.id, original.id);
+        assert_eq!(parsed.created, original.created);
+        assert!(matches!(parsed.kind, DraftKind::Reply));
+        assert_eq!(parsed.from_inbox, original.from_inbox);
+        assert_eq!(parsed.to, original.to);
+        assert_eq!(parsed.cc, original.cc);
+        assert_eq!(parsed.subject, original.subject);
+        assert_eq!(parsed.body, original.body);
+        assert_eq!(parsed.source_message_id, original.source_message_id);
+        assert_eq!(parsed.thread_id, original.thread_id);
+    }
+
+    #[test]
+    fn mail_folder_rejects_unknown_values_during_deserialization() {
+        assert_eq!(
+            serde_json::from_str::<MailFolder>("\"sent\"").unwrap(),
+            MailFolder::Sent
+        );
+        assert!(serde_json::from_str::<MailFolder>("\"trash\"").is_err());
+    }
+
+    #[test]
+    fn draft_listing_skips_corrupt_records_and_filters_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("drafts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let draft = DraftDto {
+            id: "01SYNTHETICDRAFT0000000001".into(),
+            created: "2026-08-01T10:00:00Z".into(),
+            kind: DraftKind::New,
+            from_inbox: Some("gmail:sender@example.test".into()),
+            to: vec!["recipient@example.test".into()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: "Synthetic planning".into(),
+            body: "A durable draft body.".into(),
+            source_message_id: None,
+            thread_id: None,
+        };
+        std::fs::write(dir.join("valid.md"), render_draft_md(&draft)).unwrap();
+        std::fs::write(dir.join("corrupt.md"), "not a draft").unwrap();
+
+        let all = read_drafts_dir(&dir, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, draft.id);
+        assert_eq!(read_drafts_dir(&dir, Some("planning")).unwrap().len(), 1);
+        assert_eq!(read_drafts_dir(&dir, Some("missing")).unwrap().len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn draft_listing_rejects_symlinked_markdown_entries() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("drafts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(
+            &outside,
+            "---\ntype: draft\nid: outside\nkind: new\ncreated: 2026-08-01T10:00:00Z\n---\n",
+        )
+        .unwrap();
+        symlink(&outside, dir.join("linked.md")).unwrap();
+
+        assert!(read_drafts_dir(&dir, None).unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2356,6 +2583,8 @@ mod tests {
             thread_id: "thread-2/abc=def".into(),
             from: "Beehiiv".into(),
             from_email: "noreply@beehiiv.com".into(),
+            to: Vec::new(),
+            cc: Vec::new(),
             subject: "API v2 — release notes".into(),
             body,
             html: None,

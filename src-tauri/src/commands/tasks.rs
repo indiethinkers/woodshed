@@ -277,7 +277,7 @@ pub fn task_get(app: AppHandle, id: String) -> Result<Option<TaskDto>, String> {
     // The mismatch usually means the id-from-URL doesn't equal the
     // on-disk filename (e.g., a stale URL after the id-format change
     // that switched from `t_<ULID>` to `t_<slug>_<short>`).
-    let dir = vault.join("tasks");
+    let dir = vault_lib::collection_dir(&vault, "tasks");
     if !vault_lib::is_real_directory(&dir) {
         return Ok(None);
     }
@@ -445,7 +445,7 @@ pub fn task_delete(app: AppHandle, state: State<AppState>, id: String) -> Result
 }
 
 fn read_all_tasks(vault: &Path) -> Result<Vec<TaskDto>, String> {
-    let dir = vault.join("tasks");
+    let dir = vault_lib::collection_dir(vault, "tasks");
     if !vault_lib::is_real_directory(&dir) {
         return Ok(Vec::new());
     }
