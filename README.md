@@ -4,9 +4,7 @@
 
 Woodshed is a macOS workspace that connects your calendar, inbox, notes, tasks,
 and people. Prepare for a meeting, take notes, capture the follow-up, and later
-find the whole trail through the people and topics involved.
-
-Your durable records remain ordinary Markdown files on your computer. There is
+find the whole trail through the people and topics involved. Your durable records remain ordinary Markdown files on your computer. There is
 no Woodshed account or hosted backend.
 
 ![Woodshed Cadence view](docs/images/woodshed-cadence.png)
