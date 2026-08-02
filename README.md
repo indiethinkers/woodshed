@@ -1,35 +1,45 @@
 # Woodshed
 
+**Stop rebuilding context every time you switch apps.**
+
+Woodshed is a macOS workspace that connects your calendar, inbox, notes, tasks,
+and people. Prepare for a meeting, take notes, capture the follow-up, and later
+find the whole trail through the people and topics involved.
+
+Your durable records remain ordinary Markdown files on your computer. There is
+no Woodshed account or hosted backend.
+
+[Request pilot access](mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access)
+· [See how it works](#a-day-in-woodshed) · [Build from source](#development)
+
+> **Early preview:** The source is available now; downloadable macOS builds are
+> not yet published. Back up an important vault before opening it with a
+> development build.
+
+## A day in Woodshed
+
+![Three steps in Woodshed: start with the day, capture context once, and recover the full trail later](site/product-tour.svg)
+
+1. **Start with the day.** See the schedule, tasks, and daily note in one working
+   view.
+2. **Capture context once.** Link a person or topic while you write; Woodshed
+   carries that relationship into backlinks and related records.
+3. **Recover the trail.** Open a person later to find the meetings, mail, notes,
+   and follow-ups around them.
+
 ![Woodshed Cadence view](docs/images/woodshed-cadence.png)
 
-**A desktop-first knowledge workspace where your files remain yours.**
+*Cadence keeps the daily note, schedule, and task rail in the same working
+view.*
 
-Woodshed brings your calendar, email, notes, tasks, saved links, databases,
-contacts, and AI conversations into one local workspace.
+## Who Woodshed is for
 
-Its durable records are Markdown files with YAML frontmatter. You choose the
-vault directory; Woodshed reads, writes, links, and indexes those files without
-requiring a Woodshed account or hosted backend.
+Woodshed is for people whose work runs on context: founders, managers,
+consultants, researchers, and anyone who is tired of reconstructing a
+relationship or project across separate tools.
 
-The result is a personal knowledge graph that stays useful outside the app.
-Tags become views, wikilinks become relationships, and every surface can add
-context to another.
-
-> Woodshed is under active development. Back up an important vault before
-> opening it with a development build.
-
-## Table of Contents
-
-- 🌲 [Why Woodshed](#why-woodshed)
-- 📦 [Download](#download)
-- 🧰 [Features](#features)
-- 💾 [How Woodshed stores data](#how-woodshed-stores-data)
-- 🧭 [Using Woodshed](#using-woodshed)
-- 🏗️ [Architecture](#architecture)
-- 🛠️ [Development](#development)
-- 🔒 [Privacy and security](#privacy-and-security)
-- 🤝 [Contributing](#contributing)
-- 📄 [License](#license)
+It is a single-player, local-first workspace rather than a hosted team wiki.
+macOS is the first supported platform.
 
 ## Why Woodshed
 
@@ -37,9 +47,9 @@ Most productivity tools split work into separate databases. The meeting is in
 one app, its notes in another, the follow-up in a third, and the relevant person
 somewhere else.
 
-Woodshed treats those records as parts of one system. A person can connect to an
-event, a task, an email, a note, an area, or an Agent conversation through the
-same local graph.
+Woodshed treats those records as one trail of context. A person can connect to
+an event, task, email, note, area, or Agent conversation through the same local
+graph.
 
 - **Files over app.** Markdown is the source of truth; Woodshed is a lens.
 - **Local by default.** There is no account system, analytics, or telemetry.
@@ -49,19 +59,21 @@ same local graph.
 - **Narrow privilege.** The webview uses scoped Rust commands instead of general
   shell or filesystem permissions.
 
-## Download
+## Status and access
 
-When available, published macOS builds are distributed through
-[GitHub Releases](https://github.com/indiethinkers/woodshed/releases). Choose
-the Apple Silicon or Intel `.dmg`, drag Woodshed to Applications, and launch it.
+Woodshed is in active development. The public repository is a source preview;
+the current release does not include a downloadable application. To try an
+early build, [request pilot access](mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access),
+or [build Woodshed from source](#development).
 
-Woodshed is under active development, so there may not be a published build for
-every commit. Maintainer packaging instructions live in
+When signed macOS builds are available, they will be published through
+[GitHub Releases](https://github.com/indiethinkers/woodshed/releases). Maintainer
+packaging instructions live in
 [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Features
 
-### Eight connected surfaces
+### Connected surfaces
 
 | Surface | What it does |
 |---|---|

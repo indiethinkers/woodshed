@@ -68,14 +68,24 @@ bunx serve site --listen 8000
 
 ## Typography
 
-The CSS currently falls back to Inter Display → Inter → system
-sans. When the Söhne license is in place and the WOFF2 files are
-hosted on the same domain (or Klim's CDN), swap the @font-face
-section in `style.css`. There's a comment marking the spot.
+The marketing page uses Iowan Old Style/Baskerville for editorial display type
+and Avenir Next/Helvetica Neue for interface copy. They are system stacks, so
+the static site makes no third-party font requests. Document pages share the
+same typography.
 
-Until then, do NOT load Geist or any other Vercel default font on
-the marketing site. The whole point of the typography choice is to
-not look AI-generated.
+Do not replace these with a generic hosted web font without revisiting the
+overall art direction. The contrast between field-guide editorial type and the
+precise product UI is intentional.
+
+## GitHub repository metadata
+
+Repository sidebar settings are not version-controlled. After merging a change
+to the public product story, keep the GitHub settings aligned with the metadata
+in `package.json`:
+
+- **Description:** A macOS workspace connecting calendar, inbox, notes, tasks,
+  and people in local Markdown.
+- **Website:** https://woodshed.md
 
 ## Logo
 
