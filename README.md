@@ -9,24 +9,6 @@ find the whole trail through the people and topics involved.
 Your durable records remain ordinary Markdown files on your computer. There is
 no Woodshed account or hosted backend.
 
-[Request pilot access](mailto:hello@woodshed.md?subject=Woodshed%20pilot%20access)
-· [See how it works](#a-day-in-woodshed) · [Build from source](#development)
-
-> **Early preview:** The source is available now; downloadable macOS builds are
-> not yet published. Back up an important vault before opening it with a
-> development build.
-
-## A day in Woodshed
-
-![Three steps in Woodshed: start with the day, capture context once, and recover the full trail later](site/product-tour.svg)
-
-1. **Start with the day.** See the schedule, tasks, and daily note in one working
-   view.
-2. **Capture context once.** Link a person or topic while you write; Woodshed
-   carries that relationship into backlinks and related records.
-3. **Recover the trail.** Open a person later to find the meetings, mail, notes,
-   and follow-ups around them.
-
 ![Woodshed Cadence view](docs/images/woodshed-cadence.png)
 
 *Cadence keeps the daily note, schedule, and task rail in the same working
