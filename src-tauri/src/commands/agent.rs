@@ -18,10 +18,9 @@ use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
 const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_AGENT_PDF_CHARACTERS: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES / 4;
 const MAX_AGENT_PDF_PAGES: usize = 2_000;
 const AGENT_PDF_HELPER_ARG: &str = "--woodshed-agent-pdf-extract";
 const MAX_AGENT_PDF_HELPER_OUTPUT_BYTES: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES + 4 * 1024;
@@ -219,55 +218,46 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         // document. The initializer is failable for malformed input.
         let document = unsafe { PDFDocument::initWithData(PDFDocument::alloc(), &data) }
             .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
-        // Read page-by-page so the declared text budget is enforced before
-        // PDFKit materializes the complete document string. The character
-        // preflight is conservative: four UTF-8 bytes per UTF-16 unit.
+        // Read page-by-page so the declared text budget is enforced without
+        // materializing the complete document string. Do not call
+        // `numberOfCharacters` first: PDFKit may perform the same expensive
+        // text-layout pass again when `string` is requested.
         let page_count = unsafe { document.pageCount() };
         if page_count > MAX_AGENT_PDF_PAGES {
             return Err(format!("PDF exceeds the {MAX_AGENT_PDF_PAGES} page limit"));
         }
-        let mut total_characters = 0usize;
         let mut output = String::new();
         for index in 0..page_count {
-            // SAFETY: the index is within `pageCount`; both page accessors are
+            // SAFETY: the index is within `pageCount`; the page accessors are
             // read-only PDFKit properties and objc2 retains returned objects.
             let page = unsafe { document.pageAtIndex(index) }
                 .ok_or_else(|| "Woodshed could not read a page from this PDF".to_string())?;
-            let page_characters = unsafe { page.numberOfCharacters() };
-            total_characters = checked_pdf_character_total(total_characters, page_characters)?;
             let page_text = unsafe { page.string() }
                 .map(|value| value.to_string())
                 .unwrap_or_default();
-            let separator_bytes = usize::from(!output.is_empty());
-            if output
-                .len()
-                .saturating_add(separator_bytes)
-                .saturating_add(page_text.len())
-                > MAX_AGENT_ATTACHMENT_TEXT_BYTES
-            {
-                return Err(format!(
-                    "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
-                ));
-            }
-            if !output.is_empty() {
-                output.push('\n');
-            }
-            output.push_str(&page_text);
+            append_pdf_page_text(&mut output, &page_text, MAX_AGENT_ATTACHMENT_TEXT_BYTES)?;
         }
         Ok(output)
     })
 }
 
-fn checked_pdf_character_total(current: usize, page: usize) -> Result<usize, String> {
-    let total = current
-        .checked_add(page)
-        .ok_or_else(|| "PDF text size overflowed its limit".to_string())?;
-    if total > MAX_AGENT_PDF_CHARACTERS {
+fn append_pdf_page_text(output: &mut String, page_text: &str, limit: usize) -> Result<(), String> {
+    let separator_bytes = usize::from(!output.is_empty());
+    if output
+        .len()
+        .saturating_add(separator_bytes)
+        .saturating_add(page_text.len())
+        > limit
+    {
         return Err(format!(
             "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
         ));
     }
-    Ok(total)
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    output.push_str(page_text);
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -335,7 +325,10 @@ async fn run_bounded_helper(
         }
         Err(_) => {
             terminate_pdf_helper(&mut child).await;
-            Err("Attachment preparation timed out. Try a smaller PDF.".to_string())
+            Err(
+                "PDF text extraction timed out. The document may use complex or unsupported text encoding."
+                    .to_string(),
+            )
         }
     }
 }
@@ -1216,13 +1209,14 @@ mod tests {
     }
 
     #[test]
-    fn pdf_character_preflight_rejects_output_before_materialization() {
-        assert_eq!(
-            checked_pdf_character_total(MAX_AGENT_PDF_CHARACTERS - 1, 1).unwrap(),
-            MAX_AGENT_PDF_CHARACTERS
-        );
-        assert!(checked_pdf_character_total(MAX_AGENT_PDF_CHARACTERS, 1).is_err());
-        assert!(checked_pdf_character_total(usize::MAX, 1).is_err());
+    fn pdf_page_text_is_bounded_without_a_duplicate_character_scan() {
+        let mut output = "abc".to_string();
+        append_pdf_page_text(&mut output, "def", 7).unwrap();
+        assert_eq!(output, "abc\ndef");
+
+        let error = append_pdf_page_text(&mut output, "g", 7).unwrap_err();
+        assert!(error.contains("byte limit"));
+        assert_eq!(output, "abc\ndef");
     }
 
     #[cfg(target_os = "macos")]
