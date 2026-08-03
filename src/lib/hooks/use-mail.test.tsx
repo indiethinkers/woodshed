@@ -19,7 +19,12 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useArchiveOne, useMail, useMarkRead } from "./use-mail";
+import {
+  useArchiveOne,
+  useMail,
+  useMarkRead,
+  useRefreshMail,
+} from "./use-mail";
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -63,6 +68,58 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
     .getQueryData<InfiniteData<MailPage, number>>(["emails"])
     ?.pages.flatMap((page) => page.items);
 }
+
+describe("useRefreshMail", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("invalidates open thread data after Sent Mail synchronization", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["thread", email.threadId], [email]);
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "gmail_accounts_list") {
+        return Promise.resolve([
+          {
+            inboxId: email.inbox,
+            email: "alex@example.test",
+            displayName: "Synthetic account",
+            createdAt: "2026-08-03T12:00:00Z",
+          },
+        ]);
+      }
+      if (command === "gmail_sync_recent") {
+        return Promise.resolve({
+          written: [],
+          newMessages: 0,
+          fetched: 0,
+          removed: 0,
+          durationMs: 1,
+          email: "alex@example.test",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { result } = renderHook(() => useRefreshMail(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(qc.getQueryState(["thread", email.threadId])?.isInvalidated).toBe(
+      true,
+    );
+  });
+});
 
 describe("useMarkRead", () => {
   beforeEach(() => {

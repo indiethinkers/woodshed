@@ -319,6 +319,9 @@ export function useRefreshMail() {
     // undefined, or just the one named `gmail:...` account.
     const result = await mailSyncRecentMulti(limit, inboxId);
     qc.invalidateQueries({ queryKey: ["emails"] });
+    qc.invalidateQueries({ queryKey: ["email"] });
+    qc.invalidateQueries({ queryKey: ["email-full"] });
+    qc.invalidateQueries({ queryKey: ["thread"] });
     return result;
   };
 }
