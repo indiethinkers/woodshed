@@ -171,6 +171,35 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("rejects an unloaded attachment instead of sending a filename hint", async () => {
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await expect(
+      transport.sendMessages({
+        abortSignal: undefined,
+        chatId: "chat-1",
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            parts: [
+              { type: "text", text: "Read this attachment." },
+              {
+                type: "file",
+                filename: "notes.pdf",
+                mediaType: "application/pdf",
+                url: "",
+              },
+            ],
+          },
+        ],
+        trigger: "submit-message",
+        messageId: "message-1",
+      }),
+    ).rejects.toThrow("no longer loaded");
+    expect(mocks.tauriInvoke).not.toHaveBeenCalled();
+  });
+
   it("reconnects to an existing active run and polls it to completion", async () => {
     mocks.tauriInvoke
       .mockResolvedValueOnce([

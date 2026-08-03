@@ -251,7 +251,7 @@ function latestUserMessage(messages: UIMessage[]): AgentRunInputMessage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "user") continue;
-    const content = messageContentForAgent(message).trim();
+    const content = messageContentForTranscript(message).trim();
     if (!content) continue;
     return {
       id: message.id,
@@ -415,7 +415,7 @@ async function messagesToAgentMessages(
   const prepared = await Promise.all(
     messages.map(async (message) => ({
       role: message.role,
-      content: (await messageContentForAgent(message, true)).trim(),
+      content: (await messageContentForHermes(message)).trim(),
     })),
   );
   return prepared.filter((message): message is AgentChatMessage => {
@@ -428,34 +428,39 @@ async function messagesToAgentMessages(
   });
 }
 
-function messageContentForAgent(message: UIMessage): string;
-function messageContentForAgent(
-  message: UIMessage,
-  prepareAttachments: true,
-): Promise<string>;
-function messageContentForAgent(
-  message: UIMessage,
-  prepareAttachments = false,
-): string | Promise<string> {
+function messageTextAndFiles(message: UIMessage): {
+  files: FileUIPart[];
+  text: string;
+} {
   const text = message.parts
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("")
     .trim();
   const files = message.parts.filter(isFilePart);
-  if (!prepareAttachments) {
-    return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
-  }
-  return prepareAttachmentContext(files).then((context) =>
-    [text, context].filter(Boolean).join("\n\n"),
-  );
+  return { files, text };
+}
+
+function messageContentForTranscript(message: UIMessage): string {
+  const { files, text } = messageTextAndFiles(message);
+  return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
+}
+
+async function messageContentForHermes(message: UIMessage): Promise<string> {
+  const { files, text } = messageTextAndFiles(message);
+  const context = await prepareAttachmentContext(files);
+  return [text, context].filter(Boolean).join("\n\n");
 }
 
 async function prepareAttachmentContext(files: FileUIPart[]): Promise<string> {
   if (files.length === 0) return "";
   const contexts = await Promise.all(
     files.map(async (file) => {
-      if (!file.url) return attachmentContextFromFiles([file]);
+      if (!file.url) {
+        throw new Error(
+          "An attachment is no longer loaded. Reattach it before sending.",
+        );
+      }
       const prepared = await tauriInvoke<PreparedAgentAttachment>(
         "agent_attachment_prepare",
         {

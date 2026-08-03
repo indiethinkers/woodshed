@@ -543,26 +543,13 @@ fn apply_archive_plan(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RestoreCommand {
-    StoreLabels(&'static str),
-}
-
-fn restore_plan() -> [RestoreCommand; 1] {
-    [RestoreCommand::StoreLabels("+X-GM-LABELS.SILENT (\\Inbox)")]
-}
+const RESTORE_INBOX_LABELS: &str = "+X-GM-LABELS.SILENT (\\Inbox)";
 
 fn apply_restore_plan(
     session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
     uid_set: &str,
 ) -> Result<(), ImapError> {
-    for command in restore_plan() {
-        match command {
-            RestoreCommand::StoreLabels(labels) => {
-                session.uid_store(uid_set, labels)?;
-            }
-        }
-    }
+    session.uid_store(uid_set, RESTORE_INBOX_LABELS)?;
     Ok(())
 }
 
@@ -810,10 +797,7 @@ mod tests {
 
     #[test]
     fn restoring_an_archived_message_adds_the_inbox_label() {
-        assert_eq!(
-            restore_plan(),
-            [RestoreCommand::StoreLabels("+X-GM-LABELS.SILENT (\\Inbox)")]
-        );
+        assert_eq!(RESTORE_INBOX_LABELS, "+X-GM-LABELS.SILENT (\\Inbox)");
     }
 
     #[test]

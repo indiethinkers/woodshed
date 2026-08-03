@@ -17,8 +17,11 @@ use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
 const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_AGENT_PDF_CHARACTERS: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES / 4;
+const MAX_AGENT_PDF_PAGES: usize = 2_000;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -48,9 +51,25 @@ struct AgentRunProgress {
 pub async fn agent_attachment_prepare(
     input: AgentAttachmentPrepareInput,
 ) -> Result<AgentAttachmentPrepareResult, String> {
-    tokio::task::spawn_blocking(move || prepare_agent_attachment(input))
-        .await
-        .map_err(|error| format!("attachment preparation task failed: {error}"))?
+    run_attachment_preparation(AGENT_ATTACHMENT_PREPARE_TIMEOUT, move || {
+        prepare_agent_attachment(input)
+    })
+    .await
+}
+
+async fn run_attachment_preparation<F>(
+    timeout: Duration,
+    prepare: F,
+) -> Result<AgentAttachmentPrepareResult, String>
+where
+    F: FnOnce() -> Result<AgentAttachmentPrepareResult, String> + Send + 'static,
+{
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(prepare)).await {
+        Ok(result) => {
+            result.map_err(|error| format!("attachment preparation task failed: {error}"))?
+        }
+        Err(_) => Err("Attachment preparation timed out. Try a smaller PDF.".to_string()),
+    }
 }
 
 fn prepare_agent_attachment(
@@ -167,12 +186,55 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
         // document. The initializer is failable for malformed input.
         let document = unsafe { PDFDocument::initWithData(PDFDocument::alloc(), &data) }
             .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
-        // SAFETY: `string` is a read-only PDFDocument property. The returned
-        // NSString is retained by objc2 before leaving Objective-C.
-        let text = unsafe { document.string() }
-            .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
-        Ok(text.to_string())
+        // Read page-by-page so the declared text budget is enforced before
+        // PDFKit materializes the complete document string. The character
+        // preflight is conservative: four UTF-8 bytes per UTF-16 unit.
+        let page_count = unsafe { document.pageCount() };
+        if page_count > MAX_AGENT_PDF_PAGES {
+            return Err(format!("PDF exceeds the {MAX_AGENT_PDF_PAGES} page limit"));
+        }
+        let mut total_characters = 0usize;
+        let mut output = String::new();
+        for index in 0..page_count {
+            // SAFETY: the index is within `pageCount`; both page accessors are
+            // read-only PDFKit properties and objc2 retains returned objects.
+            let page = unsafe { document.pageAtIndex(index) }
+                .ok_or_else(|| "Woodshed could not read a page from this PDF".to_string())?;
+            let page_characters = unsafe { page.numberOfCharacters() };
+            total_characters = checked_pdf_character_total(total_characters, page_characters)?;
+            let page_text = unsafe { page.string() }
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let separator_bytes = usize::from(!output.is_empty());
+            if output
+                .len()
+                .saturating_add(separator_bytes)
+                .saturating_add(page_text.len())
+                > MAX_AGENT_ATTACHMENT_TEXT_BYTES
+            {
+                return Err(format!(
+                    "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
+                ));
+            }
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(&page_text);
+        }
+        Ok(output)
     })
+}
+
+fn checked_pdf_character_total(current: usize, page: usize) -> Result<usize, String> {
+    let total = current
+        .checked_add(page)
+        .ok_or_else(|| "PDF text size overflowed its limit".to_string())?;
+    if total > MAX_AGENT_PDF_CHARACTERS {
+        return Err(format!(
+            "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
+        ));
+    }
+    Ok(total)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -928,6 +990,75 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains("extract"));
+    }
+
+    #[test]
+    fn prepares_text_and_sanitizes_its_display_label() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"Synthetic notes");
+
+        let prepared = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("folder/\nnotes.txt".to_string()),
+            media_type: Some("text/plain".to_string()),
+            data_url: format!("data:text/plain;base64,{encoded}"),
+        })
+        .unwrap();
+
+        assert!(prepared
+            .context
+            .contains("[Attachment: notes.txt (text/plain)]"));
+        assert!(prepared.context.contains("Synthetic notes"));
+    }
+
+    #[test]
+    fn rejects_unsupported_invalid_and_oversized_attachment_inputs() {
+        let unsupported = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("image.png".to_string()),
+            media_type: Some("image/png".to_string()),
+            data_url: "data:image/png;base64,AA==".to_string(),
+        })
+        .unwrap_err();
+        assert!(unsupported.contains("PDF and text"));
+
+        let invalid = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("notes.txt".to_string()),
+            media_type: Some("text/plain".to_string()),
+            data_url: "data:text/plain;base64,not-base64".to_string(),
+        })
+        .unwrap_err();
+        assert!(invalid.contains("valid base64"));
+
+        let max_encoded = MAX_AGENT_ATTACHMENT_BYTES.div_ceil(3) * 4;
+        let oversized = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("notes.txt".to_string()),
+            media_type: Some("text/plain".to_string()),
+            data_url: format!("data:text/plain;base64,{}", "A".repeat(max_encoded + 1)),
+        })
+        .unwrap_err();
+        assert!(oversized.contains("byte limit"));
+    }
+
+    #[test]
+    fn pdf_character_preflight_rejects_output_before_materialization() {
+        assert_eq!(
+            checked_pdf_character_total(MAX_AGENT_PDF_CHARACTERS - 1, 1).unwrap(),
+            MAX_AGENT_PDF_CHARACTERS
+        );
+        assert!(checked_pdf_character_total(MAX_AGENT_PDF_CHARACTERS, 1).is_err());
+        assert!(checked_pdf_character_total(usize::MAX, 1).is_err());
+    }
+
+    #[tokio::test]
+    async fn attachment_preparation_times_out_before_an_agent_run_can_start() {
+        let error = run_attachment_preparation(Duration::from_millis(5), || {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(AgentAttachmentPrepareResult {
+                context: "late attachment text".to_string(),
+            })
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("timed out"));
     }
 
     #[test]

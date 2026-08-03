@@ -1503,7 +1503,7 @@ pub async fn mail_archive_one(
     let id = strip_brackets(&id);
     let vault = vault_root(&app)?;
     let Some((_, folder)) = find_email_path_anywhere(&vault, &id) else {
-        return Err(format!("message {} not found locally", id));
+        return Err("message not found locally".to_string());
     };
     // Archive is idempotent. A detail thread spans inbox/, sent/, and
     // archive/, and a repeated click can arrive after the first command has
@@ -1513,7 +1513,7 @@ pub async fn mail_archive_one(
         return Ok(());
     }
     let Some(mut summary) = mail_get_local_inner(&vault, &id)? else {
-        return Err(format!("message {} not found locally", id));
+        return Err("message not found locally".to_string());
     };
 
     archive_remote_email(&app, &state, &summary).await?;
@@ -1535,17 +1535,21 @@ pub async fn mail_snooze(
     let id = strip_brackets(&input.id);
     let vault = vault_root(&app)?;
     let Some((_, folder)) = find_email_path_anywhere(&vault, &id) else {
-        return Err(format!("message {} not found locally", id));
+        return Err("message not found locally".to_string());
     };
     if folder != "inbox" {
         return Err("only inbox messages can be snoozed".to_string());
     }
     let Some(mut summary) = mail_get_local_inner(&vault, &id)? else {
-        return Err(format!("message {} not found locally", id));
+        return Err("message not found locally".to_string());
     };
 
-    archive_remote_email(&app, &state, &summary).await?;
-    archive_local_email(&app, &state, &vault, &mut summary, Some(&snoozed_until))
+    let provider_summary = summary.clone();
+    provider_then_local(
+        || archive_remote_email(&app, &state, &provider_summary),
+        || archive_local_email(&app, &state, &vault, &mut summary, Some(&snoozed_until)),
+    )
+    .await
 }
 
 fn validate_snooze_deadline(
@@ -1587,17 +1591,32 @@ pub async fn mail_restore_due_snoozes(
 
     let mut restored = 0usize;
     for email in due {
-        if restore_remote_email(&app, &state, &email).await.is_err() {
-            failed += 1;
-            continue;
-        }
-        if restore_local_email(&app, &state, &vault, &email.id).is_err() {
+        if provider_then_local(
+            || restore_remote_email(&app, &state, &email),
+            || restore_local_email(&app, &state, &vault, &email.id),
+        )
+        .await
+        .is_err()
+        {
             failed += 1;
             continue;
         }
         restored += 1;
     }
     Ok(MailSnoozeRestoreResult { restored, failed })
+}
+
+async fn provider_then_local<Provider, ProviderFuture, Local>(
+    provider: Provider,
+    local: Local,
+) -> Result<(), String>
+where
+    Provider: FnOnce() -> ProviderFuture,
+    ProviderFuture: std::future::Future<Output = Result<(), String>>,
+    Local: FnOnce() -> Result<(), String>,
+{
+    provider().await?;
+    local()
 }
 
 /// Remove a message from the provider's inbox. Gmail removes the INBOX
@@ -1703,7 +1722,7 @@ fn restore_local_email(
 ) -> Result<(), String> {
     let _guard = state.mail_mutations.lock_recover();
     let Some((src, folder)) = find_email_path_anywhere(vault, id) else {
-        return Err(format!("message {} not found locally", id));
+        return Err("message not found locally".to_string());
     };
     if folder == "inbox" {
         return Ok(());
@@ -2420,6 +2439,45 @@ mod tests {
         assert!(validate_snooze_deadline("2031-02-03T12:01:00Z", now).is_ok());
         assert!(validate_snooze_deadline("2031-02-03T11:59:00Z", now).is_err());
         assert!(validate_snooze_deadline("tomorrow morning", now).is_err());
+    }
+
+    #[tokio::test]
+    async fn snooze_and_restore_mutate_provider_before_local_state() {
+        let calls = std::sync::Mutex::new(Vec::new());
+        provider_then_local(
+            || {
+                calls.lock().unwrap().push("provider");
+                std::future::ready(Ok(()))
+            },
+            || {
+                calls.lock().unwrap().push("local");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["provider", "local"]);
+
+        let local_after_provider_failure = std::cell::Cell::new(false);
+        let provider_error = provider_then_local(
+            || std::future::ready(Err("synthetic provider failure".to_string())),
+            || {
+                local_after_provider_failure.set(true);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(provider_error, "synthetic provider failure");
+        assert!(!local_after_provider_failure.get());
+
+        let local_error = provider_then_local(
+            || std::future::ready(Ok(())),
+            || Err("synthetic local failure".to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(local_error, "synthetic local failure");
     }
 
     #[test]
