@@ -14,6 +14,14 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useGraph } from "@/lib/hooks/use-graph";
 import { cn } from "@/lib/utils";
 
@@ -83,6 +91,110 @@ const KIND_ORDER = [
   "row",
   "unresolved",
 ];
+
+const KIND_CHIP_ACTIVE: Record<string, string> = {
+  note: "border-sky-400/35 bg-sky-400/12",
+  daily: "border-cyan-400/35 bg-cyan-400/12",
+  person: "border-violet-400/35 bg-violet-400/12",
+  event: "border-amber-400/35 bg-amber-400/12",
+  task: "border-emerald-400/35 bg-emerald-400/12",
+  resource: "border-rose-400/35 bg-rose-400/12",
+  area: "border-fuchsia-400/35 bg-fuchsia-400/12",
+  agent_chat: "border-indigo-400/35 bg-indigo-400/12",
+  mail: "border-lime-400/35 bg-lime-400/12",
+  table: "border-teal-400/35 bg-teal-400/12",
+  row: "border-slate-400/35 bg-slate-400/12",
+  unresolved: "border-zinc-400/35 bg-zinc-400/10",
+};
+
+function TruncatedLabel({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setTruncated(el.scrollWidth > el.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span ref={ref} className="block min-w-0 truncate" />}>
+        {text}
+      </TooltipTrigger>
+      {truncated ? (
+        <TooltipContent side="left" sideOffset={8}>
+          {text}
+        </TooltipContent>
+      ) : null}
+    </Tooltip>
+  );
+}
+
+function FilterChip({
+  label,
+  count,
+  active,
+  onClick,
+  kind,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+  kind?: string;
+}) {
+  const isUnresolved = kind === "unresolved";
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        "inline-flex min-w-0 w-full items-center gap-1 rounded-full border px-2 py-1 text-left text-[11px] font-medium transition-colors",
+        active
+          ? kind
+            ? cn("text-foreground", KIND_CHIP_ACTIVE[kind])
+            : "border-foreground/25 bg-foreground/[0.08] text-foreground"
+          : "border-transparent bg-muted/35 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      {kind ? (
+        <span
+          aria-hidden
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            isUnresolved
+              ? "border border-dashed border-zinc-400 bg-transparent"
+              : KIND_FILL[kind],
+            !active && "opacity-70",
+          )}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            "size-2 shrink-0 rounded-full bg-foreground/35",
+            active && "bg-foreground/70",
+          )}
+        />
+      )}
+      <TruncatedLabel text={label} />
+      <span
+        aria-hidden
+        className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
 
 function nodeRadius(d: GraphNodeDatum): number {
   if (d.kind === "unresolved") return 4;
@@ -285,11 +397,19 @@ export function GraphView() {
   );
 
   const hoveredNode = hovered ? nodes.find((n) => n.id === hovered) : undefined;
+  const kindCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const node of data?.nodes ?? []) {
+      counts.set(node.kind, (counts.get(node.kind) ?? 0) + 1);
+    }
+    return counts;
+  }, [data]);
   const kindsPresent = useMemo(() => {
     const present = new Set(data?.nodes.map((n) => n.kind) ?? []);
     return KIND_ORDER.filter((k) => present.has(k));
   }, [data]);
-  const unresolvedCount = data?.nodes.filter((n) => n.kind === "unresolved").length ?? 0;
+  const unresolvedCount = kindCounts.get("unresolved") ?? 0;
+  const totalRecords = data?.nodes.length ?? nodes.length;
 
   if (isLoading) {
     return (
@@ -419,71 +539,53 @@ export function GraphView() {
         </div>
       )}
 
-      {/* Toolbar: counts, legend, controls */}
-      <div className="absolute right-4 top-4 flex flex-col items-end gap-2">
-        <div className="rounded-lg border border-border bg-background/95 px-3 py-2 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
-          <span className="tabular-nums">
-            {activeKind !== null
-              ? `${nodes.length} of ${data?.nodes.length ?? nodes.length} records · ${edges.length} links`
-              : `${nodes.length} records · ${edges.length} links`}
-            {unresolvedCount > 0 ? ` · ${unresolvedCount} unresolved` : ""}
-          </span>
-        </div>
-        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/95 p-3 shadow-sm backdrop-blur">
-          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
-            Filter by type
-          </p>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <button
-              type="button"
-              aria-pressed={activeKind === null}
-              onClick={() => selectKind(null)}
-              className={cn(
-                "inline-flex items-center rounded px-1 py-0.5 text-[11px] transition-colors",
-                activeKind === null
-                  ? "text-foreground"
-                  : "text-muted-foreground/70 hover:text-foreground",
-              )}
-            >
-              All
-            </button>
-            {kindsPresent.map((kind) => {
-              const active = activeKind === kind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => selectKind(kind)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-[11px] transition-colors",
-                    active
-                      ? "text-foreground"
-                      : "text-muted-foreground/70 hover:text-foreground",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "h-2 w-2 rounded-full transition-opacity",
-                      kind === "unresolved"
-                        ? "border border-dashed border-zinc-400 bg-transparent"
-                        : KIND_FILL[kind],
-                      activeKind !== null && !active && "opacity-30",
-                    )}
-                  />
-                  {KIND_LABEL[kind] ?? kind}
-                </button>
-              );
-            })}
+      {/* Filter panel */}
+      <div className="absolute right-4 top-4 w-[min(100%-2rem,12.5rem)] rounded-xl border border-border/80 bg-background/95 shadow-sm backdrop-blur">
+        <div className="flex items-start justify-between gap-1.5 border-b border-border/60 px-2.5 py-2">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium text-foreground">Filter by type</p>
+            <p className="mt-0.5 text-[9px] leading-snug tabular-nums text-muted-foreground">
+              {activeKind !== null
+                ? `${nodes.length} of ${totalRecords} records · ${edges.length} links`
+                : `${totalRecords} records · ${edges.length} links`}
+              {unresolvedCount > 0 ? ` · ${unresolvedCount} unresolved` : ""}
+            </p>
           </div>
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="icon-xs"
             onClick={resetView}
-            className="mt-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground/85 transition-colors hover:bg-muted/60"
+            aria-label="Re-layout graph"
+            title="Re-layout"
           >
-            Re-layout
-          </button>
+            <RefreshCw />
+          </Button>
         </div>
+        <TooltipProvider delay={300}>
+          <div
+            role="group"
+            aria-label="Record type filters"
+            className="flex flex-col gap-0.5 p-1.5"
+          >
+            <FilterChip
+              label="All"
+              count={totalRecords}
+              active={activeKind === null}
+              onClick={() => selectKind(null)}
+            />
+            {kindsPresent.map((kind) => (
+              <FilterChip
+                key={kind}
+                label={KIND_LABEL[kind] ?? kind}
+                count={kindCounts.get(kind) ?? 0}
+                active={activeKind === kind}
+                onClick={() => selectKind(kind)}
+                kind={kind}
+              />
+            ))}
+          </div>
+        </TooltipProvider>
       </div>
 
       <p className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground/60">
