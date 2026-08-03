@@ -11,8 +11,8 @@ build is responsible for documenting any behavior it adds or changes.
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
-requests when you invoke them or when you opt into foreground mail/calendar
-polling. Displaying a YouTube embed loads YouTube's standard player, and opening
+requests when you invoke them or while foreground mail/calendar polling is
+enabled. Displaying a YouTube embed loads YouTube's standard player, and opening
 an HTML email loads its remote images by default through Woodshed's bounded
 cache.
 

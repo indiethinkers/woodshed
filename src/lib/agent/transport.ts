@@ -419,13 +419,13 @@ async function messagesToAgentMessages(
     })),
   );
   return prepared.filter((message): message is AgentChatMessage => {
-      return (
-        (message.role === "system" ||
-          message.role === "user" ||
-          message.role === "assistant") &&
-        message.content.length > 0
-      );
-    });
+    return (
+      (message.role === "system" ||
+        message.role === "user" ||
+        message.role === "assistant") &&
+      message.content.length > 0
+    );
+  });
 }
 
 function messageContentForAgent(message: UIMessage): string;
