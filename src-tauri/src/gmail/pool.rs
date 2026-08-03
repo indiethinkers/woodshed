@@ -36,12 +36,14 @@ const PORT: u16 = 993;
 
 pub struct GmailImapPool {
     sessions: Mutex<HashMap<String, Arc<Mutex<ImapSessionInner>>>>,
+    sent_mailboxes: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl GmailImapPool {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            sent_mailboxes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,6 +92,7 @@ impl GmailImapPool {
     /// `gmail_account_clear` so disconnecting an account doesn't leak
     /// a live IMAP socket.
     pub fn forget(&self, email: &str) {
+        self.sent_mailboxes.lock_recover().remove(email);
         let removed = {
             let mut map = self.sessions.lock_recover();
             map.remove(email)
@@ -102,6 +105,16 @@ impl GmailImapPool {
                 let _ = session.logout();
             }
         }
+    }
+
+    pub(crate) fn cached_sent_mailbox(&self, email: &str) -> Option<Option<String>> {
+        self.sent_mailboxes.lock_recover().get(email).cloned()
+    }
+
+    pub(crate) fn remember_sent_mailbox(&self, email: &str, mailbox: Option<String>) {
+        self.sent_mailboxes
+            .lock_recover()
+            .insert(email.to_string(), mailbox);
     }
 
     fn acquire(&self, creds: &Credentials) -> Result<Arc<Mutex<ImapSessionInner>>, ImapError> {

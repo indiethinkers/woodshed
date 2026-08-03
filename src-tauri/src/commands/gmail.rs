@@ -572,35 +572,14 @@ pub async fn gmail_sync_recent(
     };
 
     if let Some(sent_batch) = sent_batch {
-        for raw in &sent_batch.messages {
-            let parsed = parse::parse(raw);
-            let id = if parsed.message_id.is_empty() {
-                format!(
-                    "gmail-sent-{}-{}-{}",
-                    imap_client::account_fingerprint(&email),
-                    sent_batch.uid_validity,
-                    raw.uid
-                )
-            } else {
-                parsed.message_id.clone()
-            };
-            let existing = mail_get_local_inner(&vault, &id).ok().flatten();
-            let thread_id = sent_thread_id_for_parsed(&email, &id, &parsed, existing.as_ref());
-
-            let attachments = save_parsed_attachments(&state, &vault, &id, &parsed);
-            let summary = build_summary_from_parsed(
-                id,
-                parsed.message_id.clone(),
-                thread_id,
-                inbox.clone(),
-                &parsed,
-                vec!["sent".to_string(), "read".to_string()],
-                attachments,
-            );
-            if persist_sent_email(&app, &state, &summary).is_err() {
-                eprintln!("gmail: failed to persist one sent message");
-            }
-        }
+        import_sent_batch(
+            &email,
+            &inbox,
+            &sent_batch,
+            |id| mail_get_local_inner(&vault, id).ok().flatten(),
+            |id, parsed| save_parsed_attachments(&state, &vault, id, parsed),
+            |summary| persist_sent_email(&app, &state, summary).map(|_| ()),
+        );
     }
 
     Ok(GmailSyncResult {
@@ -1054,6 +1033,52 @@ fn sent_thread_id_for_parsed(
         .filter(|thread_id| !thread_id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| thread_id_for_parsed(account_email, local_id, parsed))
+}
+
+fn import_sent_batch<FindExisting, SaveAttachments, Persist>(
+    account_email: &str,
+    inbox: &str,
+    batch: &imap_client::FetchBatch,
+    mut find_existing: FindExisting,
+    mut save_attachments: SaveAttachments,
+    mut persist: Persist,
+) -> usize
+where
+    FindExisting: FnMut(&str) -> Option<EmailSummary>,
+    SaveAttachments: FnMut(&str, &parse::ParsedMessage) -> Vec<Attachment>,
+    Persist: FnMut(&EmailSummary) -> Result<(), String>,
+{
+    let mut written = 0;
+    for raw in &batch.messages {
+        let parsed = parse::parse(raw);
+        let id = if parsed.message_id.is_empty() {
+            format!(
+                "gmail-sent-{}-{}-{}",
+                imap_client::account_fingerprint(account_email),
+                batch.uid_validity,
+                raw.uid
+            )
+        } else {
+            parsed.message_id.clone()
+        };
+        let existing = find_existing(&id);
+        let thread_id = sent_thread_id_for_parsed(account_email, &id, &parsed, existing.as_ref());
+        let attachments = save_attachments(&id, &parsed);
+        let summary = build_summary_from_parsed(
+            id,
+            parsed.message_id.clone(),
+            thread_id,
+            inbox.to_string(),
+            &parsed,
+            vec!["sent".to_string(), "read".to_string()],
+            attachments,
+        );
+        match persist(&summary) {
+            Ok(()) => written += 1,
+            Err(_) => eprintln!("gmail: failed to persist one sent message"),
+        }
+    }
+    written
 }
 
 fn save_parsed_attachments(
@@ -1549,6 +1574,45 @@ mod credential_metadata_tests {
         assert_eq!(summary.labels, vec!["sent", "read"]);
         assert_eq!(
             summary.thread_id,
+            account_scoped_thread_id("owner@example.test", "root@example.test"),
+        );
+    }
+
+    #[test]
+    fn sent_batch_import_orchestrates_external_reply_persistence() {
+        let batch = imap_client::FetchBatch {
+            uid_validity: 42,
+            messages: vec![imap_client::RawMessage {
+                body: b"From: Owner <owner@example.test>\r\nTo: Person <person@example.test>\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <root@example.test>\r\n\r\nExternal-client reply"
+                    .to_vec(),
+                uid: 7,
+                gm_msgid: 0,
+                gm_thrid: 0,
+                seen: true,
+                internal_date: None,
+            }],
+        };
+        let mut persisted = Vec::new();
+
+        let written = import_sent_batch(
+            "owner@example.test",
+            "gmail:owner@example.test",
+            &batch,
+            |_| None,
+            |_, _| Vec::new(),
+            |summary| {
+                persisted.push(summary.clone());
+                Ok(())
+            },
+        );
+
+        assert_eq!(written, 1);
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, "sent@example.test");
+        assert_eq!(persisted[0].to, vec!["person@example.test"]);
+        assert!(persisted[0].labels.iter().any(|label| label == "sent"));
+        assert_eq!(
+            persisted[0].thread_id,
             account_scoped_thread_id("owner@example.test", "root@example.test"),
         );
     }

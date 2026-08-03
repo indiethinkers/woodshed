@@ -10,10 +10,19 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::pool::GmailImapPool;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 const MAX_RAW_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_IMAP_GREETING_BYTES: usize = 16 * 1024;
 const MAX_SPECIAL_USE_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_SPECIAL_USE_MAILBOXES: usize = 16;
+const GMAIL_IMAP_HOST: &str = "imap.gmail.com";
+const GMAIL_IMAP_PORT: u16 = 993;
+const GMAIL_IMAP_IO_TIMEOUT: Duration = Duration::from_secs(15);
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
@@ -91,18 +100,138 @@ pub fn fetch_recent_sent(
     creds: &Credentials,
     limit: usize,
 ) -> Result<Option<FetchBatch>, ImapError> {
+    let sent_name = match pool.cached_sent_mailbox(&creds.email) {
+        Some(cached) => cached,
+        None => {
+            let discovered = discover_sent_mailbox(creds)?;
+            pool.remember_sent_mailbox(&creds.email, discovered.clone());
+            discovered
+        }
+    };
+    let Some(sent_name) = sent_name else {
+        return Ok(None);
+    };
     pool.with_session(creds, |session| {
-        // SPECIAL-USE is a LIST selection option: Gmail returns only its
-        // small, provider-designated set instead of enumerating every label
-        // in the account. Parse the bounded response directly because imap
-        // 2.4's typed `list` helper cannot express LIST selection options.
-        let response = session.run_command_and_read_response("LIST (SPECIAL-USE) \"\" \"*\"")?;
-        let sent_name = sent_mailbox_from_special_use_response(&response)?;
-        let Some(sent_name) = sent_name else {
-            return Ok(None);
-        };
         fetch_recent_from_mailbox(session, &sent_name, limit).map(Some)
     })
+}
+
+/// Discover Gmail's localized Sent mailbox over a short-lived, read-bounded
+/// IMAP connection. The pooled `imap` session cannot apply a per-command read
+/// cap because its transport is private, so discovery is isolated and cached.
+fn discover_sent_mailbox(creds: &Credentials) -> Result<Option<String>, ImapError> {
+    let tcp = TcpStream::connect((GMAIL_IMAP_HOST, GMAIL_IMAP_PORT)).map_err(imap::Error::Io)?;
+    tcp.set_read_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
+        .map_err(imap::Error::Io)?;
+    tcp.set_write_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
+        .map_err(imap::Error::Io)?;
+    let tls = native_tls::TlsConnector::builder().build()?;
+    let tls_stream = tls
+        .connect(GMAIL_IMAP_HOST, tcp)
+        .map_err(imap::Error::TlsHandshake)?;
+    let (stream, budget) = ReadBudgetStream::new(tls_stream);
+    let mut client = imap::Client::new(stream);
+
+    budget.begin(MAX_IMAP_GREETING_BYTES);
+    let greeting = client.read_greeting();
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    greeting?;
+
+    budget.begin(MAX_SPECIAL_USE_RESPONSE_BYTES);
+    let login = client.login(&creds.email, &creds.app_password);
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    let mut session = login.map_err(|(error, _)| match error {
+        imap::Error::No(message) | imap::Error::Bad(message) => ImapError::AuthFailed {
+            email: creds.email.clone(),
+            message,
+        },
+        other => ImapError::Imap(other),
+    })?;
+
+    budget.begin(MAX_SPECIAL_USE_RESPONSE_BYTES);
+    let response = session.run_command_and_read_response("LIST (SPECIAL-USE) \"\" \"*\"");
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    sent_mailbox_from_special_use_response(&response?)
+}
+
+#[derive(Debug, Clone)]
+struct ReadBudget {
+    remaining: Arc<AtomicUsize>,
+    tripped: Arc<AtomicBool>,
+}
+
+impl ReadBudget {
+    fn begin(&self, bytes: usize) {
+        self.tripped.store(false, Ordering::Release);
+        self.remaining.store(bytes, Ordering::Release);
+    }
+
+    /// Returns whether the peer attempted to exceed the active budget.
+    fn finish(&self) -> bool {
+        self.remaining.store(usize::MAX, Ordering::Release);
+        self.tripped.swap(false, Ordering::AcqRel)
+    }
+}
+
+#[derive(Debug)]
+struct ReadBudgetStream<T> {
+    inner: T,
+    budget: ReadBudget,
+}
+
+impl<T> ReadBudgetStream<T> {
+    fn new(inner: T) -> (Self, ReadBudget) {
+        let budget = ReadBudget {
+            remaining: Arc::new(AtomicUsize::new(usize::MAX)),
+            tripped: Arc::new(AtomicBool::new(false)),
+        };
+        (
+            Self {
+                inner,
+                budget: budget.clone(),
+            },
+            budget,
+        )
+    }
+}
+
+impl<T: Read> Read for ReadBudgetStream<T> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let remaining = self.budget.remaining.load(Ordering::Acquire);
+        if remaining == 0 {
+            self.budget.tripped.store(true, Ordering::Release);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "IMAP response exceeded its read budget",
+            ));
+        }
+        let allowed = if remaining == usize::MAX {
+            buffer.len()
+        } else {
+            buffer.len().min(remaining)
+        };
+        let read = self.inner.read(&mut buffer[..allowed])?;
+        if remaining != usize::MAX {
+            self.budget.remaining.fetch_sub(read, Ordering::AcqRel);
+        }
+        Ok(read)
+    }
+}
+
+impl<T: Write> Write for ReadBudgetStream<T> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<String>, ImapError> {
@@ -112,6 +241,7 @@ fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<Stri
 
     let mut remaining = response;
     let mut mailbox_count = 0;
+    let mut sent_mailbox = None;
     while !remaining.is_empty() {
         let (rest, parsed) = imap_proto::parse_response(remaining)
             .map_err(|_| ImapError::InvalidSpecialUseResponse)?;
@@ -129,12 +259,12 @@ fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<Stri
                 return Err(ImapError::InvalidSpecialUseResponse);
             }
             if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\Sent")) {
-                return Ok(Some(name.to_string()));
+                sent_mailbox.get_or_insert_with(|| name.to_string());
             }
         }
         remaining = rest;
     }
-    Ok(None)
+    Ok(sent_mailbox)
 }
 
 fn fetch_recent_from_mailbox(
@@ -598,5 +728,47 @@ mod tests {
             MAX_SPECIAL_USE_RESPONSE_BYTES + 1
         ])
         .is_err());
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_enforces_the_mailbox_count_boundary() {
+        let response = |count: usize| {
+            let mut value = String::new();
+            for index in 0..count {
+                value.push_str(&format!(
+                    "* LIST (\\Drafts) \"/\" \"[Provider]/Folder {index}\"\r\n"
+                ));
+            }
+            value.push_str("a1 OK LIST completed\r\n");
+            value
+        };
+
+        assert!(sent_mailbox_from_special_use_response(
+            response(MAX_SPECIAL_USE_MAILBOXES).as_bytes()
+        )
+        .is_ok());
+        assert!(sent_mailbox_from_special_use_response(
+            response(MAX_SPECIAL_USE_MAILBOXES + 1).as_bytes()
+        )
+        .is_err());
+        let sent_first = response(MAX_SPECIAL_USE_MAILBOXES + 1).replacen("\\Drafts", "\\Sent", 1);
+        assert!(sent_mailbox_from_special_use_response(sent_first.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn read_budget_stops_the_transport_before_over_allocation() {
+        let (mut exact, exact_budget) = ReadBudgetStream::new(std::io::Cursor::new(b"abcd"));
+        exact_budget.begin(4);
+        let mut exact_bytes = [0_u8; 4];
+        exact.read_exact(&mut exact_bytes).unwrap();
+        assert!(!exact_budget.finish());
+        assert_eq!(&exact_bytes, b"abcd");
+
+        let (mut oversized, oversized_budget) =
+            ReadBudgetStream::new(std::io::Cursor::new(b"abcde"));
+        oversized_budget.begin(4);
+        let mut output = [0_u8; 5];
+        assert!(oversized.read_exact(&mut output).is_err());
+        assert!(oversized_budget.finish());
     }
 }

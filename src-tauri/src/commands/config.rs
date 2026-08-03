@@ -3,7 +3,7 @@
 // All app-level configuration lives in a single tauri-plugin-store file
 // (config.json under tauri's app-data dir, NOT inside the vault).
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
@@ -47,21 +47,68 @@ pub struct Profile {
     pub theme: Theme,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IntegrationRefreshInterval {
+    #[default]
+    Manual,
+    FiveMinutes,
+    FifteenMinutes,
+    ThirtyMinutes,
+    SixtyMinutes,
+}
+
+impl From<IntegrationRefreshInterval> for u32 {
+    fn from(interval: IntegrationRefreshInterval) -> Self {
+        match interval {
+            IntegrationRefreshInterval::Manual => 0,
+            IntegrationRefreshInterval::FiveMinutes => 5,
+            IntegrationRefreshInterval::FifteenMinutes => 15,
+            IntegrationRefreshInterval::ThirtyMinutes => 30,
+            IntegrationRefreshInterval::SixtyMinutes => 60,
+        }
+    }
+}
+
+impl TryFrom<u32> for IntegrationRefreshInterval {
+    type Error = &'static str;
+
+    fn try_from(minutes: u32) -> Result<Self, Self::Error> {
+        match minutes {
+            0 => Ok(Self::Manual),
+            5 => Ok(Self::FiveMinutes),
+            15 => Ok(Self::FifteenMinutes),
+            30 => Ok(Self::ThirtyMinutes),
+            60 => Ok(Self::SixtyMinutes),
+            _ => Err("refresh interval must be Manual, 5, 15, 30, or 60 minutes"),
+        }
+    }
+}
+
+impl Serialize for IntegrationRefreshInterval {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32((*self).into())
+    }
+}
+
+impl<'de> Deserialize<'de> for IntegrationRefreshInterval {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_from(u32::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IntegrationRefreshSettings {
     /// Zero is Manual. Non-zero values are deliberately restricted to the
     /// choices presented in Settings so a malformed webview request cannot
     /// create an aggressive network loop.
-    pub interval_minutes: u32,
-}
-
-fn validate_integration_refresh_interval(interval_minutes: u32) -> Result<(), String> {
-    if matches!(interval_minutes, 0 | 5 | 15 | 30 | 60) {
-        Ok(())
-    } else {
-        Err("refresh interval must be Manual, 5, 15, 30, or 60 minutes".to_string())
-    }
+    pub interval_minutes: IntegrationRefreshInterval,
 }
 
 #[tauri::command]
@@ -73,7 +120,6 @@ pub fn integration_refresh_settings_get(
         Some(value) => serde_json::from_value(value).map_err(|error| error.to_string())?,
         None => IntegrationRefreshSettings::default(),
     };
-    validate_integration_refresh_interval(settings.interval_minutes)?;
     Ok(settings)
 }
 
@@ -82,7 +128,6 @@ pub fn integration_refresh_settings_set(
     app: AppHandle,
     settings: IntegrationRefreshSettings,
 ) -> Result<IntegrationRefreshSettings, String> {
-    validate_integration_refresh_interval(settings.interval_minutes)?;
     let store = app.store(STORE_FILE).map_err(|error| error.to_string())?;
     store.set(
         INTEGRATION_REFRESH_KEY,
@@ -286,10 +331,17 @@ mod tests {
     #[test]
     fn integration_refresh_accepts_only_the_presented_intervals() {
         for minutes in [0, 5, 15, 30, 60] {
-            assert!(validate_integration_refresh_interval(minutes).is_ok());
+            let settings: IntegrationRefreshSettings =
+                serde_json::from_value(serde_json::json!({ "intervalMinutes": minutes })).unwrap();
+            assert_eq!(u32::from(settings.interval_minutes), minutes);
         }
         for minutes in [1, 10, 120] {
-            assert!(validate_integration_refresh_interval(minutes).is_err());
+            assert!(
+                serde_json::from_value::<IntegrationRefreshSettings>(serde_json::json!({
+                    "intervalMinutes": minutes
+                }))
+                .is_err()
+            );
         }
     }
 

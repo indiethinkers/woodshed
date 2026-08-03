@@ -1,24 +1,26 @@
 import { useState } from "react";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import {
+  INTEGRATION_REFRESH_INTERVALS,
+  type IntegrationRefreshInterval,
   useIntegrationRefreshSettings,
   useSetIntegrationRefreshSettings,
 } from "@/lib/hooks/use-integration-refresh";
 
-const INTERVALS = [
-  { minutes: 0, label: "Manual" },
-  { minutes: 5, label: "Every 5 minutes" },
-  { minutes: 15, label: "Every 15 minutes" },
-  { minutes: 30, label: "Every 30 minutes" },
-  { minutes: 60, label: "Every hour" },
-] as const;
+const INTERVAL_LABELS: Record<IntegrationRefreshInterval, string> = {
+  0: "Manual",
+  5: "Every 5 minutes",
+  15: "Every 15 minutes",
+  30: "Every 30 minutes",
+  60: "Every hour",
+};
 
 export function IntegrationRefreshSettingsSection() {
   const { data: settings, isLoading } = useIntegrationRefreshSettings();
   const setSettings = useSetIntegrationRefreshSettings();
   const [error, setError] = useState<string | null>(null);
 
-  async function updateInterval(intervalMinutes: number) {
+  async function updateInterval(intervalMinutes: IntegrationRefreshInterval) {
     setError(null);
     try {
       await setSettings.mutateAsync({ intervalMinutes });
@@ -41,12 +43,16 @@ export function IntegrationRefreshSettingsSection() {
             aria-label="Automatic refresh interval"
             value={settings?.intervalMinutes ?? 0}
             disabled={isLoading || setSettings.isPending}
-            onChange={(event) => void updateInterval(Number(event.target.value))}
+            onChange={(event) =>
+              void updateInterval(
+                Number(event.target.value) as IntegrationRefreshInterval,
+              )
+            }
             className="h-8 rounded-sm border border-border bg-background px-2 text-[12px] text-foreground outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:opacity-50"
           >
-            {INTERVALS.map((interval) => (
-              <option key={interval.minutes} value={interval.minutes}>
-                {interval.label}
+            {INTEGRATION_REFRESH_INTERVALS.map((interval) => (
+              <option key={interval} value={interval}>
+                {INTERVAL_LABELS[interval]}
               </option>
             ))}
           </select>

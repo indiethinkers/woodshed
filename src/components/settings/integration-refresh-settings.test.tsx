@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/hooks/use-integration-refresh", () => ({
+  INTEGRATION_REFRESH_INTERVALS: [0, 5, 15, 30, 60],
   useIntegrationRefreshSettings: () => ({
     data: { intervalMinutes: 0 },
     isLoading: false,

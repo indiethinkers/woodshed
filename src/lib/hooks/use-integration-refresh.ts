@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { tauriInvoke } from "@/lib/tauri";
 
+export const INTEGRATION_REFRESH_INTERVALS = [0, 5, 15, 30, 60] as const;
+export type IntegrationRefreshInterval =
+  (typeof INTEGRATION_REFRESH_INTERVALS)[number];
+
 export interface IntegrationRefreshSettings {
-  /** Zero means Manual; other accepted values are 5, 15, 30, or 60. */
-  intervalMinutes: number;
+  /** Zero means Manual. */
+  intervalMinutes: IntegrationRefreshInterval;
 }
 
 const INTEGRATION_REFRESH_KEY = ["settings", "integration-refresh"] as const;
