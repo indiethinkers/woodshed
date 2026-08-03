@@ -9,6 +9,7 @@ use crate::vault as vault_lib;
 use crate::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,6 +23,8 @@ const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_AGENT_PDF_CHARACTERS: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES / 4;
 const MAX_AGENT_PDF_PAGES: usize = 2_000;
+const AGENT_PDF_HELPER_ARG: &str = "--woodshed-agent-pdf-extract";
+const MAX_AGENT_PDF_HELPER_OUTPUT_BYTES: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES + 4 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,6 +38,19 @@ pub struct AgentAttachmentPrepareInput {
 #[serde(rename_all = "camelCase")]
 pub struct AgentAttachmentPrepareResult {
     pub context: String,
+}
+
+struct DecodedAgentAttachment {
+    label: String,
+    media_type: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum AgentPdfHelperResponse {
+    Ok { text: String },
+    Error { message: String },
 }
 
 struct AgentRunProgress {
@@ -51,30 +67,42 @@ struct AgentRunProgress {
 pub async fn agent_attachment_prepare(
     input: AgentAttachmentPrepareInput,
 ) -> Result<AgentAttachmentPrepareResult, String> {
-    run_attachment_preparation(AGENT_ATTACHMENT_PREPARE_TIMEOUT, move || {
-        prepare_agent_attachment(input)
-    })
-    .await
+    let attachment = decode_agent_attachment(input)?;
+    let DecodedAgentAttachment {
+        label,
+        media_type,
+        bytes,
+    } = attachment;
+    let text = if media_type == "application/pdf" {
+        extract_pdf_text_isolated(bytes).await?
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
+    };
+    finish_agent_attachment(label, media_type, text)
 }
 
-async fn run_attachment_preparation<F>(
-    timeout: Duration,
-    prepare: F,
-) -> Result<AgentAttachmentPrepareResult, String>
-where
-    F: FnOnce() -> Result<AgentAttachmentPrepareResult, String> + Send + 'static,
-{
-    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(prepare)).await {
-        Ok(result) => {
-            result.map_err(|error| format!("attachment preparation task failed: {error}"))?
-        }
-        Err(_) => Err("Attachment preparation timed out. Try a smaller PDF.".to_string()),
-    }
-}
-
-fn prepare_agent_attachment(
+#[cfg(test)]
+fn prepare_agent_attachment_in_process(
     input: AgentAttachmentPrepareInput,
 ) -> Result<AgentAttachmentPrepareResult, String> {
+    let DecodedAgentAttachment {
+        label,
+        media_type,
+        bytes,
+    } = decode_agent_attachment(input)?;
+    let text = if media_type == "application/pdf" {
+        extract_pdf_text(&bytes)?
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
+    };
+    finish_agent_attachment(label, media_type, text)
+}
+
+fn decode_agent_attachment(
+    input: AgentAttachmentPrepareInput,
+) -> Result<DecodedAgentAttachment, String> {
     let label = safe_attachment_label(input.filename.as_deref());
     let media_type =
         normalized_attachment_media_type(input.media_type.as_deref(), input.filename.as_deref())?;
@@ -100,13 +128,18 @@ fn prepare_agent_attachment(
             "attachment exceeds the {MAX_AGENT_ATTACHMENT_BYTES} byte limit"
         ));
     }
+    Ok(DecodedAgentAttachment {
+        label,
+        media_type,
+        bytes,
+    })
+}
 
-    let text = if media_type == "application/pdf" {
-        extract_pdf_text(&bytes)?
-    } else {
-        String::from_utf8(bytes)
-            .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
-    };
+fn finish_agent_attachment(
+    label: String,
+    media_type: String,
+    text: String,
+) -> Result<AgentAttachmentPrepareResult, String> {
     let text = text.trim();
     if text.is_empty() {
         return Err(
@@ -235,6 +268,151 @@ fn checked_pdf_character_total(current: usize, page: usize) -> Result<usize, Str
         ));
     }
     Ok(total)
+}
+
+#[cfg(target_os = "macos")]
+async fn extract_pdf_text_isolated(bytes: Vec<u8>) -> Result<String, String> {
+    let executable = std::env::current_exe()
+        .map_err(|_| "Woodshed could not start its PDF reader".to_string())?;
+    let mut command = tokio::process::Command::new(executable);
+    command.arg(AGENT_PDF_HELPER_ARG);
+    let output = run_bounded_helper(
+        command,
+        bytes,
+        AGENT_ATTACHMENT_PREPARE_TIMEOUT,
+        MAX_AGENT_PDF_HELPER_OUTPUT_BYTES,
+    )
+    .await?;
+    let response: AgentPdfHelperResponse = serde_json::from_slice(&output)
+        .map_err(|_| "Woodshed's PDF reader returned an invalid response".to_string())?;
+    match response {
+        AgentPdfHelperResponse::Ok { text } => Ok(text),
+        AgentPdfHelperResponse::Error { message } => Err(message),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn extract_pdf_text_isolated(_bytes: Vec<u8>) -> Result<String, String> {
+    Err("PDF attachments are supported by the macOS desktop app".to_string())
+}
+
+#[cfg(target_os = "macos")]
+async fn run_bounded_helper(
+    mut command: tokio::process::Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    use std::process::Stdio;
+
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Woodshed could not start its PDF reader".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Woodshed could not open its PDF reader input".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Woodshed could not open its PDF reader output".to_string())?;
+
+    let result = tokio::time::timeout(
+        timeout,
+        exchange_with_pdf_helper(&mut child, stdin, stdout, input, max_output_bytes),
+    )
+    .await;
+    match result {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => {
+            terminate_pdf_helper(&mut child).await;
+            Err(error)
+        }
+        Err(_) => {
+            terminate_pdf_helper(&mut child).await;
+            Err("Attachment preparation timed out. Try a smaller PDF.".to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn exchange_with_pdf_helper(
+    child: &mut tokio::process::Child,
+    mut stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    input: Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    stdin
+        .write_all(&input)
+        .await
+        .map_err(|_| "Woodshed's PDF reader stopped accepting input".to_string())?;
+    stdin
+        .shutdown()
+        .await
+        .map_err(|_| "Woodshed could not finish sending the PDF".to_string())?;
+    let mut output = Vec::new();
+    stdout
+        .take((max_output_bytes + 1) as u64)
+        .read_to_end(&mut output)
+        .await
+        .map_err(|_| "Woodshed could not read extracted PDF text".to_string())?;
+    if output.len() > max_output_bytes {
+        return Err("Woodshed's PDF reader exceeded its output limit".to_string());
+    }
+    let status = child
+        .wait()
+        .await
+        .map_err(|_| "Woodshed could not finish its PDF reader".to_string())?;
+    if !status.success() {
+        return Err("Woodshed's PDF reader stopped unexpectedly".to_string());
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "macos")]
+async fn terminate_pdf_helper(child: &mut tokio::process::Child) {
+    if !matches!(child.try_wait(), Ok(Some(_))) {
+        let _ = child.kill().await;
+    }
+    let _ = child.wait().await;
+}
+
+/// Intercept the private helper mode before Tauri initializes. The helper
+/// accepts PDF bytes only over stdin and emits one bounded JSON response; it
+/// never receives or opens a filesystem path.
+pub fn run_pdf_helper_if_requested() -> Option<i32> {
+    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(AGENT_PDF_HELPER_ARG)) {
+        return None;
+    }
+    let response = (|| -> Result<String, String> {
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .take((MAX_AGENT_ATTACHMENT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Woodshed could not read the PDF attachment".to_string())?;
+        if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
+            return Err(format!(
+                "attachment exceeds the {MAX_AGENT_ATTACHMENT_BYTES} byte limit"
+            ));
+        }
+        extract_pdf_text(&bytes)
+    })();
+    let response = match response {
+        Ok(text) => AgentPdfHelperResponse::Ok { text },
+        Err(message) => AgentPdfHelperResponse::Error { message },
+    };
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    let wrote = serde_json::to_writer(&mut stdout, &response).is_ok() && stdout.flush().is_ok();
+    Some(if wrote { 0 } else { 2 })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -965,7 +1143,7 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD
             .encode(synthetic_pdf("Synthetic review text"));
 
-        let prepared = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let prepared = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("review.pdf".to_string()),
             media_type: Some("application/pdf".to_string()),
             data_url: format!("data:application/pdf;base64,{encoded}"),
@@ -982,7 +1160,7 @@ mod tests {
     fn rejects_a_pdf_that_has_no_extractable_text() {
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"%PDF-invalid");
 
-        let error = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let error = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("scan.pdf".to_string()),
             media_type: Some("application/pdf".to_string()),
             data_url: format!("data:application/pdf;base64,{encoded}"),
@@ -996,7 +1174,7 @@ mod tests {
     fn prepares_text_and_sanitizes_its_display_label() {
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"Synthetic notes");
 
-        let prepared = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let prepared = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("folder/\nnotes.txt".to_string()),
             media_type: Some("text/plain".to_string()),
             data_url: format!("data:text/plain;base64,{encoded}"),
@@ -1011,7 +1189,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_invalid_and_oversized_attachment_inputs() {
-        let unsupported = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let unsupported = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("image.png".to_string()),
             media_type: Some("image/png".to_string()),
             data_url: "data:image/png;base64,AA==".to_string(),
@@ -1019,7 +1197,7 @@ mod tests {
         .unwrap_err();
         assert!(unsupported.contains("PDF and text"));
 
-        let invalid = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let invalid = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("notes.txt".to_string()),
             media_type: Some("text/plain".to_string()),
             data_url: "data:text/plain;base64,not-base64".to_string(),
@@ -1028,7 +1206,7 @@ mod tests {
         assert!(invalid.contains("valid base64"));
 
         let max_encoded = MAX_AGENT_ATTACHMENT_BYTES.div_ceil(3) * 4;
-        let oversized = prepare_agent_attachment(AgentAttachmentPrepareInput {
+        let oversized = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("notes.txt".to_string()),
             media_type: Some("text/plain".to_string()),
             data_url: format!("data:text/plain;base64,{}", "A".repeat(max_encoded + 1)),
@@ -1047,18 +1225,19 @@ mod tests {
         assert!(checked_pdf_character_total(usize::MAX, 1).is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn attachment_preparation_times_out_before_an_agent_run_can_start() {
-        let error = run_attachment_preparation(Duration::from_millis(5), || {
-            std::thread::sleep(Duration::from_millis(50));
-            Ok(AgentAttachmentPrepareResult {
-                context: "late attachment text".to_string(),
-            })
-        })
-        .await
-        .unwrap_err();
+    async fn attachment_timeout_kills_and_reaps_the_helper_process() {
+        let mut command = tokio::process::Command::new("/bin/sleep");
+        command.arg("5");
+        let started = std::time::Instant::now();
+
+        let error = run_bounded_helper(command, Vec::new(), Duration::from_millis(10), 64)
+            .await
+            .unwrap_err();
 
         assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

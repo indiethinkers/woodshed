@@ -474,7 +474,9 @@ User-selected PDF and text chat attachments are decoded and converted to bounded
 text inside Woodshed before a run is created. Hermes receives that text and a
 sanitized label, never the attachment's original filesystem path. Unsupported or
 unreadable attachments fail before the request rather than prompting the agent to
-search the machine by filename.
+search the machine by filename. PDFKit parsing runs in a short-lived Woodshed
+helper process that receives bytes over stdin; the parent kills and reaps it on
+timeout or any protocol-boundary failure.
 
 ## Privacy and diagnostics
 

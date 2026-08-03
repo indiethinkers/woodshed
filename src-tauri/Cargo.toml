@@ -42,7 +42,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Async runtime for Gmail/HTTP commands and app background work.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "process", "io-util"] }
 
 # Legacy OS keychain migration plus current calendar-secret custody, and the
 # HTTP client (Gmail has no HTTP dep, but gcal/resources/agent/image-cache do).

@@ -1629,7 +1629,8 @@ async fn archive_remote_email(
     email: &EmailSummary,
 ) -> Result<(), String> {
     if let Some(gmail_email) = crate::commands::gmail::email_from_inbox_id(&email.inbox) {
-        let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)?;
+        let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)
+            .map_err(|_| "Gmail archive failed: credentials unavailable".to_string())?;
         let pool = state.gmail_pool.clone();
         let mid = email.id.clone();
         tokio::task::spawn_blocking(move || {
@@ -1637,7 +1638,7 @@ async fn archive_remote_email(
         })
         .await
         .map_err(|e| format!("imap thread: {e}"))?
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| safe_mail_provider_error("archive", &error))?;
         state.record_mail_provider_mutation(&email.id);
         return Ok(());
     }
@@ -1652,7 +1653,8 @@ async fn restore_remote_email(
     let Some(gmail_email) = crate::commands::gmail::email_from_inbox_id(&email.inbox) else {
         return Ok(());
     };
-    let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)?;
+    let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)
+        .map_err(|_| "Gmail restore failed: credentials unavailable".to_string())?;
     let pool = state.gmail_pool.clone();
     let local_id = email.id.clone();
     let message_id = email.message_id.clone();
@@ -1661,9 +1663,28 @@ async fn restore_remote_email(
     })
     .await
     .map_err(|error| format!("imap thread: {error}"))?
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| safe_mail_provider_error("restore", &error))?;
     state.record_mail_provider_mutation(&email.id);
     Ok(())
+}
+
+fn safe_mail_provider_error(action: &str, error: &crate::gmail::imap_client::ImapError) -> String {
+    use crate::gmail::imap_client::ImapError;
+
+    let reason = match error {
+        ImapError::AuthFailed { .. } => "authentication failed",
+        ImapError::MessageNotFound { .. } => "message was not found",
+        ImapError::AmbiguousMessageId { .. } => "message identity was ambiguous",
+        ImapError::MissingAllMailbox => "All Mail is unavailable",
+        ImapError::MissingUidValidity | ImapError::StaleRemoteIdentity => {
+            "message identity is stale"
+        }
+        ImapError::InboxListInconsistent { .. }
+        | ImapError::InvalidSpecialUseResponse
+        | ImapError::Imap(_)
+        | ImapError::Tls(_) => "provider connection failed",
+    };
+    format!("Gmail {action} failed: {reason}")
 }
 
 fn archive_local_email(
@@ -2478,6 +2499,22 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(local_error, "synthetic local failure");
+    }
+
+    #[test]
+    fn mail_provider_errors_do_not_expose_message_identity() {
+        let private_id = "synthetic-private-message-id";
+        for error in [
+            crate::gmail::imap_client::ImapError::MessageNotFound {
+                message_id: private_id.to_string(),
+            },
+            crate::gmail::imap_client::ImapError::AmbiguousMessageId {
+                message_id: private_id.to_string(),
+            },
+        ] {
+            let message = safe_mail_provider_error("restore", &error);
+            assert!(!message.contains(private_id));
+        }
     }
 
     #[test]

@@ -91,10 +91,12 @@ focus while running. Only a due record triggers the bounded IMAP label update
 that returns it to INBOX; this still runs when refresh is set to Manual.
 
 Agent PDF and text attachments are decoded from the user-selected in-memory data
-URL and converted to bounded text inside the Tauri command boundary. The request
-sent to Hermes contains the extracted text and a sanitized label, not the
-original filesystem path. Unsupported, malformed, image-only, and oversized
-attachments fail before an agent run is created.
+URL and converted to bounded text inside the Tauri command boundary. PDF bytes
+cross only stdin into a short-lived Woodshed PDFKit helper process; stdout is
+bounded, and the parent kills and reaps the helper on timeout or protocol error.
+The request sent to Hermes contains the extracted text and a sanitized label,
+not the original filesystem path. Unsupported, malformed, image-only, and
+oversized attachments fail before an agent run is created.
 
 Public resource, calendar, oEmbed, and remote-image fetches:
 
