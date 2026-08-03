@@ -169,6 +169,38 @@ pub struct OutgoingLinkEntry {
     pub path: Option<String>,
 }
 
+/// Node in the vault wikilink graph. `id` is the record path, or a synthetic
+/// `unresolved:<label>` id for dangling link targets (kind `"unresolved"`,
+/// no href, no area).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+}
+
+/// Directed wikilink edge between two node ids.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+/// One-shot snapshot of the whole vault wikilink graph, consumed by the
+/// Graph view in a single round-trip.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphSnapshot {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 /// Process-lifetime handle wrapping the connection. Single connection guarded
 /// by a mutex — fine for our write volume (single user, low qps).
 pub struct IndexHandle {
@@ -592,6 +624,106 @@ impl IndexHandle {
             }
         }
         Ok(out)
+    }
+
+    /// Full snapshot of the vault's wikilink graph for the Graph view:
+    /// every indexed record as a node, every resolved `[[link]]` as an
+    /// edge, and every unresolved label as a synthetic `"unresolved"` node
+    /// so dangling links stay visible as placeholders.
+    pub fn graph_snapshot(&self) -> Result<GraphSnapshot> {
+        let conn = self.conn.lock_recover();
+
+        let mut node_stmt = conn.prepare(
+            "SELECT path, kind, title, href, area \
+             FROM documents \
+             ORDER BY path",
+        )?;
+        let node_rows = node_stmt.query_map([], |row| {
+            Ok(GraphNode {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                label: row.get(2)?,
+                href: Some(row.get(3)?),
+                area: row.get(4)?,
+            })
+        })?;
+        let mut nodes = Vec::new();
+        for row in node_rows {
+            nodes.push(row?);
+        }
+
+        // Resolve each stored link label to exactly one target document,
+        // preferring a doc_id match over a title match — the same
+        // precedence the per-record link queries use. Unresolved labels
+        // come back NULL and become ghost nodes below. (Correlated ORDER
+        // BY is illegal in SQLite scalar subqueries, so the preference is
+        // expressed as COALESCE over two lookups instead.)
+        let mut edge_stmt = conn.prepare(
+            "SELECT l.source_path, l.target, \
+                    COALESCE( \
+                      (SELECT d.path FROM documents d \
+                       WHERE lower(d.doc_id) = lower(l.target) LIMIT 1), \
+                      (SELECT d.path FROM documents d \
+                       WHERE lower(d.title) = lower(l.target) LIMIT 1)) \
+             FROM document_links l",
+        )?;
+        let edge_rows = edge_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+
+        let mut edges = Vec::new();
+        let mut seen_edges = std::collections::HashSet::new();
+        // Lowercased label -> first-seen original, for ghost-node dedupe
+        // (`[[Alex]]` and `[[alex]]` both resolve case-insensitively).
+        let mut ghost_labels: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        for row in edge_rows {
+            let (source, label, target_path) = row?;
+            match target_path {
+                Some(target) if target != source => {
+                    if seen_edges.insert((source.clone(), target.clone())) {
+                        edges.push(GraphEdge { source, target });
+                    }
+                }
+                // Self-link: resolves to its own record — not an edge and
+                // not a ghost.
+                Some(_) => {}
+                None => {
+                    // Unresolved label: add a ghost node (deduped
+                    // case-insensitively) and an edge to it, so the Graph
+                    // view still draws the dangling link.
+                    let key = label.to_lowercase();
+                    let original = ghost_labels.entry(key).or_insert_with(|| label.clone());
+                    let ghost_id = format!("unresolved:{original}");
+                    if seen_edges.insert((source.clone(), ghost_id.clone())) {
+                        edges.push(GraphEdge {
+                            source: source.clone(),
+                            target: ghost_id,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut ghosts: Vec<GraphNode> = ghost_labels
+            .into_values()
+            .map(|label| GraphNode {
+                id: format!("unresolved:{label}"),
+                kind: "unresolved".to_string(),
+                label,
+                href: None,
+                area: None,
+            })
+            .collect();
+        ghosts.sort_by_key(|a| a.label.to_lowercase());
+        nodes.extend(ghosts);
+
+        Ok(GraphSnapshot { nodes, edges })
     }
 
     /// Wipe the index and re-scan every supported subdirectory of the vault.

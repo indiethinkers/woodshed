@@ -19,6 +19,7 @@ import {
   Mail,
   NotebookPen,
   Users,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -109,6 +110,7 @@ export const navPages: CommandItem[] = [
   { id: "page-people", kind: "page", label: "People", href: "/people", icon: Users, keywords: "people contacts crm" },
   { id: "page-databases", kind: "page", label: "Databases", href: "/databases", icon: Database, keywords: "databases tables data structured rows tags hashtags generated" },
   { id: "page-areas", kind: "page", label: "Areas", href: "/areas", icon: Layers, keywords: "areas workspaces" },
+  { id: "page-graph", kind: "page", label: "Graph", href: "/graph", icon: Waypoints, keywords: "graph links wikilinks network vault visualize" },
 ];
 
 export interface CommandGroup {

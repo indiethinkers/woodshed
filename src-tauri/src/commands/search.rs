@@ -6,7 +6,7 @@
 // "Reset & re-scan" button — it wipes the index and rebuilds from the
 // vault on disk.
 
-use crate::index::{BacklinkEntry, OutgoingLinkEntry, SearchHit, WikilinkTargetRow};
+use crate::index::{BacklinkEntry, GraphSnapshot, OutgoingLinkEntry, SearchHit, WikilinkTargetRow};
 use crate::AppState;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
@@ -70,7 +70,18 @@ pub async fn wikilink_outgoing(
     let handle = state.ensure_index(&app)?;
     handle
         .outgoing_links_for_source(&source)
-        .map_err(|e| format!("wikilink_outgoing: {}", e))
+        .map_err(|e| format!("wikilink_outgoing: {e}"))
+}
+
+/// Full snapshot of the vault's wikilink graph — every indexed record as a
+/// node, every resolved `[[link]]` as an edge, and every unresolved label as
+/// a synthetic node. The Graph view consumes this in one round-trip.
+#[tauri::command]
+pub fn wikilink_graph(app: AppHandle, state: State<AppState>) -> Result<GraphSnapshot, String> {
+    let handle = state.ensure_index(&app)?;
+    handle
+        .graph_snapshot()
+        .map_err(|e| format!("wikilink_graph: {e}"))
 }
 
 #[tauri::command]
