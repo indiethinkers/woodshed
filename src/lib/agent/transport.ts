@@ -8,6 +8,10 @@ interface AgentChatMessage {
   content: string;
 }
 
+interface PreparedAgentAttachment {
+  context: string;
+}
+
 export type AgentRunStatus =
   | "queued"
   | "running"
@@ -83,7 +87,7 @@ export function createAgentChatTransport(
   return {
     async sendMessages({ chatId, messages, trigger, messageId, abortSignal }) {
       const systemContext = options.getSystemContext?.()?.trim();
-      const agentMessages = messagesToAgentMessages(messages);
+      const agentMessages = await messagesToAgentMessages(messages);
       if (systemContext) {
         agentMessages.unshift({ role: "system", content: systemContext });
       }
@@ -405,13 +409,16 @@ function enqueue(
   }
 }
 
-function messagesToAgentMessages(messages: UIMessage[]): AgentChatMessage[] {
-  return messages
-    .map((message) => ({
+async function messagesToAgentMessages(
+  messages: UIMessage[],
+): Promise<AgentChatMessage[]> {
+  const prepared = await Promise.all(
+    messages.map(async (message) => ({
       role: message.role,
-      content: messageContentForAgent(message).trim(),
-    }))
-    .filter((message): message is AgentChatMessage => {
+      content: (await messageContentForAgent(message, true)).trim(),
+    })),
+  );
+  return prepared.filter((message): message is AgentChatMessage => {
       return (
         (message.role === "system" ||
           message.role === "user" ||
@@ -421,14 +428,51 @@ function messagesToAgentMessages(messages: UIMessage[]): AgentChatMessage[] {
     });
 }
 
-function messageContentForAgent(message: UIMessage): string {
+function messageContentForAgent(message: UIMessage): string;
+function messageContentForAgent(
+  message: UIMessage,
+  prepareAttachments: true,
+): Promise<string>;
+function messageContentForAgent(
+  message: UIMessage,
+  prepareAttachments = false,
+): string | Promise<string> {
   const text = message.parts
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("")
     .trim();
   const files = message.parts.filter(isFilePart);
-  return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
+  if (!prepareAttachments) {
+    return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
+  }
+  return prepareAttachmentContext(files).then((context) =>
+    [text, context].filter(Boolean).join("\n\n"),
+  );
+}
+
+async function prepareAttachmentContext(files: FileUIPart[]): Promise<string> {
+  if (files.length === 0) return "";
+  const contexts = await Promise.all(
+    files.map(async (file) => {
+      if (!file.url) return attachmentContextFromFiles([file]);
+      const prepared = await tauriInvoke<PreparedAgentAttachment>(
+        "agent_attachment_prepare",
+        {
+          input: {
+            filename: file.filename,
+            mediaType: file.mediaType,
+            dataUrl: file.url,
+          },
+        },
+      );
+      if (!prepared?.context) {
+        throw new Error("Woodshed could not prepare the attachment.");
+      }
+      return prepared.context;
+    }),
+  );
+  return contexts.join("\n\n");
 }
 
 function isFilePart(

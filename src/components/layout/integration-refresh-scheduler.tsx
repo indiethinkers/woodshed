@@ -2,20 +2,52 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useGcalSync } from "@/lib/hooks/use-gcal";
 import { useIntegrationRefreshSettings } from "@/lib/hooks/use-integration-refresh";
-import { useRefreshMail } from "@/lib/hooks/use-mail";
+import {
+  useRefreshMail,
+  useRestoreDueSnoozes,
+} from "@/lib/hooks/use-mail";
 
 export function IntegrationRefreshScheduler() {
   const { data: settings } = useIntegrationRefreshSettings();
   const calendarSync = useGcalSync();
   const refreshMail = useRefreshMail();
+  const restoreDueSnoozes = useRestoreDueSnoozes();
   const running = useRef(false);
+  const restoringSnoozes = useRef(false);
   const refreshCalendarRef = useRef(calendarSync.mutateAsync);
   const refreshMailRef = useRef(refreshMail);
+  const restoreDueSnoozesRef = useRef(restoreDueSnoozes);
   refreshCalendarRef.current = calendarSync.mutateAsync;
   refreshMailRef.current = refreshMail;
+  restoreDueSnoozesRef.current = restoreDueSnoozes;
 
   useEffect(() => {
-    const intervalMinutes = settings?.intervalMinutes ?? 0;
+    let cancelled = false;
+    const restore = async () => {
+      if (cancelled || restoringSnoozes.current) return;
+      restoringSnoozes.current = true;
+      try {
+        const result = await restoreDueSnoozesRef.current();
+        if (result.restored === 1) toast.info("1 snoozed email returned");
+        else if (result.restored > 1) {
+          toast.info(`${result.restored} snoozed emails returned`);
+        }
+      } finally {
+        restoringSnoozes.current = false;
+      }
+    };
+    void restore();
+    const timer = window.setInterval(() => void restore(), 60 * 1000);
+    window.addEventListener("focus", restore);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", restore);
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalMinutes = settings?.intervalMinutes ?? 5;
     if (intervalMinutes <= 0) return;
 
     const intervalMs = intervalMinutes * 60 * 1000;

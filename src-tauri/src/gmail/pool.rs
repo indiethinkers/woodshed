@@ -35,6 +35,7 @@ pub type ImapSessionInner = imap::Session<native_tls::TlsStream<std::net::TcpStr
 pub struct GmailImapPool {
     sessions: Mutex<HashMap<String, Arc<Mutex<ImapSessionInner>>>>,
     sent_mailboxes: Mutex<HashMap<String, Option<String>>>,
+    all_mailboxes: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl GmailImapPool {
@@ -42,6 +43,7 @@ impl GmailImapPool {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sent_mailboxes: Mutex::new(HashMap::new()),
+            all_mailboxes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -91,6 +93,7 @@ impl GmailImapPool {
     /// a live IMAP socket.
     pub fn forget(&self, email: &str) {
         self.sent_mailboxes.lock_recover().remove(email);
+        self.all_mailboxes.lock_recover().remove(email);
         let removed = {
             let mut map = self.sessions.lock_recover();
             map.remove(email)
@@ -111,6 +114,16 @@ impl GmailImapPool {
 
     pub(crate) fn remember_sent_mailbox(&self, email: &str, mailbox: Option<String>) {
         self.sent_mailboxes
+            .lock_recover()
+            .insert(email.to_string(), mailbox);
+    }
+
+    pub(crate) fn cached_all_mailbox(&self, email: &str) -> Option<Option<String>> {
+        self.all_mailboxes.lock_recover().get(email).cloned()
+    }
+
+    pub(crate) fn remember_all_mailbox(&self, email: &str, mailbox: Option<String>) {
+        self.all_mailboxes
             .lock_recover()
             .insert(email.to_string(), mailbox);
     }

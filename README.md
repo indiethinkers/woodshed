@@ -378,8 +378,9 @@ vault fixtures out of Git.
 Woodshed has no account system, analytics, crash reporter, or operated backend.
 Configured integrations communicate directly from the desktop app.
 
-Mail and calendar refresh is manual by default. Settings can opt into bounded
-foreground polling every 5, 15, 30, or 60 minutes while Woodshed is running.
+Mail and calendar refresh defaults to bounded foreground polling every 5 minutes
+while Woodshed is running. Settings can select 15, 30, or 60 minutes, or Manual
+to disable automatic refresh.
 
 - Gmail uses IMAP and SMTP, including recent Sent Mail so replies from other
   clients remain visible in local threads. App Passwords are stored in an

@@ -32,6 +32,7 @@ import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { ComposeDialog } from "@/components/mail/compose-dialog";
+import { SnoozeButton } from "@/components/mail/snooze-button";
 
 const ALL_INBOXES = "__all__";
 const MAILBOXES: { id: Mailbox; label: string }[] = [
@@ -79,6 +80,7 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
   const [filterInbox, setFilterInbox] = useState<string>(ALL_INBOXES);
   const [composeOpen, setComposeOpen] = useState(false);
   const [activeDraft, setActiveDraft] = useState<DraftDto | undefined>();
+  const [rowFocused, setRowFocused] = useState(true);
 
   const visibleThreads = useMemo(() => {
     if (mailbox === "drafts") return [];
@@ -97,6 +99,7 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
       replace: true,
     });
     setCursor(0);
+    setRowFocused(true);
     setSelected(new Set());
     setSearchQuery("");
   }
@@ -110,6 +113,8 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
       ? 0
       : Math.min(rawCursor, visibleThreads.length - 1);
   const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const mailRowFocused =
+    rowFocused && mailbox !== "drafts" && visibleThreads.length > 0;
 
   // Multi-select for bulk archive. `a` toggles select-all of currently-
   // visible threads; `e` archives the selection (or the cursor row when
@@ -157,12 +162,17 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
       if (target && isEditableElement(target)) return;
 
       if (e.key === "ArrowDown") {
+        if (visibleThreads.length === 0) return;
         e.preventDefault();
+        setRowFocused(true);
         setCursor((c) => Math.min(visibleThreads.length - 1, c + 1));
       } else if (e.key === "ArrowUp") {
+        if (visibleThreads.length === 0) return;
         e.preventDefault();
+        setRowFocused(true);
         setCursor((c) => Math.max(0, c - 1));
       } else if (e.key === "Enter") {
+        if (!mailRowFocused) return;
         const next = visibleThreads[cursor];
         if (!next) return;
         e.preventDefault();
@@ -173,7 +183,7 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
           search: mailboxSearch,
         });
       } else if (e.key === "e" || e.key === "E") {
-        if (mailbox !== "inbox") return;
+        if (!mailRowFocused || mailbox !== "inbox") return;
         // Archive — Superhuman / Gmail convention. If there's a multi-
         // selection, archive every selected thread; otherwise archive
         // the focused row.
@@ -201,7 +211,7 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
           }
         });
       } else if (e.key === "a" || e.key === "A") {
-        if (mailbox !== "inbox") return;
+        if (!mailRowFocused || mailbox !== "inbox") return;
         // Toggle select-all of visible. Empty list = no-op.
         e.preventDefault();
         if (visibleThreads.length === 0) return;
@@ -211,11 +221,13 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
           allIds.every((id) => liveSelected.has(id));
         setSelected(allCurrentlySelected ? new Set() : new Set(allIds));
       } else if (e.key === "Escape") {
-        if (liveSelected.size > 0) {
+        if (liveSelected.size > 0 || mailRowFocused) {
           e.preventDefault();
           setSelected(new Set());
+          setRowFocused(false);
         }
       } else if (e.key === "c" || e.key === "C") {
+        if (!mailRowFocused) return;
         // Compose — Gmail convention.
         e.preventDefault();
         setActiveDraft(undefined);
@@ -233,14 +245,19 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
     markThreadRead,
     mailbox,
     mailboxSearch,
+    mailRowFocused,
   ]);
 
   useEffect(() => {
-    rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
-  }, [cursor]);
+    if (mailRowFocused) {
+      rowRefs.current[cursor]?.scrollIntoView({ block: "nearest" });
+    }
+  }, [cursor, mailRowFocused]);
 
-  const activeEmail =
-    mailbox === "drafts" ? undefined : visibleThreads[cursor]?.email;
+  const activeEmail = mailRowFocused
+    ? visibleThreads[cursor]?.email
+    : undefined;
+  const focusedThread = mailRowFocused ? visibleThreads[cursor] : undefined;
   const mailboxLabel =
     MAILBOXES.find((candidate) => candidate.id === mailbox)?.label ?? "Mail";
   const detailPanelWidthClass = "w-[300px]";
@@ -267,7 +284,10 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
         </aside>
       )}
 
-      <div className="flex-1 flex flex-col bg-content min-h-0 min-w-0">
+      <div
+        data-mail-index-focused={mailRowFocused ? "true" : "false"}
+        className="flex-1 flex flex-col bg-content min-h-0 min-w-0"
+      >
         {/* `min-h-0` on both the column and the ScrollArea is what makes the
             inbox scroll at all. A flex item defaults to `min-height: auto`,
             so without it the ScrollArea grows to the full height of the
@@ -329,6 +349,9 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
                       filterInbox === ALL_INBOXES ? undefined : filterInbox
                     }
                   />
+                )}
+                {mailbox === "inbox" && focusedThread && (
+                  <SnoozeButton compact messageIds={focusedThread.messageIds} />
                 )}
                 <button
                   type="button"
@@ -422,10 +445,11 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
                     messageCount={thread.messageIds.length}
                     people={people}
                     mailbox={mailbox}
-                    isCursor={idx === cursor}
+                    isCursor={mailRowFocused && idx === cursor}
                     isSelected={liveSelected.has(thread.threadId)}
                     onClick={() => {
                       setCursor(idx);
+                      setRowFocused(true);
                       if (mailbox === "inbox") markThreadRead(thread);
                     }}
                     ref={(el) => {

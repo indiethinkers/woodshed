@@ -49,8 +49,8 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IntegrationRefreshInterval {
-    #[default]
     Manual,
+    #[default]
     FiveMinutes,
     FifteenMinutes,
     ThirtyMinutes,
@@ -343,6 +343,14 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn integration_refresh_defaults_to_five_minutes() {
+        assert_eq!(
+            IntegrationRefreshSettings::default().interval_minutes,
+            IntegrationRefreshInterval::FiveMinutes
+        );
     }
 
     #[cfg(unix)]

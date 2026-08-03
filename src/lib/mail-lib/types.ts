@@ -44,6 +44,8 @@ export interface EmailSummary {
   read: boolean;
   /** The message has been opened in Woodshed, even if Gmail sync failed. */
   viewed?: boolean;
+  /** RFC 3339 deadline while an archived message is snoozed. */
+  snoozedUntil?: string | null;
   labels: string[];
   /** Sender slug + locally-derived mentions. Drives wikilink resolution. */
   mentions: string[];
@@ -128,6 +130,17 @@ export interface MailSyncResult {
   /** Local inbox messages archived during reconciliation because they
    * left the Gmail inbox (handled directly in Gmail). */
   removed?: number;
+}
+
+export interface MailSnoozeInput {
+  id: string;
+  /** RFC 3339. */
+  snoozedUntil: string;
+}
+
+export interface MailSnoozeRestoreResult {
+  restored: number;
+  failed: number;
 }
 
 export interface ComposeInput {

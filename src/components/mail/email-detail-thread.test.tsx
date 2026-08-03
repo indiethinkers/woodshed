@@ -44,6 +44,9 @@ vi.mock("@/components/shared/outgoing-links-panel", () => ({
 
 vi.mock("@/components/mail/html-body", () => ({ HtmlBody: () => null }));
 vi.mock("@/components/mail/inline-reply", () => ({ InlineReply: () => null }));
+vi.mock("@/components/mail/snooze-button", () => ({
+  SnoozeButton: () => <button type="button">Snooze</button>,
+}));
 vi.mock("@/components/mail/compose-dialog", () => ({
   ComposeDialog: ({ mode }: { mode: { kind: string; source?: EmailSummary } }) => (
     <div role="dialog" aria-label="Synthetic compose">

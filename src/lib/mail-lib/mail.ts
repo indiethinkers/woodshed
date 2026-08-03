@@ -2,9 +2,8 @@
 // App Passwords) is the courier; results persist as markdown in
 // `~/woodshed/inbox|sent|archive|drafts/`.
 //
-// Pull cadence: manual refresh only for v1. A periodic background poll
-// is sketched at the bottom of this file but commented out — we want the
-// user to feel the cost/control loop before automating it.
+// Pull cadence: foreground polling defaults to five minutes and can be changed
+// or disabled in Settings. The scheduler catches up when the app regains focus.
 
 import { tauriInvoke } from "@/lib/tauri";
 import type {
@@ -17,6 +16,8 @@ import type {
   MailSyncResult,
   MailPage,
   MailFolder,
+  MailSnoozeInput,
+  MailSnoozeRestoreResult,
   ReplyInput,
   SendResult,
 } from "./types";
@@ -105,6 +106,20 @@ export async function mailMarkRead(id: string): Promise<void> {
  */
 export async function mailArchiveOne(id: string): Promise<void> {
   await tauriInvoke<void>("mail_archive_one", { id });
+}
+
+/** Archive + mark read now, then return the message to INBOX at the deadline. */
+export async function mailSnooze(input: MailSnoozeInput): Promise<void> {
+  await tauriInvoke<void>("mail_snooze", { input });
+}
+
+/** Restore every locally-due snooze, updating Gmail before local INBOX state. */
+export async function mailRestoreDueSnoozes(): Promise<MailSnoozeRestoreResult> {
+  return (
+    (await tauriInvoke<MailSnoozeRestoreResult>(
+      "mail_restore_due_snoozes",
+    )) ?? { restored: 0, failed: 0 }
+  );
 }
 
 /**

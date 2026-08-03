@@ -46,8 +46,9 @@ encryption and a backup strategy appropriate for the sensitivity of your data.
 
 Woodshed communicates directly with the following services. Most network
 actions require a configured integration and an explicit command. Mail and
-calendar refresh can also run on the interval you select while Woodshed is
-running; Manual is the default. YouTube embeds and remote email images are the
+calendar refresh also runs every five minutes by default while Woodshed is
+running; Settings can change the interval or select Manual. YouTube embeds and
+remote email images are the
 other exceptions described below.
 
 - **Gmail:** IMAP reads inbox and sent content and synchronizes read/archive
@@ -55,6 +56,8 @@ other exceptions described below.
   messages and attachment copies are written to the local vault. If automatic
   refresh is enabled, IMAP polling runs at the selected interval while
   Woodshed is running and may produce a content-free in-app new-mail notice.
+  A snooze you create also authorizes Woodshed to restore that message through
+  IMAP when its locally stored deadline becomes due while the app is running.
 - **Google Calendar or another iCal host:** an explicit Sync—or the optional
   foreground refresh interval—downloads the configured read-only calendar feed
   and writes a derived local cache.
@@ -76,7 +79,9 @@ other exceptions described below.
 - **Hermes-compatible agent endpoint:** an explicit agent command sends the
   selected instruction and relevant vault or email content directly to the
   endpoint you configured. Proposed record creation and mail archive actions
-  require confirmation.
+  require confirmation. User-selected PDF and text attachments are converted
+  to bounded text locally; the endpoint receives that text and a sanitized
+  filename, not the original file path.
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 

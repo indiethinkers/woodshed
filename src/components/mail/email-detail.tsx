@@ -41,6 +41,7 @@ import {
 } from "@/components/mail/compose-dialog";
 import { HtmlBody } from "@/components/mail/html-body";
 import { InlineReply } from "@/components/mail/inline-reply";
+import { SnoozeButton } from "@/components/mail/snooze-button";
 import { Markdown } from "@/components/shared/markdown";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,21 @@ export function EmailDetail({
     [thread, email],
   );
   const latest = messages[messages.length - 1];
+  const snoozableMessageIds = useMemo(
+    () =>
+      mailbox === "inbox"
+        ? messages
+            .filter(
+              (message) =>
+                message.path.startsWith("inbox/") ||
+                message.labels.some((label) =>
+                  label.toLowerCase().includes("inbox"),
+                ),
+            )
+            .map((message) => message.id)
+        : [],
+    [mailbox, messages],
+  );
   const [openMessageIds, setOpenMessageIds] = useState<Set<string>>(() =>
     isLoading ? new Set() : new Set([latest.id]),
   );
@@ -363,10 +379,16 @@ export function EmailDetail({
           Forward
         </Button>
         {mailbox === "inbox" && (
-          <Button variant="outline" size="sm" onClick={handleArchive}>
-            <Archive className="h-3.5 w-3.5 mr-1.5" />
-            Archive
-          </Button>
+          <>
+            <SnoozeButton
+              messageIds={snoozableMessageIds}
+              onSnoozed={() => openAfterAction(nextEmailIdAfter())}
+            />
+            <Button variant="outline" size="sm" onClick={handleArchive}>
+              <Archive className="h-3.5 w-3.5 mr-1.5" />
+              Archive
+            </Button>
+          </>
         )}
         <Button
           variant="outline"

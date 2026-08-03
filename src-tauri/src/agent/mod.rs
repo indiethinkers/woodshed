@@ -876,7 +876,7 @@ where
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| format!("read chat stream failed: {e}"))?
+        .map_err(|_| stream_read_failure_message())?
     {
         received_bytes = received_bytes.saturating_add(chunk.len());
         if received_bytes > MAX_AGENT_STREAM_BYTES {
@@ -906,6 +906,11 @@ where
         );
     }
     Ok(())
+}
+
+fn stream_read_failure_message() -> String {
+    "Hermes ended its response unexpectedly. This agent run was saved as failed; try again."
+        .to_string()
 }
 
 pub fn parse_model_ids(value: &Value) -> Vec<String> {
@@ -1417,6 +1422,15 @@ mod tests {
             content: "x".repeat(MAX_AGENT_INPUT_BYTES + 1),
         };
         assert!(normalize_chat_messages(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn stream_read_failures_are_presented_as_recoverable_agent_errors() {
+        let message = stream_read_failure_message();
+
+        assert!(message.contains("ended its response unexpectedly"));
+        assert!(message.contains("saved as failed"));
+        assert!(!message.contains("error decoding response body"));
     }
 
     #[test]

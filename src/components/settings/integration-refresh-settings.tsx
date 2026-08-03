@@ -32,7 +32,7 @@ export function IntegrationRefreshSettingsSection() {
   return (
     <SettingsGroup
       label="Automatic refresh"
-      description="Optionally refresh connected mail and calendars while Woodshed is running. Manual is the default. Background mail refreshes produce one in-app notice for each new-message batch, without including sender or subject content."
+      description="Refresh connected mail and calendars every 5 minutes by default while Woodshed is running. You can choose Manual to disable automatic refresh. Background mail refreshes produce one in-app notice for each new-message batch, without including sender or subject content."
     >
       <div className="flex max-w-[560px] flex-col gap-2">
         <label className="flex items-center justify-between gap-4 rounded-sm border border-border px-3 py-2.5">
@@ -41,7 +41,7 @@ export function IntegrationRefreshSettingsSection() {
           </span>
           <select
             aria-label="Automatic refresh interval"
-            value={settings?.intervalMinutes ?? 0}
+            value={settings?.intervalMinutes ?? 5}
             disabled={isLoading || setSettings.isPending}
             onChange={(event) =>
               void updateInterval(

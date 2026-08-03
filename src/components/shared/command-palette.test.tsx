@@ -98,6 +98,36 @@ describe("CommandPalette typeahead", () => {
     expect(screen.getByRole("textbox")).toHaveValue("r");
   });
 
+  it("leaves printable keys with a focused Mail index row", () => {
+    mocks.pathname = "/mail";
+    render(
+      <>
+        <div data-mail-index-focused="true" />
+        <CommandPalette />
+      </>,
+    );
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Command palette" }),
+    ).toBeNull();
+  });
+
+  it("restores typeahead after the Mail index row is unfocused", () => {
+    mocks.pathname = "/mail";
+    render(
+      <>
+        <div data-mail-index-focused="false" />
+        <CommandPalette />
+      </>,
+    );
+
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(screen.getByRole("textbox")).toHaveValue("e");
+  });
+
   it("does not capture typing from a focused database cell", () => {
     render(
       <>

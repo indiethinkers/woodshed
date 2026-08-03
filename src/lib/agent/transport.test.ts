@@ -50,7 +50,7 @@ async function readChunks(
 
 describe("createAgentChatTransport", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("creates a durable run with a stable user-message idempotency key", async () => {
@@ -104,6 +104,70 @@ describe("createAgentChatTransport", () => {
     });
     expect(chunks).toContainEqual(
       expect.objectContaining({ type: "text-delta", delta: "A durable answer." }),
+    );
+  });
+
+  it("prepares PDF contents before sending an attachment to the agent", async () => {
+    mocks.tauriInvoke
+      .mockResolvedValueOnce({
+        context:
+          "[Attachment: review.pdf (application/pdf)]\nSynthetic review text.\n[/Attachment]",
+      })
+      .mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Summarize this review." },
+            {
+              type: "file",
+              filename: "review.pdf",
+              mediaType: "application/pdf",
+              url: "data:application/pdf;base64,JVBERi0xLjQK",
+            },
+          ],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      1,
+      "agent_attachment_prepare",
+      {
+        input: {
+          filename: "review.pdf",
+          mediaType: "application/pdf",
+          dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+        },
+      },
+    );
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      2,
+      "agent_run_create",
+      {
+        input: expect.objectContaining({
+          inputMessage: expect.objectContaining({
+            content:
+              "Summarize this review.\n\nAttachments:\n- review.pdf (application/pdf)",
+          }),
+          messages: [
+            {
+              role: "user",
+              content:
+                "Summarize this review.\n\n[Attachment: review.pdf (application/pdf)]\nSynthetic review text.\n[/Attachment]",
+            },
+          ],
+        }),
+      },
     );
   });
 

@@ -32,7 +32,7 @@ pub enum ImapError {
     Imap(#[from] imap::Error),
     #[error("auth failed for {email}: {message}")]
     AuthFailed { email: String, message: String },
-    #[error("message {message_id} not found in Gmail INBOX")]
+    #[error("message {message_id} not found in Gmail")]
     MessageNotFound { message_id: String },
     #[error("inbox listing inconsistent: {exists} messages present but none parseable")]
     InboxListInconsistent { exists: u32 },
@@ -44,6 +44,14 @@ pub enum ImapError {
     AmbiguousMessageId { message_id: String },
     #[error("Gmail special-use mailbox response was malformed or exceeded safety limits")]
     InvalidSpecialUseResponse,
+    #[error("Gmail did not expose its All Mail special-use mailbox")]
+    MissingAllMailbox,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SpecialUseMailboxes {
+    sent: Option<String>,
+    all: Option<String>,
 }
 
 /// One raw message fetched from IMAP, before MIME parsing. Carries the
@@ -102,9 +110,10 @@ pub fn fetch_recent_sent(
     let sent_name = match pool.cached_sent_mailbox(&creds.email) {
         Some(cached) => cached,
         None => {
-            let discovered = discover_sent_mailbox(creds)?;
-            pool.remember_sent_mailbox(&creds.email, discovered.clone());
-            discovered
+            let discovered = discover_special_use_mailboxes(creds)?;
+            pool.remember_sent_mailbox(&creds.email, discovered.sent.clone());
+            pool.remember_all_mailbox(&creds.email, discovered.all);
+            discovered.sent
         }
     };
     let Some(sent_name) = sent_name else {
@@ -118,7 +127,7 @@ pub fn fetch_recent_sent(
 /// Discover Gmail's localized Sent mailbox over a short-lived, read-bounded
 /// IMAP connection. The pooled `imap` session cannot apply a per-command read
 /// cap because its transport is private, so discovery is isolated and cached.
-fn discover_sent_mailbox(creds: &Credentials) -> Result<Option<String>, ImapError> {
+fn discover_special_use_mailboxes(creds: &Credentials) -> Result<SpecialUseMailboxes, ImapError> {
     let tcp = TcpStream::connect((IMAP_HOST, IMAP_PORT)).map_err(imap::Error::Io)?;
     tcp.set_read_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
         .map_err(imap::Error::Io)?;
@@ -156,7 +165,7 @@ fn discover_sent_mailbox(creds: &Credentials) -> Result<Option<String>, ImapErro
     if budget.finish() {
         return Err(ImapError::InvalidSpecialUseResponse);
     }
-    sent_mailbox_from_special_use_response(&response?)
+    special_use_mailboxes_from_response(&response?)
 }
 
 #[derive(Debug, Clone)]
@@ -233,14 +242,19 @@ impl<T: Write> Write for ReadBudgetStream<T> {
     }
 }
 
+#[cfg(test)]
 fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<String>, ImapError> {
+    Ok(special_use_mailboxes_from_response(response)?.sent)
+}
+
+fn special_use_mailboxes_from_response(response: &[u8]) -> Result<SpecialUseMailboxes, ImapError> {
     if response.len() > MAX_SPECIAL_USE_RESPONSE_BYTES {
         return Err(ImapError::InvalidSpecialUseResponse);
     }
 
     let mut remaining = response;
     let mut mailbox_count = 0;
-    let mut sent_mailbox = None;
+    let mut mailboxes = SpecialUseMailboxes::default();
     while !remaining.is_empty() {
         let (rest, parsed) = imap_proto::parse_response(remaining)
             .map_err(|_| ImapError::InvalidSpecialUseResponse)?;
@@ -258,12 +272,15 @@ fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<Stri
                 return Err(ImapError::InvalidSpecialUseResponse);
             }
             if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\Sent")) {
-                sent_mailbox.get_or_insert_with(|| name.to_string());
+                mailboxes.sent.get_or_insert_with(|| name.to_string());
+            }
+            if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\All")) {
+                mailboxes.all.get_or_insert_with(|| name.to_string());
             }
         }
         remaining = rest;
     }
-    Ok(sent_mailbox)
+    Ok(mailboxes)
 }
 
 fn fetch_recent_from_mailbox(
@@ -449,6 +466,53 @@ pub fn archive_message(
     })
 }
 
+/// Return an archived Gmail message to INBOX. Archived messages are located
+/// in the provider-designated `\\All` mailbox, then the Gmail `\\Inbox` label
+/// is added with X-GM-LABELS. The RFC Message-ID fallback is exact-checked
+/// before mutation, matching the normal inbox mutation boundary.
+pub fn restore_message(
+    pool: &GmailImapPool,
+    creds: &Credentials,
+    local_id: &str,
+    message_id: &str,
+) -> Result<(), ImapError> {
+    let all_mailbox = match pool.cached_all_mailbox(&creds.email) {
+        Some(cached) => cached,
+        None => {
+            let discovered = discover_special_use_mailboxes(creds)?;
+            pool.remember_sent_mailbox(&creds.email, discovered.sent);
+            pool.remember_all_mailbox(&creds.email, discovered.all.clone());
+            discovered.all
+        }
+    }
+    .ok_or(ImapError::MissingAllMailbox)?;
+
+    pool.with_session(creds, |session| {
+        session.select(&all_mailbox)?;
+        let uids = if let Some(gm_msgid) = gmail_msgid_from_local_id(local_id) {
+            let mut matches: Vec<u32> = session
+                .uid_search(format!("X-GM-MSGID {gm_msgid}"))?
+                .into_iter()
+                .collect();
+            matches.sort();
+            matches
+        } else {
+            lookup_uids_by_message_id(session, message_id)?
+        };
+        if uids.is_empty() {
+            return Err(ImapError::MessageNotFound {
+                message_id: local_id.to_string(),
+            });
+        }
+        if uids.len() > 1 {
+            return Err(ImapError::AmbiguousMessageId {
+                message_id: local_id.to_string(),
+            });
+        }
+        apply_restore_plan(session, &join_uids(&uids))
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveCommand {
     StoreFlags(&'static str),
@@ -473,6 +537,29 @@ fn apply_archive_plan(
             }
             ArchiveCommand::UidExpunge => {
                 session.uid_expunge(uid_set)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreCommand {
+    StoreLabels(&'static str),
+}
+
+fn restore_plan() -> [RestoreCommand; 1] {
+    [RestoreCommand::StoreLabels("+X-GM-LABELS.SILENT (\\Inbox)")]
+}
+
+fn apply_restore_plan(
+    session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
+    uid_set: &str,
+) -> Result<(), ImapError> {
+    for command in restore_plan() {
+        match command {
+            RestoreCommand::StoreLabels(labels) => {
+                session.uid_store(uid_set, labels)?;
             }
         }
     }
@@ -707,6 +794,25 @@ mod tests {
         assert_eq!(
             sent_mailbox_from_special_use_response(response).unwrap(),
             Some("[Provider]/Localized Sent".to_string()),
+        );
+    }
+
+    #[test]
+    fn discovers_the_provider_designated_all_mailbox() {
+        let response =
+            b"* LIST (\\All) \"/\" \"[Provider]/Localized All\"\r\na1 OK LIST completed\r\n";
+
+        assert_eq!(
+            special_use_mailboxes_from_response(response).unwrap().all,
+            Some("[Provider]/Localized All".to_string()),
+        );
+    }
+
+    #[test]
+    fn restoring_an_archived_message_adds_the_inbox_label() {
+        assert_eq!(
+            restore_plan(),
+            [RestoreCommand::StoreLabels("+X-GM-LABELS.SILENT (\\Inbox)")]
         );
     }
 

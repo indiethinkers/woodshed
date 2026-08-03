@@ -79,11 +79,22 @@ imported only after a verified write to `secrets.json`.
 
 ## Network policy
 
-Mail and calendar refreshes run only on explicit refresh or after the user
-selects a foreground polling interval in Settings. Manual is the default.
+Mail and calendar refreshes run on explicit refresh or the foreground polling
+interval selected in Settings. Five minutes is the default; Manual disables it.
 Scheduled refresh stops when Woodshed exits, catches up when the running app
 regains focus, and uses the same bounded Gmail and iCal clients as manual
 refresh. New-mail notices contain only an aggregate count.
+
+Email snooze restoration is separate from refresh polling: after the user
+chooses a deadline, Woodshed checks local archived records every minute and on
+focus while running. Only a due record triggers the bounded IMAP label update
+that returns it to INBOX; this still runs when refresh is set to Manual.
+
+Agent PDF and text attachments are decoded from the user-selected in-memory data
+URL and converted to bounded text inside the Tauri command boundary. The request
+sent to Hermes contains the extracted text and a sanitized label, not the
+original filesystem path. Unsupported, malformed, image-only, and oversized
+attachments fail before an agent run is created.
 
 Public resource, calendar, oEmbed, and remote-image fetches:
 

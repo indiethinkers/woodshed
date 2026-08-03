@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     stats: { durationMs: 10 },
     newMessages: 3,
   })),
+  restoreSnoozes: vi.fn(async () => ({ restored: 0, failed: 0 })),
   info: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("@/lib/hooks/use-gcal", () => ({
 
 vi.mock("@/lib/hooks/use-mail", () => ({
   useRefreshMail: () => mocks.refreshMail,
+  useRestoreDueSnoozes: () => mocks.restoreSnoozes,
 }));
 
 vi.mock("@/lib/hooks/use-integration-refresh", () => ({
@@ -37,6 +39,7 @@ describe("IntegrationRefreshScheduler", () => {
     mocks.intervalMinutes = 5;
     mocks.refreshCalendar.mockClear();
     mocks.refreshMail.mockClear();
+    mocks.restoreSnoozes.mockClear();
     mocks.info.mockClear();
   });
 
@@ -67,6 +70,18 @@ describe("IntegrationRefreshScheduler", () => {
     expect(mocks.refreshCalendar).not.toHaveBeenCalled();
     expect(mocks.refreshMail).not.toHaveBeenCalled();
     expect(mocks.info).not.toHaveBeenCalled();
+  });
+
+  it("checks due snoozes on launch and every minute even in Manual mode", async () => {
+    mocks.intervalMinutes = 0;
+    render(<IntegrationRefreshScheduler />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+    });
+
+    expect(mocks.restoreSnoozes).toHaveBeenCalledTimes(2);
   });
 
   it("keeps its cadence across unrelated app rerenders", async () => {

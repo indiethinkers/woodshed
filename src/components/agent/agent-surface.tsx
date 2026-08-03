@@ -1548,8 +1548,6 @@ export function AgentWorkIndicator({
 }: {
   displayName?: string;
 }) {
-  const elapsedSeconds = useElapsedSeconds();
-
   // A lightweight, transient "working" chip shown while the request is
   // submitted; streamed assistant text then takes its place. It occupies the
   // eventual response position, so the handoff reads as one continuous turn.
@@ -1557,21 +1555,28 @@ export function AgentWorkIndicator({
   return (
     <Message aria-live="polite" className="max-w-full agent-msg-in" from="assistant">
       <MessageContent className="w-full max-w-none px-4">
-        <div className="flex items-center gap-2.5 text-[13px]">
-          <Shimmer
-            as="span"
-            className="font-medium text-foreground/80"
-            duration={1.2}
-            spread={1.3}
-          >
-            {`${displayName} is working`}
-          </Shimmer>
-          <span className="tabular-nums text-[12px] text-muted-foreground/70">
-            {formatElapsed(elapsedSeconds)}
-          </span>
-        </div>
+        <AgentWorkingStatus displayName={displayName} />
       </MessageContent>
     </Message>
+  );
+}
+
+function AgentWorkingStatus({ displayName }: { displayName: string }) {
+  const elapsedSeconds = useElapsedSeconds();
+  return (
+    <div className="flex items-center gap-2.5 text-[13px]">
+      <Shimmer
+        as="span"
+        className="font-medium text-foreground/80"
+        duration={1.2}
+        spread={1.3}
+      >
+        {`${displayName} is working`}
+      </Shimmer>
+      <span className="tabular-nums text-[12px] text-muted-foreground/70">
+        {formatElapsed(elapsedSeconds)}
+      </span>
+    </div>
   );
 }
 
@@ -1626,7 +1631,7 @@ function CadenceAvatar({
   );
 }
 
-function AgentMessage({
+export function AgentMessage({
   compact = false,
   displayName,
   isFirst,
@@ -1658,11 +1663,11 @@ function AgentMessage({
   // the run is still streaming. Its activity log auto-expands and ticks a timer.
   const active = !isUser && isLastMessage && isStreaming;
   const hasActivity = reasoningText.length > 0 || toolParts.length > 0;
-  // Show the activity log when there's real reasoning/tool work to surface, or
-  // while the active turn is still waiting for its first token (so the wait
-  // isn't blank). A plain answer that streams straight through skips it — the
-  // streaming text is its own feedback.
-  const showChainOfThought = !isUser && (hasActivity || (active && !responseText));
+  // The activity disclosure is event-driven. Before Hermes emits reasoning or
+  // a tool event, show a compact wait state with no fake step queue or remote
+  // execution claim. A plain answer that streams directly never needs a panel.
+  const showChainOfThought = !isUser && hasActivity;
+  const waitingForActivity = active && !hasActivity && !responseText;
 
   // Don't render a bare avatar for an assistant turn that has nothing to show
   // yet — unless it's the active turn, whose chain-of-thought stands in with a
@@ -1729,11 +1734,13 @@ function AgentMessage({
             )}
             data-agent-response
           >
+            {waitingForActivity && (
+              <AgentWorkingStatus displayName={displayName} />
+            )}
             {showChainOfThought && (
               <AgentChainOfThought
                 active={active}
                 displayName={displayName}
-                hasText={Boolean(responseText)}
                 onToolApprovalResponse={onToolApprovalResponse}
                 reasoningStreaming={reasoningStreaming}
                 reasoningText={reasoningText}
@@ -1868,7 +1875,6 @@ function AgentInlineCitations({ sources }: { sources: SourceUrlPart[] }) {
 function AgentChainOfThought({
   active,
   displayName,
-  hasText,
   onToolApprovalResponse,
   reasoningStreaming,
   reasoningText,
@@ -1876,7 +1882,6 @@ function AgentChainOfThought({
 }: {
   active: boolean;
   displayName: string;
-  hasText: boolean;
   onToolApprovalResponse?: ChatAddToolApproveResponseFunction;
   reasoningStreaming: boolean;
   reasoningText: string;
@@ -1886,13 +1891,19 @@ function AgentChainOfThought({
   // The "Worked for Ns · K steps" tally counts the real reasoning + tool work,
   // not the always-on "sent context" baseline step.
   const stepCount = toolParts.length + (hasReasoning ? 1 : 0);
-  // The run is live but nothing has streamed yet — show a generic "working
-  // remotely" beat so the wait isn't a blank shimmer.
-  const showScaffold = active && stepCount === 0 && !hasText;
+  const activeLabel = currentAgentActivityLabel(
+    displayName,
+    reasoningStreaming,
+    toolParts,
+  );
 
   return (
     <ChainOfThought active={active} className="mb-5">
-      <ChainOfThoughtHeader displayName={displayName} stepCount={stepCount} />
+      <ChainOfThoughtHeader
+        activeLabel={activeLabel}
+        displayName={displayName}
+        stepCount={stepCount}
+      />
       <ChainOfThoughtContent>
         <ChainOfThoughtStep label="Sent context to Hermes" status="complete" />
         {hasReasoning && (
@@ -1912,16 +1923,27 @@ function AgentChainOfThought({
             part={part}
           />
         ))}
-        {showScaffold && (
-          <ChainOfThoughtStep
-            description="Reading context and deciding what to do…"
-            label="Working remotely"
-            status="active"
-          />
-        )}
       </ChainOfThoughtContent>
     </ChainOfThought>
   );
+}
+
+function currentAgentActivityLabel(
+  displayName: string,
+  reasoningStreaming: boolean,
+  toolParts: AgentToolPart[],
+): string {
+  const activeTool = [...toolParts]
+    .reverse()
+    .find((part) => toolStatusFromPart(part) === "active");
+  if (activeTool) {
+    const toolName = toolNameFromPart(activeTool);
+    const title = "title" in activeTool ? activeTool.title ?? undefined : undefined;
+    const input = "input" in activeTool ? activeTool.input : undefined;
+    return agentToolDescriptor(toolName, title, input).label;
+  }
+  if (reasoningStreaming) return "Thinking through the response";
+  return `${displayName} is working`;
 }
 
 export function AgentThoughtTool({

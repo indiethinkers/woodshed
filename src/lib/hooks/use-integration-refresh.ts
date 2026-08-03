@@ -18,7 +18,7 @@ export function useIntegrationRefreshSettings() {
     queryFn: async () =>
       (await tauriInvoke<IntegrationRefreshSettings>(
         "integration_refresh_settings_get",
-      )) ?? { intervalMinutes: 0 },
+      )) ?? { intervalMinutes: 5 },
     staleTime: Number.POSITIVE_INFINITY,
   });
 }

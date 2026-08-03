@@ -83,6 +83,7 @@ vi.mock("@/lib/tauri", () => ({
 
 import {
   AgentSurface,
+  AgentMessage,
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
@@ -170,6 +171,54 @@ describe("AgentWorkIndicator", () => {
     expect(screen.queryByText("3 steps")).not.toBeInTheDocument();
     expect(screen.queryByText("Remote agent work")).not.toBeInTheDocument();
     expect(screen.queryByText("Response stream")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentMessage activity state", () => {
+  it("shows a compact non-collapsible wait state before meaningful activity arrives", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming
+        message={{ id: "assistant-1", role: "assistant", parts: [] }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    const status = screen.getByText("Hermes is working");
+    expect(status.closest("button")).toBeNull();
+    expect(screen.queryByText("Working remotely")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+  });
+
+  it("opens an event-driven activity log when a real tool starts", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming
+        message={{
+          id: "assistant-1",
+          role: "assistant",
+          parts: [
+            {
+              type: "dynamic-tool",
+              toolName: "search_vault",
+              toolCallId: "call_1",
+              state: "input-available",
+              input: { query: "synthetic notes" },
+            },
+          ],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Searching your vault")).toHaveLength(2);
+    expect(screen.getByText("synthetic notes")).toBeInTheDocument();
   });
 });
 

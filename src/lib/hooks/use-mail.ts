@@ -21,7 +21,9 @@ import {
   mailFolderPage,
   mailMarkRead,
   mailReply,
+  mailRestoreDueSnoozes,
   mailSend,
+  mailSnooze,
   mailSyncRecentMulti,
   mailThread,
 } from "@/lib/mail-lib";
@@ -36,6 +38,7 @@ import {
   type MailPage,
   type MailFolder,
   type MailSyncResult,
+  type MailSnoozeRestoreResult,
   type ReplyInput,
   type SendResult,
 } from "@/lib/mail-lib/types";
@@ -486,6 +489,56 @@ export function useArchiveOne() {
       throw e;
     }
   };
+}
+
+/** Snooze one message with the same optimistic removal behavior as archive. */
+export function useSnoozeOne() {
+  const qc = useQueryClient();
+  return async (id: string, snoozedUntil: string) => {
+    const cancelExistingReads = qc.cancelQueries({
+      queryKey: ["emails"],
+      exact: true,
+    });
+    const previousList = qc.getQueryData<MailCache>(["emails"]);
+    const previousEmail = findCachedEmail(previousList, id);
+    hideArchivedEmail(qc, id);
+    qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+      updateCachedEmails(old, (email) => (email.id === id ? null : email)),
+    );
+    try {
+      await cancelExistingReads;
+      await mailSnooze({ id, snoozedUntil });
+      await qc.cancelQueries({ queryKey: ["emails"] });
+      qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+        updateCachedEmails(old, (email) => (email.id === id ? null : email)),
+      );
+      showArchivedEmail(qc, id);
+      void qc.invalidateQueries({ queryKey: ["emails"] });
+      void qc.invalidateQueries({ queryKey: ["email", id] });
+      void qc.invalidateQueries({ queryKey: ["thread"] });
+    } catch (error) {
+      if (previousEmail) {
+        qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
+          restoreCachedEmail(old, previousEmail),
+        );
+      }
+      showArchivedEmail(qc, id);
+      throw error;
+    }
+  };
+}
+
+export function useRestoreDueSnoozes() {
+  const qc = useQueryClient();
+  return useCallback(async (): Promise<MailSnoozeRestoreResult> => {
+    const result = await mailRestoreDueSnoozes();
+    if (result.restored > 0) {
+      void qc.invalidateQueries({ queryKey: ["emails"] });
+      void qc.invalidateQueries({ queryKey: ["email"] });
+      void qc.invalidateQueries({ queryKey: ["thread"] });
+    }
+    return result;
+  }, [qc]);
 }
 
 /** Delete one message's local file (the Gmail mailbox is untouched). */

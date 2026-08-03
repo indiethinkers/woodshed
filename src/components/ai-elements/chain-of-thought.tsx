@@ -106,12 +106,14 @@ export type ChainOfThoughtHeaderProps = Omit<
   "children"
 > & {
   displayName?: string;
+  activeLabel?: string;
   stepCount?: number;
 };
 
 export function ChainOfThoughtHeader({
   className,
   displayName = "Cadence",
+  activeLabel,
   stepCount,
   ...props
 }: ChainOfThoughtHeaderProps) {
@@ -137,7 +139,7 @@ export function ChainOfThoughtHeader({
           duration={1.3}
           spread={1.4}
         >
-          {`${displayName} is working`}
+          {activeLabel ?? `${displayName} is working`}
         </Shimmer>
       ) : (
         <span className="text-[13px] font-medium text-muted-foreground transition-colors group-hover:text-foreground">

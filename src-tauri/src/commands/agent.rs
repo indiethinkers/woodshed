@@ -7,6 +7,8 @@ use crate::agent::{
 use crate::sync_ext::MutexRecover;
 use crate::vault as vault_lib;
 use crate::AppState;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,11 +17,167 @@ use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
 const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentAttachmentPrepareInput {
+    pub filename: Option<String>,
+    pub media_type: Option<String>,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachmentPrepareResult {
+    pub context: String,
+}
 
 struct AgentRunProgress {
     response: String,
     pending_events: Vec<agent::AgentStreamEvent>,
     last_flush: Instant,
+}
+
+/// Convert user-selected attachment bytes into bounded text before Hermes sees
+/// the message. The agent receives neither the original filesystem path nor a
+/// filename-only hint, so it has no reason to probe Desktop, Photos, or Music
+/// with Python or another subprocess.
+#[tauri::command]
+pub async fn agent_attachment_prepare(
+    input: AgentAttachmentPrepareInput,
+) -> Result<AgentAttachmentPrepareResult, String> {
+    tokio::task::spawn_blocking(move || prepare_agent_attachment(input))
+        .await
+        .map_err(|error| format!("attachment preparation task failed: {error}"))?
+}
+
+fn prepare_agent_attachment(
+    input: AgentAttachmentPrepareInput,
+) -> Result<AgentAttachmentPrepareResult, String> {
+    let label = safe_attachment_label(input.filename.as_deref());
+    let media_type =
+        normalized_attachment_media_type(input.media_type.as_deref(), input.filename.as_deref())?;
+    let expected_prefix = format!("data:{media_type};base64");
+    let (metadata, encoded) = input
+        .data_url
+        .split_once(',')
+        .ok_or_else(|| "attachment data must be a base64 data URL".to_string())?;
+    if !metadata.eq_ignore_ascii_case(&expected_prefix) {
+        return Err("attachment data URL does not match its media type".to_string());
+    }
+    let max_encoded = MAX_AGENT_ATTACHMENT_BYTES.div_ceil(3) * 4;
+    if encoded.len() > max_encoded {
+        return Err(format!(
+            "attachment exceeds the {MAX_AGENT_ATTACHMENT_BYTES} byte limit"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "attachment data is not valid base64".to_string())?;
+    if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
+        return Err(format!(
+            "attachment exceeds the {MAX_AGENT_ATTACHMENT_BYTES} byte limit"
+        ));
+    }
+
+    let text = if media_type == "application/pdf" {
+        extract_pdf_text(&bytes)?
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(
+            "This attachment contains no extractable text. Image-only PDFs are not supported yet."
+                .to_string(),
+        );
+    }
+    if text.len() > MAX_AGENT_ATTACHMENT_TEXT_BYTES {
+        return Err(format!(
+            "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
+        ));
+    }
+    Ok(AgentAttachmentPrepareResult {
+        context: format!("[Attachment: {label} ({media_type})]\n{text}\n[/Attachment]"),
+    })
+}
+
+fn safe_attachment_label(filename: Option<&str>) -> String {
+    let basename = filename
+        .unwrap_or("Attachment")
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("Attachment")
+        .trim();
+    let mut safe = basename
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(160)
+        .collect::<String>();
+    safe = safe.split_whitespace().collect::<Vec<_>>().join(" ");
+    if safe.is_empty() {
+        "Attachment".to_string()
+    } else {
+        safe
+    }
+}
+
+fn normalized_attachment_media_type(
+    media_type: Option<&str>,
+    filename: Option<&str>,
+) -> Result<String, String> {
+    let normalized = media_type
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let inferred_pdf = filename
+        .map(|value| value.to_ascii_lowercase().ends_with(".pdf"))
+        .unwrap_or(false);
+    if normalized == "application/pdf" || (normalized.is_empty() && inferred_pdf) {
+        return Ok("application/pdf".to_string());
+    }
+    if normalized.starts_with("text/") || normalized == "application/json" {
+        return Ok(normalized);
+    }
+    Err("Woodshed can currently read PDF and text attachments in Agent chats".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
+    use objc2::rc::autoreleasepool;
+    use objc2::AnyThread;
+    use objc2_foundation::NSData;
+    use objc2_pdf_kit::PDFDocument;
+
+    autoreleasepool(|_| {
+        let data = NSData::with_bytes(bytes);
+        // SAFETY: PDFKit retains the immutable NSData for the duration of the
+        // document. The initializer is failable for malformed input.
+        let document = unsafe { PDFDocument::initWithData(PDFDocument::alloc(), &data) }
+            .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
+        // SAFETY: `string` is a read-only PDFDocument property. The returned
+        // NSString is retained by objc2 before leaving Objective-C.
+        let text = unsafe { document.string() }
+            .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
+        Ok(text.to_string())
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn extract_pdf_text(_bytes: &[u8]) -> Result<String, String> {
+    Err("PDF attachments are supported by the macOS desktop app".to_string())
 }
 
 #[tauri::command]
@@ -647,6 +805,37 @@ fn write_chat(
 mod tests {
     use super::*;
 
+    fn synthetic_pdf(text: &str) -> Vec<u8> {
+        let stream = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
     fn new_run() -> runs::NewAgentRun {
         runs::NewAgentRun {
             conversation_id: "agent-conversation-test".to_string(),
@@ -707,6 +896,38 @@ mod tests {
         .unwrap();
         assert_eq!(late_completion.status, runs::AgentRunStatus::Cancelled);
         assert!(late_completion.final_response.is_none());
+    }
+
+    #[test]
+    fn prepares_pdf_text_without_exposing_a_filesystem_path_to_the_agent() {
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(synthetic_pdf("Synthetic review text"));
+
+        let prepared = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("review.pdf".to_string()),
+            media_type: Some("application/pdf".to_string()),
+            data_url: format!("data:application/pdf;base64,{encoded}"),
+        })
+        .unwrap();
+
+        assert!(prepared.context.contains("Synthetic review text"));
+        assert!(prepared.context.contains("review.pdf (application/pdf)"));
+        assert!(!prepared.context.contains("file://"));
+        assert!(!prepared.context.contains("/Users/"));
+    }
+
+    #[test]
+    fn rejects_a_pdf_that_has_no_extractable_text() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"%PDF-invalid");
+
+        let error = prepare_agent_attachment(AgentAttachmentPrepareInput {
+            filename: Some("scan.pdf".to_string()),
+            media_type: Some("application/pdf".to_string()),
+            data_url: format!("data:application/pdf;base64,{encoded}"),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("extract"));
     }
 
     #[test]

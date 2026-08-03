@@ -67,8 +67,9 @@ of truth; the application is a native lens over those files.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
 - **Bounded network actions.** Configured integrations send data only when the
-  user invokes them or explicitly enables the foreground mail/calendar refresh
-  schedule. The documented exception is a displayed YouTube embed,
+  user invokes them or through the foreground mail/calendar refresh schedule,
+  which defaults to five minutes and can be disabled with Manual. The documented
+  exception is a displayed YouTube embed,
   whose frame is restricted to `youtube-nocookie.com`. Opening an HTML email
   may load remote images through Woodshed's bounded cache; untrusted HTML never
   fetches URLs directly.
@@ -424,6 +425,11 @@ present there.
 Archiving updates Gmail and moves the local record from `inbox/` to `archive/`.
 Keep local and remote failure handling recoverable.
 
+Snoozing marks a message read, archives it remotely and locally, and persists an
+RFC 3339 return deadline on the archived Markdown record. While Woodshed is
+running it checks due snoozes every minute and on focus; restoration adds Gmail's
+`\Inbox` label before moving the local record back to `inbox/`.
+
 ### Google Calendar
 
 Google Calendar uses a read-only secret iCal URL. The URL is stored by the OS;
@@ -463,6 +469,12 @@ bearer key, stored through `CredentialBroker`.
 
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.
+
+User-selected PDF and text chat attachments are decoded and converted to bounded
+text inside Woodshed before a run is created. Hermes receives that text and a
+sanitized label, never the attachment's original filesystem path. Unsupported or
+unreadable attachments fail before the request rather than prompting the agent to
+search the machine by filename.
 
 ## Privacy and diagnostics
 

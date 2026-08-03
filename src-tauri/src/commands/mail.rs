@@ -31,6 +31,20 @@ const READ_LABEL: &str = "read";
 const UNREAD_LABEL: &str = "unread";
 const ARCHIVED_LABEL: &str = "archived";
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MailSnoozeInput {
+    pub id: String,
+    pub snoozed_until: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSnoozeRestoreResult {
+    pub restored: usize,
+    pub failed: usize,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DTOs surfaced to the frontend
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +90,10 @@ pub struct EmailSummary {
     /// local and can be true while a provider read-state update is pending.
     #[serde(default)]
     pub viewed: bool,
+    /// RFC 3339 deadline for a message intentionally removed from INBOX.
+    /// Present only while the record lives in archive/ awaiting restoration.
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
     pub labels: Vec<String>,
     /// Sender slug (kebab-case) plus any other proper-name humans we
     /// could cheaply derive. Used to seed wikilink resolution against
@@ -770,6 +788,7 @@ pub(crate) fn build_email_summary(
         date,
         read,
         viewed: false,
+        snoozed_until: None,
         labels,
         mentions,
         links,
@@ -1498,8 +1517,87 @@ pub async fn mail_archive_one(
     };
 
     archive_remote_email(&app, &state, &summary).await?;
-    archive_local_email(&app, &state, &vault, &mut summary)?;
+    archive_local_email(&app, &state, &vault, &mut summary, None)?;
     Ok(())
+}
+
+/// Snooze one inbox message until an explicit instant. Provider and local
+/// state use the same archive path as a normal archive, but the local record
+/// keeps the deadline that authorizes a later automatic INBOX restoration.
+#[tauri::command]
+pub async fn mail_snooze(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: MailSnoozeInput,
+) -> Result<(), String> {
+    let snoozed_until =
+        validate_snooze_deadline(&input.snoozed_until, chrono::Utc::now().fixed_offset())?;
+    let id = strip_brackets(&input.id);
+    let vault = vault_root(&app)?;
+    let Some((_, folder)) = find_email_path_anywhere(&vault, &id) else {
+        return Err(format!("message {} not found locally", id));
+    };
+    if folder != "inbox" {
+        return Err("only inbox messages can be snoozed".to_string());
+    }
+    let Some(mut summary) = mail_get_local_inner(&vault, &id)? else {
+        return Err(format!("message {} not found locally", id));
+    };
+
+    archive_remote_email(&app, &state, &summary).await?;
+    archive_local_email(&app, &state, &vault, &mut summary, Some(&snoozed_until))
+}
+
+fn validate_snooze_deadline(
+    value: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<String, String> {
+    let deadline = chrono::DateTime::parse_from_rfc3339(value)
+        .map_err(|_| "snooze time must be an RFC 3339 timestamp".to_string())?;
+    if deadline <= now {
+        return Err("snooze time must be in the future".to_string());
+    }
+    Ok(deadline.to_rfc3339())
+}
+
+/// Restore every due snooze. The local archive scan is free and offline; a
+/// provider connection is opened only when at least one deadline is due.
+/// Failures are isolated per message so one stale remote identity cannot keep
+/// unrelated snoozes out of the inbox.
+#[tauri::command]
+pub async fn mail_restore_due_snoozes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<MailSnoozeRestoreResult, String> {
+    let vault = vault_root(&app)?;
+    let now = chrono::Utc::now().fixed_offset();
+    let archive_dir = vault_lib::collection_dir(&vault, "archive");
+    let mut due = Vec::new();
+    let mut failed = 0usize;
+    for email in read_inbox_dir(&archive_dir) {
+        let Some(deadline) = email.snoozed_until.as_deref() else {
+            continue;
+        };
+        match chrono::DateTime::parse_from_rfc3339(deadline) {
+            Ok(deadline) if deadline <= now => due.push(email),
+            Ok(_) => {}
+            Err(_) => failed += 1,
+        }
+    }
+
+    let mut restored = 0usize;
+    for email in due {
+        if restore_remote_email(&app, &state, &email).await.is_err() {
+            failed += 1;
+            continue;
+        }
+        if restore_local_email(&app, &state, &vault, &email.id).is_err() {
+            failed += 1;
+            continue;
+        }
+        restored += 1;
+    }
+    Ok(MailSnoozeRestoreResult { restored, failed })
 }
 
 /// Remove a message from the provider's inbox. Gmail removes the INBOX
@@ -1527,11 +1625,34 @@ async fn archive_remote_email(
     Ok(())
 }
 
+async fn restore_remote_email(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    email: &EmailSummary,
+) -> Result<(), String> {
+    let Some(gmail_email) = crate::commands::gmail::email_from_inbox_id(&email.inbox) else {
+        return Ok(());
+    };
+    let creds = crate::commands::gmail::resolve_credentials(app, state, gmail_email)?;
+    let pool = state.gmail_pool.clone();
+    let local_id = email.id.clone();
+    let message_id = email.message_id.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::gmail::imap_client::restore_message(&pool, &creds, &local_id, &message_id)
+    })
+    .await
+    .map_err(|error| format!("imap thread: {error}"))?
+    .map_err(|error| error.to_string())?;
+    state.record_mail_provider_mutation(&email.id);
+    Ok(())
+}
+
 fn archive_local_email(
     app: &AppHandle,
     state: &State<'_, AppState>,
     vault: &Path,
     email: &mut EmailSummary,
+    snoozed_until: Option<&str>,
 ) -> Result<(), String> {
     let _guard = state.mail_mutations.lock_recover();
     let Some((src, folder)) = find_email_path_anywhere(vault, &email.id) else {
@@ -1544,6 +1665,7 @@ fn archive_local_email(
         return Ok(());
     };
     *email = current;
+    email.snoozed_until = snoozed_until.map(str::to_string);
 
     email
         .labels
@@ -1569,6 +1691,56 @@ fn archive_local_email(
         move_html_sibling(state, &src, &dst)?;
         delete_email_index(app, state, vault, &src);
         let _ = std::fs::remove_file(&src);
+    }
+    Ok(())
+}
+
+fn restore_local_email(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    vault: &Path,
+    id: &str,
+) -> Result<(), String> {
+    let _guard = state.mail_mutations.lock_recover();
+    let Some((src, folder)) = find_email_path_anywhere(vault, id) else {
+        return Err(format!("message {} not found locally", id));
+    };
+    if folder == "inbox" {
+        return Ok(());
+    }
+    if folder != "archive" {
+        return Err("only archived snoozes can return to the inbox".to_string());
+    }
+    let Some(mut email) = load_email_from_path(&src) else {
+        return Err("snoozed message could not be read".to_string());
+    };
+    email.snoozed_until = None;
+    email
+        .labels
+        .retain(|label| !label.eq_ignore_ascii_case(ARCHIVED_LABEL));
+    if !email
+        .labels
+        .iter()
+        .any(|label| label.eq_ignore_ascii_case(READ_LABEL))
+    {
+        email.labels.push(READ_LABEL.to_string());
+    }
+    email.read = true;
+
+    let inbox_dir = vault_lib::ensure_vault_directory(vault, &["inbox"])?;
+    let dst = vault_lib::confined_file_path(
+        vault,
+        &inbox_dir,
+        &email_filename(&email.subject, &email.id),
+    )?;
+    record_self_write(state, &src);
+    record_self_write(state, &dst);
+    vault_lib::write_atomic(&dst, &render_email_md(&email)).map_err(|error| error.to_string())?;
+    upsert_email_index(app, state, vault, &dst, &email);
+    if src != dst {
+        move_html_sibling(state, &src, &dst)?;
+        delete_email_index(app, state, vault, &src);
+        std::fs::remove_file(&src).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -1616,7 +1788,7 @@ pub(crate) fn reconcile_gmail_inbox(
         if live.contains(&strip_brackets(&summary.id)) {
             continue;
         }
-        match archive_local_email(app, state, vault, &mut summary) {
+        match archive_local_email(app, state, vault, &mut summary, None) {
             Ok(()) => archived += 1,
             Err(e) => eprintln!("gmail reconcile: archive {} failed: {e}", summary.id),
         }
@@ -1740,6 +1912,11 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
     let mentions = comma_join(&email.mentions);
     let links = comma_join(&email.links);
     let attachments = render_attachments_yaml(&email.attachments);
+    let snoozed_until = email
+        .snoozed_until
+        .as_deref()
+        .map(|value| format!("snoozed_until: {}\n", json_string(value)))
+        .unwrap_or_default();
     // Always quote machine identifiers (id, thread, inbox, from_email).
     // Message-ids contain `=`, `@`, `+`, `/` — chars that are valid in
     // unquoted YAML scalars but trigger edge cases in some parsers. The
@@ -1761,6 +1938,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
          date: {date}\n\
          read: {read}\n\
          viewed: {viewed}\n\
+{snoozed_until}\
          labels: [{labels}]\n\
          mentions: [{mentions}]\n\
          links: [{links}]\n\
@@ -1779,6 +1957,7 @@ pub(crate) fn render_email_md(email: &EmailSummary) -> String {
         date = email.date,
         read = email.read,
         viewed = email.viewed,
+        snoozed_until = snoozed_until,
         labels = labels,
         mentions = mentions,
         links = links,
@@ -1919,6 +2098,10 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         .get("viewed")
         .and_then(|value| value.as_bool().ok())
         .unwrap_or(false);
+    let snoozed_until = map
+        .get("snoozed_until")
+        .and_then(|value| value.as_string().ok())
+        .filter(|value| !value.trim().is_empty());
     let labels = pod_string_array(map.get("labels"));
     let mentions = pod_string_array(map.get("mentions"));
     let links = pod_string_array(map.get("links"));
@@ -1945,6 +2128,7 @@ fn parse_email_md_yaml(content: &str) -> Option<EmailSummary> {
         date,
         read,
         viewed,
+        snoozed_until,
         labels,
         mentions,
         links,
@@ -2185,6 +2369,7 @@ mod tests {
             date: "2026-04-25T10:30:00-04:00".into(),
             read: false,
             viewed: false,
+            snoozed_until: None,
             labels: vec!["inbox".into(), "unread".into()],
             mentions: vec!["alex-rivera".into()],
             links: vec!["https://joes.example.com".into()],
@@ -2216,6 +2401,25 @@ mod tests {
         assert_eq!(parsed.labels, original.labels);
         assert_eq!(parsed.mentions, original.mentions);
         assert_eq!(parsed.links, original.links);
+    }
+
+    #[test]
+    fn render_email_md_roundtrips_a_snooze_deadline() {
+        let mut original = sample_email();
+        original.snoozed_until = Some("2031-02-04T09:00:00-08:00".to_string());
+
+        let parsed = parse_email_md(&render_email_md(&original)).expect("parse snoozed email");
+
+        assert_eq!(parsed.snoozed_until, original.snoozed_until);
+    }
+
+    #[test]
+    fn snooze_deadline_must_be_a_future_rfc3339_timestamp() {
+        let now = chrono::DateTime::parse_from_rfc3339("2031-02-03T12:00:00Z").unwrap();
+
+        assert!(validate_snooze_deadline("2031-02-03T12:01:00Z", now).is_ok());
+        assert!(validate_snooze_deadline("2031-02-03T11:59:00Z", now).is_err());
+        assert!(validate_snooze_deadline("tomorrow morning", now).is_err());
     }
 
     #[test]
@@ -2592,6 +2796,7 @@ mod tests {
             date: "2026-04-30T10:00:00-04:00".into(),
             read: false,
             viewed: false,
+            snoozed_until: None,
             labels: vec!["inbox".into(), "unread".into()],
             mentions: vec!["beehiiv".into()],
             links: vec![],
