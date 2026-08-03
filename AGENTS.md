@@ -383,7 +383,7 @@ read time.
 
 ## Surfaces and routes
 
-The sidebar order is the current product taxonomy and drives `⌘1` through `⌘8`.
+The sidebar order is the current product taxonomy and drives `⌘1` through `⌘9`.
 Confirm it in `src/components/layout/sidebar.tsx` before changing navigation.
 
 | Surface | Primary route | Backing data |
@@ -396,6 +396,7 @@ Confirm it in `src/components/layout/sidebar.tsx` before changing navigation.
 | People | `/people` | Person records and linked activity |
 | Databases | `/databases` | Custom tables and tag-generated views |
 | Areas | `/areas` | Area records and matching records |
+| Graph | `/graph` | Vault wikilink graph (force-directed) |
 
 Settings lives under `/settings`. Vault, profile, appearance, accounts, and
 Agent configuration have dedicated child routes.

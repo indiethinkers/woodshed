@@ -32,6 +32,16 @@ describe("mainNavShortcutIndex", () => {
         }),
       ),
     ).toBe(7);
+
+    expect(
+      mainNavShortcutIndex(
+        new KeyboardEvent("keydown", {
+          code: "Digit9",
+          key: "9",
+          metaKey: true,
+        }),
+      ),
+    ).toBe(8);
   });
 
   it("matches control number shortcuts", () => {
@@ -50,8 +60,8 @@ describe("mainNavShortcutIndex", () => {
     expect(
       mainNavShortcutIndex(
         new KeyboardEvent("keydown", {
-          code: "Digit9",
-          key: "9",
+          code: "Digit0",
+          key: "0",
           metaKey: true,
         }),
       ),

@@ -10,6 +10,7 @@ export function invalidateAfterIndexRebuild(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ["emails"] });
   queryClient.invalidateQueries({ queryKey: ["tagTable"] });
   queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
+  queryClient.invalidateQueries({ queryKey: ["graph"] });
 }
 
 // Path-routed query invalidation. Parses the changed path and invalidates
@@ -47,6 +48,7 @@ export function invalidateForPath(
     queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
     queryClient.invalidateQueries({ queryKey: ["backlinks"] });
     queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
+    queryClient.invalidateQueries({ queryKey: ["graph"] });
     return;
   }
   if (segments.length < 2) {
@@ -61,6 +63,7 @@ export function invalidateForPath(
       queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
       queryClient.invalidateQueries({ queryKey: ["backlinks"] });
       queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
+      queryClient.invalidateQueries({ queryKey: ["graph"] });
     }
     return;
   }
@@ -101,6 +104,8 @@ export function invalidateForPath(
   queryClient.invalidateQueries({ queryKey: ["backlinks"] });
   // Outgoing links are parsed from the edited record's title/body.
   queryClient.invalidateQueries({ queryKey: ["outgoingLinks"] });
+  // The wikilink graph is a full snapshot of the same document/link tables.
+  queryClient.invalidateQueries({ queryKey: ["graph"] });
 
   switch (section) {
     case "tasks":
