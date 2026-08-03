@@ -6666,6 +6666,7 @@ dependencies = [
  "ical",
  "imagesize",
  "imap",
+ "imap-proto",
  "keyring",
  "kuchikiki",
  "lettre",

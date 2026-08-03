@@ -64,6 +64,7 @@ imagesize = "0.13"
 # Gmail (IMAP + SMTP) — direct from desktop, no sync server. App Passwords
 # live in the private app-data credential store. See src/gmail/.
 imap = "2.4"
+imap-proto = "0.10.2"
 native-tls = "0.2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mail-parser = "0.9"

@@ -10,9 +10,10 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::pool::GmailImapPool;
-use imap::types::NameAttribute;
 
 const MAX_RAW_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_SPECIAL_USE_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_SPECIAL_USE_MAILBOXES: usize = 16;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +34,8 @@ pub enum ImapError {
     StaleRemoteIdentity,
     #[error("message id {message_id} matched multiple Gmail messages; refusing a bulk mutation")]
     AmbiguousMessageId { message_id: String },
+    #[error("Gmail special-use mailbox response was malformed or exceeded safety limits")]
+    InvalidSpecialUseResponse,
 }
 
 /// One raw message fetched from IMAP, before MIME parsing. Carries the
@@ -89,23 +92,49 @@ pub fn fetch_recent_sent(
     limit: usize,
 ) -> Result<Option<FetchBatch>, ImapError> {
     pool.with_session(creds, |session| {
-        let names = session.list(None, Some("*"))?;
-        let sent_name = names
-            .iter()
-            .find(|name| {
-                name.attributes().iter().any(|attribute| {
-                    matches!(
-                        attribute,
-                        NameAttribute::Custom(value) if value.eq_ignore_ascii_case("\\Sent")
-                    )
-                })
-            })
-            .map(|name| name.name().to_string());
+        // SPECIAL-USE is a LIST selection option: Gmail returns only its
+        // small, provider-designated set instead of enumerating every label
+        // in the account. Parse the bounded response directly because imap
+        // 2.4's typed `list` helper cannot express LIST selection options.
+        let response = session.run_command_and_read_response("LIST (SPECIAL-USE) \"\" \"*\"")?;
+        let sent_name = sent_mailbox_from_special_use_response(&response)?;
         let Some(sent_name) = sent_name else {
             return Ok(None);
         };
         fetch_recent_from_mailbox(session, &sent_name, limit).map(Some)
     })
+}
+
+fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<String>, ImapError> {
+    if response.len() > MAX_SPECIAL_USE_RESPONSE_BYTES {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+
+    let mut remaining = response;
+    let mut mailbox_count = 0;
+    while !remaining.is_empty() {
+        let (rest, parsed) = imap_proto::parse_response(remaining)
+            .map_err(|_| ImapError::InvalidSpecialUseResponse)?;
+        if rest.len() >= remaining.len() {
+            return Err(ImapError::InvalidSpecialUseResponse);
+        }
+        if let imap_proto::Response::MailboxData(imap_proto::MailboxDatum::List {
+            flags,
+            name,
+            ..
+        }) = parsed
+        {
+            mailbox_count += 1;
+            if mailbox_count > MAX_SPECIAL_USE_MAILBOXES {
+                return Err(ImapError::InvalidSpecialUseResponse);
+            }
+            if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\Sent")) {
+                return Ok(Some(name.to_string()));
+            }
+        }
+        remaining = rest;
+    }
+    Ok(None)
 }
 
 fn fetch_recent_from_mailbox(
@@ -540,5 +569,34 @@ mod tests {
                 ArchiveCommand::UidExpunge,
             ]
         );
+    }
+
+    #[test]
+    fn discovers_the_provider_designated_sent_mailbox() {
+        let response =
+            b"* LIST (\\Sent) \"/\" \"[Provider]/Localized Sent\"\r\na1 OK LIST completed\r\n";
+        assert_eq!(
+            sent_mailbox_from_special_use_response(response).unwrap(),
+            Some("[Provider]/Localized Sent".to_string()),
+        );
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_allows_an_absent_sent_folder() {
+        let response = b"* LIST (\\Drafts) \"/\" \"[Provider]/Drafts\"\r\na1 OK LIST completed\r\n";
+        assert_eq!(
+            sent_mailbox_from_special_use_response(response).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_rejects_malformed_or_oversized_responses() {
+        assert!(sent_mailbox_from_special_use_response(b"not an IMAP response").is_err());
+        assert!(sent_mailbox_from_special_use_response(&vec![
+            b'x';
+            MAX_SPECIAL_USE_RESPONSE_BYTES + 1
+        ])
+        .is_err());
     }
 }

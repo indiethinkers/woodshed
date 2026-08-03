@@ -98,14 +98,23 @@ export function EmailDetail({
     isLoading ? new Set() : new Set([latest.id]),
   );
   const initializedOpenState = useRef(!isLoading);
+  const previousLatestId = useRef(latest.id);
 
   // The route-level message is only a temporary fallback while the complete
   // local thread loads. Initialize expansion from the complete result so that
   // fallback does not remain open next to the actual newest message.
   useEffect(() => {
-    if (isLoading || initializedOpenState.current) return;
-    initializedOpenState.current = true;
-    setOpenMessageIds(new Set([latest.id]));
+    if (isLoading) return;
+    if (!initializedOpenState.current) {
+      initializedOpenState.current = true;
+      previousLatestId.current = latest.id;
+      setOpenMessageIds(new Set([latest.id]));
+      return;
+    }
+    if (previousLatestId.current !== latest.id) {
+      previousLatestId.current = latest.id;
+      setOpenMessageIds(new Set([latest.id]));
+    }
   }, [isLoading, latest.id]);
 
   // Cursor for keyboard navigation through the thread. Null = no manual

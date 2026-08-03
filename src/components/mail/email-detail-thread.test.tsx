@@ -86,6 +86,30 @@ describe("EmailDetail thread", () => {
     expect(screen.getByText("Newest full body")).toBeInTheDocument();
   });
 
+  it("opens a newly synchronized reply and collapses the previous latest message", () => {
+    const original = email({ id: "original-message", body: "Original body" });
+    const previousLatest = email({
+      id: "previous-latest",
+      body: "Previous latest body",
+      date: "2026-07-28T10:00:00Z",
+    });
+    mocks.thread = [original, previousLatest];
+    mocks.isLoading = false;
+    const { rerender } = render(<EmailDetail email={previousLatest} />);
+    expect(screen.getByText("Previous latest body")).toBeInTheDocument();
+
+    const synchronizedReply = email({
+      id: "synchronized-reply",
+      body: "Synchronized reply body",
+      date: "2026-07-28T11:00:00Z",
+    });
+    mocks.thread = [original, previousLatest, synchronizedReply];
+    rerender(<EmailDetail email={previousLatest} />);
+
+    expect(screen.queryByText("Previous latest body")).not.toBeInTheDocument();
+    expect(screen.getByText("Synchronized reply body")).toBeInTheDocument();
+  });
+
   it("offers Reply All for the thread and reply controls on the expanded message", () => {
     const older = email({ id: "older-message" });
     const newest = email({

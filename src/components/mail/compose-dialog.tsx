@@ -97,16 +97,12 @@ export function ComposeDialog({
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  const draftKind =
-    draft?.kind ??
-    (mode.kind === "reply" || mode.kind === "replyAll" ? "reply" : "new");
+  const replyMode = isReplyMode(mode);
+  const draftKind = draft?.kind ?? (replyMode ? "reply" : "new");
   const draftSourceMessageId =
     draft?.sourceMessageId ?? ("source" in mode ? mode.source.id : undefined);
   const draftThreadId =
-    draft?.threadId ??
-    (mode.kind === "reply" || mode.kind === "replyAll"
-      ? mode.source.threadId
-      : undefined);
+    draft?.threadId ?? (replyMode ? mode.source.threadId : undefined);
   const isReply =
     draftKind === "reply" && !!draftSourceMessageId && !!draftThreadId;
 
@@ -725,7 +721,7 @@ function buildInitialState(
       body: draft.body,
     };
   }
-  if (mode.kind === "reply" || mode.kind === "replyAll") {
+  if (isReplyMode(mode)) {
     const quoted = quote(mode.source);
     const subj = mode.source.subject.startsWith("Re:")
       ? mode.source.subject
@@ -765,6 +761,12 @@ function buildInitialState(
     subject: "",
     body: "",
   };
+}
+
+function isReplyMode(
+  mode: ComposeMode,
+): mode is Extract<ComposeMode, { kind: "reply" | "replyAll" }> {
+  return mode.kind === "reply" || mode.kind === "replyAll";
 }
 
 /**

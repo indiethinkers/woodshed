@@ -18,6 +18,7 @@ use crate::gmail::{creds, imap_client, parse, smtp_client, CredsError};
 use crate::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tauri::{AppHandle, State};
@@ -485,40 +486,16 @@ pub async fn gmail_sync_recent(
         // from IMAP, so writing to `attachments/mail/<id>/` here avoids
         // a re-IMAP roundtrip on click. A failure to write any one
         // attachment is logged and skipped; the email itself still lands.
-        let mut attachments: Vec<Attachment> = Vec::new();
-        if !parsed.attachments.is_empty() {
-            for a in &parsed.attachments {
-                match save_attachment_bytes(
-                    &state,
-                    &vault,
-                    &id,
-                    &a.id,
-                    &a.filename,
-                    &a.content_type,
-                    &a.bytes,
-                ) {
-                    Ok(meta) => attachments.push(meta),
-                    Err(e) => eprintln!("gmail: skip attachment {} of {}: {e}", a.filename, id),
-                }
-            }
-        }
-
-        let mut summary = build_email_summary(
+        let attachments = save_parsed_attachments(&state, &vault, &id, &parsed);
+        let summary = build_summary_from_parsed(
             id.clone(),
             wire_message_id,
             thread_id,
             inbox.clone(),
-            parsed.from.clone(),
-            parsed.from_email.clone(),
-            parsed.subject.clone(),
-            parsed.body.clone(),
-            parsed.html.clone(),
-            parsed.date.clone(),
+            &parsed,
             labels,
             attachments,
         );
-        summary.to = parsed.to.clone();
-        summary.cc = parsed.cc.clone();
         let mut superseded = vec![legacy_uid.clone()];
         if parsed.gm_msgid != 0 {
             superseded.push(format!("gmail-{:x}", parsed.gm_msgid));
@@ -610,38 +587,16 @@ pub async fn gmail_sync_recent(
             let existing = mail_get_local_inner(&vault, &id).ok().flatten();
             let thread_id = sent_thread_id_for_parsed(&email, &id, &parsed, existing.as_ref());
 
-            let mut attachments = Vec::new();
-            for attachment in &parsed.attachments {
-                match save_attachment_bytes(
-                    &state,
-                    &vault,
-                    &id,
-                    &attachment.id,
-                    &attachment.filename,
-                    &attachment.content_type,
-                    &attachment.bytes,
-                ) {
-                    Ok(meta) => attachments.push(meta),
-                    Err(_) => eprintln!("gmail: skipped one sent attachment"),
-                }
-            }
-
-            let mut summary = build_email_summary(
+            let attachments = save_parsed_attachments(&state, &vault, &id, &parsed);
+            let summary = build_summary_from_parsed(
                 id,
                 parsed.message_id.clone(),
                 thread_id,
                 inbox.clone(),
-                parsed.from.clone(),
-                parsed.from_email.clone(),
-                parsed.subject.clone(),
-                parsed.body.clone(),
-                parsed.html.clone(),
-                parsed.date.clone(),
+                &parsed,
                 vec!["sent".to_string(), "read".to_string()],
                 attachments,
             );
-            summary.to = parsed.to.clone();
-            summary.cc = parsed.cc.clone();
             if persist_sent_email(&app, &state, &summary).is_err() {
                 eprintln!("gmail: failed to persist one sent message");
             }
@@ -1101,6 +1056,59 @@ fn sent_thread_id_for_parsed(
         .unwrap_or_else(|| thread_id_for_parsed(account_email, local_id, parsed))
 }
 
+fn save_parsed_attachments(
+    state: &State<AppState>,
+    vault: &Path,
+    message_id: &str,
+    parsed: &parse::ParsedMessage,
+) -> Vec<Attachment> {
+    parsed
+        .attachments
+        .iter()
+        .filter_map(|attachment| {
+            save_attachment_bytes(
+                state,
+                vault,
+                message_id,
+                &attachment.id,
+                &attachment.filename,
+                &attachment.content_type,
+                &attachment.bytes,
+            )
+            .map_err(|_| eprintln!("gmail: skipped one attachment"))
+            .ok()
+        })
+        .collect()
+}
+
+fn build_summary_from_parsed(
+    id: String,
+    wire_message_id: String,
+    thread_id: String,
+    inbox: String,
+    parsed: &parse::ParsedMessage,
+    labels: Vec<String>,
+    attachments: Vec<Attachment>,
+) -> EmailSummary {
+    let mut summary = build_email_summary(
+        id,
+        wire_message_id,
+        thread_id,
+        inbox,
+        parsed.from.clone(),
+        parsed.from_email.clone(),
+        parsed.subject.clone(),
+        parsed.body.clone(),
+        parsed.html.clone(),
+        parsed.date.clone(),
+        labels,
+        attachments,
+    );
+    summary.to = parsed.to.clone();
+    summary.cc = parsed.cc.clone();
+    summary
+}
+
 // ─── Subject-based conversation grouping ────────────────────────────────────
 //
 // Gmail's own conversation id (X-GM-THRID) is unavailable — imap-proto 0.10
@@ -1512,6 +1520,36 @@ mod credential_metadata_tests {
                 Some(&existing),
             ),
             existing.thread_id,
+        );
+    }
+
+    #[test]
+    fn sent_wire_message_becomes_a_sent_summary_with_recipients() {
+        let parsed = parse::parse(&imap_client::RawMessage {
+            body: b"From: Owner <owner@example.test>\r\nTo: Person <person@example.test>\r\nCc: Observer <observer@example.test>\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <root@example.test>\r\n\r\nSent reply"
+                .to_vec(),
+            uid: 4,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen: true,
+            internal_date: None,
+        });
+        let summary = build_summary_from_parsed(
+            "sent@example.test".into(),
+            parsed.message_id.clone(),
+            thread_id_for_parsed("owner@example.test", "sent@example.test", &parsed),
+            "gmail:owner@example.test".into(),
+            &parsed,
+            vec!["sent".into(), "read".into()],
+            Vec::new(),
+        );
+
+        assert_eq!(summary.to, vec!["person@example.test"]);
+        assert_eq!(summary.cc, vec!["observer@example.test"]);
+        assert_eq!(summary.labels, vec!["sent", "read"]);
+        assert_eq!(
+            summary.thread_id,
+            account_scoped_thread_id("owner@example.test", "root@example.test"),
         );
     }
 
