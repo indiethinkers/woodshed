@@ -67,7 +67,8 @@ of truth; the application is a native lens over those files.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
 - **Bounded network actions.** Configured integrations send data only when the
-  user invokes them. The documented exception is a displayed YouTube embed,
+  user invokes them or explicitly enables the foreground mail/calendar refresh
+  schedule. The documented exception is a displayed YouTube embed,
   whose frame is restricted to `youtube-nocookie.com`. Opening an HTML email
   may load remote images through Woodshed's bounded cache; untrusted HTML never
   fetches URLs directly.

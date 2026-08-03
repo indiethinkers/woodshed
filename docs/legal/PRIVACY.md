@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** August 1, 2026
+**Effective:** July 26, 2026 · **Last updated:** August 3, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -11,9 +11,10 @@ build is responsible for documenting any behavior it adds or changes.
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
-requests when you invoke them. Displaying a YouTube embed loads YouTube's
-standard player, and opening an HTML email loads its remote images by default
-through Woodshed's bounded cache.
+requests when you invoke them or when you opt into foreground mail/calendar
+polling. Displaying a YouTube embed loads YouTube's standard player, and opening
+an HTML email loads its remote images by default through Woodshed's bounded
+cache.
 
 ## Data stored on your device
 
@@ -44,14 +45,19 @@ encryption and a backup strategy appropriate for the sensitivity of your data.
 ## Direct integrations
 
 Woodshed communicates directly with the following services. Most network
-actions require a configured integration and an explicit command. YouTube
-embeds and remote email images are the exceptions described below.
+actions require a configured integration and an explicit command. Mail and
+calendar refresh can also run on the interval you select while Woodshed is
+running; Manual is the default. YouTube embeds and remote email images are the
+other exceptions described below.
 
-- **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
-  sends mail, replies, and user-selected attachments. Synced messages and
-  attachment copies are written to the local vault.
-- **Google Calendar or another iCal host:** an explicit Sync downloads the
-  configured read-only calendar feed and writes a derived local cache.
+- **Gmail:** IMAP reads inbox and sent content and synchronizes read/archive
+  state; SMTP sends mail, replies, and user-selected attachments. Synced
+  messages and attachment copies are written to the local vault. If automatic
+  refresh is enabled, IMAP polling runs at the selected interval while
+  Woodshed is running and may produce a content-free in-app new-mail notice.
+- **Google Calendar or another iCal host:** an explicit Sync—or the optional
+  foreground refresh interval—downloads the configured read-only calendar feed
+  and writes a derived local cache.
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. If an X oEmbed response contains an
   incomplete long-form preview, Woodshed sends the public numeric post id to

@@ -38,6 +38,7 @@ describe("mailSyncRecentMulti", () => {
         ) {
           return Promise.resolve({
             written: ["message-1"],
+            newMessages: 1,
             fetched: 1,
             removed: 0,
             durationMs: 25,
@@ -54,6 +55,7 @@ describe("mailSyncRecentMulti", () => {
     const result = await mailSyncRecentMulti();
 
     expect(result.emails).toHaveLength(1);
+    expect(result.newMessages).toBe(1);
     expect(result.failedAccounts).toBe(1);
   });
 });

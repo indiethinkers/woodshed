@@ -79,6 +79,12 @@ imported only after a verified write to `secrets.json`.
 
 ## Network policy
 
+Mail and calendar refreshes run only on explicit refresh or after the user
+selects a foreground polling interval in Settings. Manual is the default.
+Scheduled refresh stops when Woodshed exits, catches up when the running app
+regains focus, and uses the same bounded Gmail and iCal clients as manual
+refresh. New-mail notices contain only an aggregate count.
+
 Public resource, calendar, oEmbed, and remote-image fetches:
 
 - accept only HTTP(S), with HTTPS required for secret iCal URLs;

@@ -468,6 +468,8 @@ pub fn run() {
             config::demo_clock_get,
             config::profile_get,
             config::profile_set,
+            config::integration_refresh_settings_get,
+            config::integration_refresh_settings_set,
             config::warning_dismissed_get,
             config::warning_dismiss,
             agent_cmd::agent_config_get,

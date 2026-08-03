@@ -131,6 +131,7 @@ interface GmailAccountInfo {
 
 interface GmailSyncResult {
   written: string[];
+  newMessages: number;
   fetched: number;
   removed: number;
   durationMs: number;
@@ -176,6 +177,7 @@ async function gmailSyncOne(
   return {
     emails: stubs,
     stats: { durationMs: result.durationMs },
+    newMessages: result.newMessages ?? 0,
     removed: result.removed ?? 0,
   };
 }
@@ -194,7 +196,12 @@ async function gmailSyncAll(limit: number): Promise<MailSyncResult> {
   const results = await Promise.allSettled(
     accounts.map((a) => gmailSyncOne(a.email, limit)),
   );
-  const merged: MailSyncResult = { emails: [], stats: { durationMs: 0 }, removed: 0 };
+  const merged: MailSyncResult = {
+    emails: [],
+    stats: { durationMs: 0 },
+    newMessages: 0,
+    removed: 0,
+  };
   let lastError: unknown = null;
   let succeededAccounts = 0;
   let failedAccounts = 0;
@@ -202,6 +209,8 @@ async function gmailSyncAll(limit: number): Promise<MailSyncResult> {
     if (r.status === "fulfilled") {
       succeededAccounts += 1;
       merged.emails.push(...r.value.emails);
+      merged.newMessages =
+        (merged.newMessages ?? 0) + (r.value.newMessages ?? 0);
       merged.removed = (merged.removed ?? 0) + (r.value.removed ?? 0);
       merged.stats.durationMs = Math.max(
         merged.stats.durationMs,
@@ -262,10 +271,3 @@ export async function mailDraftsList(query = ""): Promise<DraftDto[]> {
 export async function mailDraftDelete(id: string): Promise<void> {
   await tauriInvoke<void>("mail_draft_delete", { id });
 }
-
-// ─── Future: periodic sync timer ─────────────────────────────────────────────
-//
-// When ready to add a background pull cadence, the Tauri side can schedule
-// it with tauri::async_runtime::spawn + a tokio interval, calling the same
-// `gmail_sync_recent` command. Held back for v1 because we want a setting to
-// disable it before turning anything on by default.

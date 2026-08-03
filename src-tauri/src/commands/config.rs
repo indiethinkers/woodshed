@@ -14,6 +14,7 @@ const MAX_DEMO_CLOCK_BYTES: u64 = 4 * 1024;
 const LEGACY_CLEANUP_MARKER: &str = "legacy_cleanup_v1";
 const LEGACY_CREDENTIAL_SERVICE: &str = "Woodshed Transcription";
 const LEGACY_CREDENTIAL_ACCOUNT: &str = "deepgram";
+const INTEGRATION_REFRESH_KEY: &str = "integration_refresh";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -44,6 +45,51 @@ pub struct Profile {
     pub email: String,
     #[serde(default)]
     pub theme: Theme,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IntegrationRefreshSettings {
+    /// Zero is Manual. Non-zero values are deliberately restricted to the
+    /// choices presented in Settings so a malformed webview request cannot
+    /// create an aggressive network loop.
+    pub interval_minutes: u32,
+}
+
+fn validate_integration_refresh_interval(interval_minutes: u32) -> Result<(), String> {
+    if matches!(interval_minutes, 0 | 5 | 15 | 30 | 60) {
+        Ok(())
+    } else {
+        Err("refresh interval must be Manual, 5, 15, 30, or 60 minutes".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn integration_refresh_settings_get(
+    app: AppHandle,
+) -> Result<IntegrationRefreshSettings, String> {
+    let store = app.store(STORE_FILE).map_err(|error| error.to_string())?;
+    let settings = match store.get(INTEGRATION_REFRESH_KEY) {
+        Some(value) => serde_json::from_value(value).map_err(|error| error.to_string())?,
+        None => IntegrationRefreshSettings::default(),
+    };
+    validate_integration_refresh_interval(settings.interval_minutes)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+pub fn integration_refresh_settings_set(
+    app: AppHandle,
+    settings: IntegrationRefreshSettings,
+) -> Result<IntegrationRefreshSettings, String> {
+    validate_integration_refresh_interval(settings.interval_minutes)?;
+    let store = app.store(STORE_FILE).map_err(|error| error.to_string())?;
+    store.set(
+        INTEGRATION_REFRESH_KEY,
+        serde_json::to_value(settings).map_err(|error| error.to_string())?,
+    );
+    store.save().map_err(|error| error.to_string())?;
+    Ok(settings)
 }
 
 /// Remove state left by the retired transcription integration. This runs at
@@ -235,6 +281,16 @@ mod tests {
         fs::write(&path, vec![b'x'; MAX_DEMO_CLOCK_BYTES as usize + 1]).unwrap();
 
         assert!(read_demo_clock(&path, &current).is_err());
+    }
+
+    #[test]
+    fn integration_refresh_accepts_only_the_presented_intervals() {
+        for minutes in [0, 5, 15, 30, 60] {
+            assert!(validate_integration_refresh_interval(minutes).is_ok());
+        }
+        for minutes in [1, 10, 120] {
+            assert!(validate_integration_refresh_interval(minutes).is_err());
+        }
     }
 
     #[cfg(unix)]

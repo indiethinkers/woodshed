@@ -14,7 +14,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -302,8 +302,12 @@ export function GraphView() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      const px = e.clientX - rect.left;
-      const py = e.clientY - rect.top;
+      const px = rect.width
+        ? ((e.clientX - rect.left) / rect.width) * VIEW_W
+        : VIEW_W / 2;
+      const py = rect.height
+        ? ((e.clientY - rect.top) / rect.height) * VIEW_H
+        : VIEW_H / 2;
       setTransform((t) => {
         const k = Math.min(4, Math.max(0.2, t.k * Math.exp(-e.deltaY * 0.0015)));
         const x = px - ((px - t.x) / t.k) * k;
@@ -313,7 +317,7 @@ export function GraphView() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [nodes.length]);
 
   // ── Node dragging (pins the node via fx/fy) ────────────────────────────
   const onNodePointerDown = useCallback(
@@ -370,6 +374,19 @@ export function GraphView() {
   const resetView = useCallback(() => {
     setTransform({ k: 1, x: 0, y: 0 });
     simRef.current?.alpha(1).restart();
+  }, []);
+
+  const zoomBy = useCallback((factor: number) => {
+    setTransform((current) => {
+      const k = Math.min(4, Math.max(0.2, current.k * factor));
+      const centerX = VIEW_W / 2;
+      const centerY = VIEW_H / 2;
+      return {
+        k,
+        x: centerX - ((centerX - current.x) / current.k) * k,
+        y: centerY - ((centerY - current.y) / current.k) * k,
+      };
+    });
   }, []);
 
   const selectKind = useCallback((kind: string | null) => {
@@ -586,6 +603,43 @@ export function GraphView() {
             ))}
           </div>
         </TooltipProvider>
+      </div>
+
+      <div
+        className="absolute bottom-4 left-4 flex items-center gap-1 rounded-lg border border-border/80 bg-background/95 p-1 shadow-sm backdrop-blur"
+        role="group"
+        aria-label="Graph zoom controls"
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => zoomBy(1.25)}
+          aria-label="Zoom in"
+          title="Zoom in"
+        >
+          <ZoomIn />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => zoomBy(0.8)}
+          aria-label="Zoom out"
+          title="Zoom out"
+        >
+          <ZoomOut />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          onClick={resetView}
+          aria-label="Reset graph view"
+          title="Reset graph view"
+        >
+          <RefreshCw />
+        </Button>
       </div>
 
       <p className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground/60">

@@ -120,6 +120,8 @@ export interface EmailFull extends EmailSummary {
 export interface MailSyncResult {
   emails: EmailSummary[];
   stats: SyncStats;
+  /** Truly new inbound records created by this refresh. Re-fetches are zero. */
+  newMessages?: number;
   /** Accounts that could not be refreshed while at least one other account
    * completed. Omitted when every requested account succeeded. */
   failedAccounts?: number;

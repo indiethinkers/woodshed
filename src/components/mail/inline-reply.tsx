@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useReplyMail } from "@/lib/hooks/use-mail";
+import { replyRecipients } from "@/lib/mail-lib/reply-recipients";
 import type { EmailSummary, ReplyInput } from "@/lib/mail-lib/types";
 
 interface InlineReplyProps {
@@ -29,6 +30,8 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const recipients = replyRecipients(message, false).to;
+  const recipientLabel = recipients[0] ?? message.fromEmail;
 
   useEffect(() => {
     bodyRef.current?.focus();
@@ -48,10 +51,11 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
         inReplyToMessageId: message.id,
         threadId: message.threadId,
         fromInbox: message.inbox,
+        to: recipients.length > 0 ? recipients : undefined,
         body,
       };
       await reply(input);
-      toast.success("Reply sent", { description: message.fromEmail });
+      toast.success("Reply sent", { description: recipientLabel });
       onClose();
     } catch (e) {
       setStatus("error");
@@ -80,9 +84,8 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
       <div className="px-4 py-2 border-b border-border flex items-baseline gap-2 text-[12px]">
         <span className="text-emerald-600 font-semibold">Draft</span>
         <span className="text-muted-foreground">to</span>
-        <span className="font-medium">{message.from}</span>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {message.fromEmail}
+        <span className="font-mono text-[11px] font-medium">
+          {recipientLabel}
         </span>
       </div>
 

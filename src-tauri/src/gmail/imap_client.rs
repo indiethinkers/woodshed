@@ -10,6 +10,7 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::pool::GmailImapPool;
+use imap::types::NameAttribute;
 
 const MAX_RAW_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
 use sha2::{Digest, Sha256};
@@ -75,73 +76,106 @@ pub fn fetch_recent(
     limit: usize,
 ) -> Result<FetchBatch, ImapError> {
     pool.with_session(creds, |session| {
-        // The pool keeps INBOX selected; we re-issue NOOP-equivalent via
-        // a fresh fetch each call. To pick up new mail since the session
-        // was opened, refresh the `EXISTS` count via a SELECT roundtrip.
-        // Cheap (one round trip) and avoids relying on stale state.
-        let mailbox = session.select("INBOX")?;
-
-        if mailbox.exists == 0 {
-            return Ok(FetchBatch {
-                uid_validity: mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?,
-                messages: Vec::new(),
-            });
-        }
-        let uid_validity = mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?;
-
-        let total = mailbox.exists;
-        let start = total.saturating_sub(limit as u32 - 1).max(1);
-        let range = format!("{start}:{total}");
-
-        // BODY.PEEK[] leaves \Seen alone — fetching in Woodshed shouldn't
-        // mark mail as read in the user's other Gmail clients. X-GM-MSGID
-        // / X-GM-THRID disabled because imap 2.4's parser chokes on them;
-        // sync falls back to RFC 5322 Message-ID + References headers.
-        // Request at most 25 MiB of each message so one pathological mailbox
-        // item cannot force the IMAP parser to allocate an unbounded literal.
-        // RFC822.SIZE lets us distinguish a genuinely small message from a
-        // truncated partial response and skip the latter cleanly.
-        let fetch_spec = "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[]<0.26214400>)";
-        let fetches = session.fetch(&range, fetch_spec)?;
-
-        let mut out = Vec::with_capacity(fetches.len());
-        for f in fetches.iter() {
-            if f.size
-                .is_some_and(|size| size as usize > MAX_RAW_MESSAGE_BYTES)
-            {
-                eprintln!("gmail: skipped message larger than 25 MiB");
-                continue;
-            }
-            let body = match f.body() {
-                Some(b) => b.to_vec(),
-                None => continue,
-            };
-            if body.len() > MAX_RAW_MESSAGE_BYTES {
-                eprintln!("gmail: skipped oversized IMAP response");
-                continue;
-            }
-            let uid = f.uid.unwrap_or(0);
-            let seen = f
-                .flags()
-                .iter()
-                .any(|fl| matches!(fl, imap::types::Flag::Seen));
-            let internal_date = f.internal_date();
-            out.push(RawMessage {
-                body,
-                uid,
-                gm_msgid: 0,
-                gm_thrid: 0,
-                seen,
-                internal_date,
-            });
-        }
-        Ok(FetchBatch {
-            uid_validity,
-            messages: out,
-        })
+        fetch_recent_from_mailbox(session, "INBOX", limit)
     })
 }
 
+/// Fetch recent messages from the provider-designated Sent mailbox. Gmail
+/// exposes this through the standard `\Sent` SPECIAL-USE attribute, so the
+/// lookup remains correct when the visible mailbox name is localized.
+pub fn fetch_recent_sent(
+    pool: &GmailImapPool,
+    creds: &Credentials,
+    limit: usize,
+) -> Result<Option<FetchBatch>, ImapError> {
+    pool.with_session(creds, |session| {
+        let names = session.list(None, Some("*"))?;
+        let sent_name = names
+            .iter()
+            .find(|name| {
+                name.attributes().iter().any(|attribute| {
+                    matches!(
+                        attribute,
+                        NameAttribute::Custom(value) if value.eq_ignore_ascii_case("\\Sent")
+                    )
+                })
+            })
+            .map(|name| name.name().to_string());
+        let Some(sent_name) = sent_name else {
+            return Ok(None);
+        };
+        fetch_recent_from_mailbox(session, &sent_name, limit).map(Some)
+    })
+}
+
+fn fetch_recent_from_mailbox(
+    session: &mut crate::gmail::pool::ImapSessionInner,
+    mailbox_name: &str,
+    limit: usize,
+) -> Result<FetchBatch, ImapError> {
+    // Refresh the `EXISTS` count via a SELECT roundtrip. Cheap (one round
+    // trip) and avoids relying on stale state in the pooled connection.
+    let mailbox = session.select(mailbox_name)?;
+
+    if mailbox.exists == 0 {
+        return Ok(FetchBatch {
+            uid_validity: mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?,
+            messages: Vec::new(),
+        });
+    }
+    let uid_validity = mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?;
+
+    let total = mailbox.exists;
+    let start = total.saturating_sub(limit as u32 - 1).max(1);
+    let range = format!("{start}:{total}");
+
+    // BODY.PEEK[] leaves \Seen alone — fetching in Woodshed shouldn't
+    // mark mail as read in the user's other Gmail clients. X-GM-MSGID
+    // / X-GM-THRID disabled because imap 2.4's parser chokes on them;
+    // sync falls back to RFC 5322 Message-ID + References headers.
+    // Request at most 25 MiB of each message so one pathological mailbox
+    // item cannot force the IMAP parser to allocate an unbounded literal.
+    // RFC822.SIZE lets us distinguish a genuinely small message from a
+    // truncated partial response and skip the latter cleanly.
+    let fetch_spec = "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[]<0.26214400>)";
+    let fetches = session.fetch(&range, fetch_spec)?;
+
+    let mut out = Vec::with_capacity(fetches.len());
+    for f in fetches.iter() {
+        if f.size
+            .is_some_and(|size| size as usize > MAX_RAW_MESSAGE_BYTES)
+        {
+            eprintln!("gmail: skipped message larger than 25 MiB");
+            continue;
+        }
+        let body = match f.body() {
+            Some(b) => b.to_vec(),
+            None => continue,
+        };
+        if body.len() > MAX_RAW_MESSAGE_BYTES {
+            eprintln!("gmail: skipped oversized IMAP response");
+            continue;
+        }
+        let uid = f.uid.unwrap_or(0);
+        let seen = f
+            .flags()
+            .iter()
+            .any(|fl| matches!(fl, imap::types::Flag::Seen));
+        let internal_date = f.internal_date();
+        out.push(RawMessage {
+            body,
+            uid,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen,
+            internal_date,
+        });
+    }
+    Ok(FetchBatch {
+        uid_validity,
+        messages: out,
+    })
+}
 /// Fetch the identity of EVERY message currently in INBOX, header-only
 /// (no bodies). Used to reconcile the local inbox: any locally-stored
 /// inbox message whose id isn't in this set has left the Gmail inbox
