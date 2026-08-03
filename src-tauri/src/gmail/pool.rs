@@ -25,14 +25,12 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::imap_client::ImapError;
+use crate::gmail::{IMAP_HOST, IMAP_PORT};
 use crate::sync_ext::MutexRecover;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub type ImapSessionInner = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
-
-const HOST: &str = "imap.gmail.com";
-const PORT: u16 = 993;
 
 pub struct GmailImapPool {
     sessions: Mutex<HashMap<String, Arc<Mutex<ImapSessionInner>>>>,
@@ -175,7 +173,7 @@ impl Default for GmailImapPool {
 
 fn connect_and_login(creds: &Credentials) -> Result<ImapSessionInner, ImapError> {
     let tls = native_tls::TlsConnector::builder().build()?;
-    let client = imap::connect((HOST, PORT), HOST, &tls)?;
+    let client = imap::connect((IMAP_HOST, IMAP_PORT), IMAP_HOST, &tls)?;
     let mut session =
         client
             .login(&creds.email, &creds.app_password)

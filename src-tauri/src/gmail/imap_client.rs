@@ -10,6 +10,7 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::pool::GmailImapPool;
+use crate::gmail::{IMAP_HOST, IMAP_PORT};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20,8 +21,6 @@ const MAX_RAW_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_IMAP_GREETING_BYTES: usize = 16 * 1024;
 const MAX_SPECIAL_USE_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_SPECIAL_USE_MAILBOXES: usize = 16;
-const GMAIL_IMAP_HOST: &str = "imap.gmail.com";
-const GMAIL_IMAP_PORT: u16 = 993;
 const GMAIL_IMAP_IO_TIMEOUT: Duration = Duration::from_secs(15);
 use sha2::{Digest, Sha256};
 
@@ -120,14 +119,14 @@ pub fn fetch_recent_sent(
 /// IMAP connection. The pooled `imap` session cannot apply a per-command read
 /// cap because its transport is private, so discovery is isolated and cached.
 fn discover_sent_mailbox(creds: &Credentials) -> Result<Option<String>, ImapError> {
-    let tcp = TcpStream::connect((GMAIL_IMAP_HOST, GMAIL_IMAP_PORT)).map_err(imap::Error::Io)?;
+    let tcp = TcpStream::connect((IMAP_HOST, IMAP_PORT)).map_err(imap::Error::Io)?;
     tcp.set_read_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
         .map_err(imap::Error::Io)?;
     tcp.set_write_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
         .map_err(imap::Error::Io)?;
     let tls = native_tls::TlsConnector::builder().build()?;
     let tls_stream = tls
-        .connect(GMAIL_IMAP_HOST, tcp)
+        .connect(IMAP_HOST, tcp)
         .map_err(imap::Error::TlsHandshake)?;
     let (stream, budget) = ReadBudgetStream::new(tls_stream);
     let mut client = imap::Client::new(stream);

@@ -12,15 +12,12 @@
 //   parse.rs       — RFC822 → EmailSummary via `mail-parser`. Headers,
 //                    plaintext body, simple sender extraction.
 //
-// V1 scope (single-account, on-demand pull):
-//   - One Gmail account configured at a time. Multi-account is a config
-//     change later, not a refactor — `inbox` field on EmailSummary
-//     already plays the per-account role on disk.
-//   - No IMAP IDLE yet. `gmail_sync_recent` re-fetches the last N on
-//     each call; the IDLE state machine + UIDVALIDITY/CONDSTORE handling
-//     comes once the basic round-trip works.
-//   - No SMTP yet — Phase 1 starts read-only. Adding `gmail_send` is the
-//     next slice once we can list mail.
+// Woodshed supports multiple accounts, bounded recent Inbox/Sent polling,
+// and SMTP send/reply. It does not run an IMAP IDLE state machine; configured
+// automatic refresh uses the same foreground polling command as manual sync.
+
+pub(crate) const IMAP_HOST: &str = "imap.gmail.com";
+pub(crate) const IMAP_PORT: u16 = 993;
 
 pub mod creds;
 pub mod imap_client;
