@@ -59,15 +59,10 @@ export function IntegrationRefreshScheduler() {
       running.current = true;
       lastStartedAt = Date.now();
       try {
-        const [, mail] = await Promise.allSettled([
+        await Promise.allSettled([
           refreshCalendarRef.current(),
           refreshMailRef.current(),
         ]);
-        if (mail.status === "fulfilled") {
-          const count = mail.value.newMessages ?? 0;
-          if (count === 1) toast.info("1 new email");
-          else if (count > 1) toast.info(`${count} new emails`);
-        }
       } finally {
         running.current = false;
       }

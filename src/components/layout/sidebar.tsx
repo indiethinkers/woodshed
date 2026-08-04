@@ -23,6 +23,7 @@ import {
 import { useTabs } from "./tabs-context-internal";
 import { IndexingIndicator } from "./indexing-indicator";
 import { cn } from "@/lib/utils";
+import { useHasUnreadMail } from "@/lib/hooks/use-mail";
 
 // Per-icon optical sizing: lucide glyphs sit on equal 32px boxes, but dense/
 // boxy marks (Calendar, Database) read larger than thin/sparse ones (Bot,
@@ -46,10 +47,17 @@ const railButtonClass =
   "relative h-8 w-8 rounded-lg flex items-center justify-center transition-colors";
 const railIconClass = "h-4 w-4";
 
-export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }) {
+export function Sidebar({
+  visuallyHidden = false,
+  mailReady = false,
+}: {
+  visuallyHidden?: boolean;
+  mailReady?: boolean;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const { cycleTab, goBack, goForward } = useTabs();
+  const hasUnreadMail = useHasUnreadMail(mailReady);
 
   // Global app shortcuts that should override browser defaults.
   useEffect(() => {
@@ -141,6 +149,7 @@ export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }
                 ? pathname === "/" || pathname.startsWith("/cadence")
                 : pathname === item.href ||
                   pathname.startsWith(item.href + "/");
+            const showsUnreadMail = item.href === "/mail" && hasUnreadMail;
 
             return (
               <Tooltip key={item.href}>
@@ -149,13 +158,21 @@ export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }
                     <Link
                       to={item.href}
                       viewTransition
-                      aria-label={item.label}
+                      aria-label={
+                        showsUnreadMail
+                          ? `${item.label}, unread messages`
+                          : item.label
+                      }
+                      data-unread={showsUnreadMail ? "true" : undefined}
                       data-woodshed-action={`navigate:${item.label.toLowerCase()}`}
-                      className={`${railButtonClass} ${
+                      className={cn(
+                        railButtonClass,
                         isActive
                           ? "bg-muted-foreground/15 text-foreground"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                      }`}
+                          : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                        showsUnreadMail &&
+                          "text-blue-500 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-400",
+                      )}
                     />
                   }
                 >

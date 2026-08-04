@@ -47,7 +47,7 @@ describe("IntegrationRefreshScheduler", () => {
     vi.useRealTimers();
   });
 
-  it("refreshes both integrations on the configured interval and batches new mail", async () => {
+  it("refreshes both integrations without showing a new-mail toast", async () => {
     render(<IntegrationRefreshScheduler />);
 
     await act(async () => {
@@ -56,7 +56,7 @@ describe("IntegrationRefreshScheduler", () => {
 
     expect(mocks.refreshCalendar).toHaveBeenCalledOnce();
     expect(mocks.refreshMail).toHaveBeenCalledOnce();
-    expect(mocks.info).toHaveBeenCalledWith("3 new emails");
+    expect(mocks.info).not.toHaveBeenCalled();
   });
 
   it("does not schedule network refreshes in Manual mode", async () => {

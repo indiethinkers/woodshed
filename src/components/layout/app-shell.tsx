@@ -107,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {watcherReady && <IntegrationRefreshScheduler />}
       <TitleBar />
       <div className="flex flex-1 min-h-0">
-        <Sidebar visuallyHidden={agentFocusMode} />
+        <Sidebar visuallyHidden={agentFocusMode} mailReady={watcherReady} />
         <main className="flex-1 flex overflow-hidden">
           <AgentSidebarPanel />
           {children}

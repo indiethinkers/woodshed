@@ -21,6 +21,7 @@ vi.mock("@/lib/tauri", () => ({
 
 import {
   useArchiveOne,
+  useHasUnreadMail,
   useMail,
   useMarkRead,
   useRefreshMail,
@@ -68,6 +69,30 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
     .getQueryData<InfiniteData<MailPage, number>>(["emails"])
     ?.pages.flatMap((page) => page.items);
 }
+
+describe("useHasUnreadMail", () => {
+  it("tracks whether any inbox message still needs attention", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const unread = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(unread));
+
+    const { result } = renderHook(() => useHasUnreadMail(), {
+      wrapper: makeWrapper(qc),
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      qc.setQueryData(
+        ["emails"],
+        makeMailData({ ...unread, viewed: true }),
+      );
+    });
+
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+});
 
 describe("useRefreshMail", () => {
   beforeEach(() => {

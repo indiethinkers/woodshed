@@ -41,6 +41,7 @@ import {
   type MailSnoozeRestoreResult,
   type ReplyInput,
   type SendResult,
+  shouldShowUnreadIndicator,
 } from "@/lib/mail-lib/types";
 
 type MailCache = InfiniteData<MailPage, number>;
@@ -246,6 +247,16 @@ export function useAllMail() {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
   return query;
+}
+
+/** Persistent navigation signal for mail that still needs attention. */
+export function useHasUnreadMail(enabled = true) {
+  const query = useMailFolder("inbox", "", enabled);
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = query;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  return query.data?.some(shouldShowUnreadIndicator) ?? false;
 }
 
 /**
