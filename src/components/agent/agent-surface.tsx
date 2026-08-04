@@ -1679,7 +1679,7 @@ export function AgentMessage({
   const active = !isUser && isLastMessage && isStreaming;
   const hasActivity = reasoningText.length > 0 || toolParts.length > 0;
   const silentlyWaiting = active && !hasActivity && !responseText;
-  const showSilentActivity = useDelayedVisibility(silentlyWaiting, 1_500);
+  const showSilentActivity = useDelayedVisibility(silentlyWaiting, 3_000);
   // The activity disclosure is event-driven. Before Hermes emits reasoning or
   // a tool event, keep fast answers compact. A silent wait that lasts long
   // enough to be meaningful promotes into the same honest activity panel.

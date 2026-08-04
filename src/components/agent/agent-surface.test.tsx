@@ -208,7 +208,9 @@ describe("AgentMessage activity state", () => {
       );
 
       expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
-      act(() => vi.advanceTimersByTime(1_500));
+      act(() => vi.advanceTimersByTime(2_999));
+      expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1));
 
       expect(screen.getByText("Sent context to Hermes")).toBeInTheDocument();
       expect(screen.getAllByText("Waiting for Hermes")).toHaveLength(2);
