@@ -84,7 +84,7 @@ describe("AgentSettingsSection", () => {
     expect(
       screen.getByText(/use a custom endpoint to edit these fields here/i),
     ).toBeVisible();
-    expect(screen.getAllByText("Read only")).toHaveLength(3);
+    expect(screen.getAllByText("Read-only")).toHaveLength(3);
     expect(screen.getByLabelText("Base URL")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Gateway model")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Session key")).toHaveAttribute("readonly");
@@ -101,7 +101,7 @@ describe("AgentSettingsSection", () => {
     expect(screen.getByLabelText("Session key")).not.toHaveAttribute(
       "readonly",
     );
-    expect(screen.queryByText("Read only")).not.toBeInTheDocument();
+    expect(screen.queryByText("Read-only")).not.toBeInTheDocument();
   });
 
   it("offers a custom key when no local Hermes key is found", async () => {

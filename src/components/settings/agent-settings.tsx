@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, LockKeyhole, PlugZap, Save, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Lock,
+  LockKeyhole,
+  PlugZap,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import { isLoopbackAgentUrl } from "@/lib/agent/connection";
 import { tauriInvoke } from "@/lib/tauri";
@@ -30,6 +37,18 @@ const DEFAULT_CONFIG: AgentConfig = {
   credentialSource: "missing",
 };
 const MASKED_KEY_VALUE = "configured-password";
+
+function ReadOnlyChip() {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex items-center gap-1 rounded-full bg-foreground/[0.055] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/80"
+    >
+      <Lock className="size-2.5" strokeWidth={1.8} />
+      Read-only
+    </span>
+  );
+}
 
 export function AgentSettingsSection() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
@@ -233,14 +252,7 @@ export function AgentSettingsSection() {
           <label className="text-[12px] text-muted-foreground">
             <span className="flex items-center justify-between gap-2">
               Base URL
-              {managedByHermes && (
-                <span
-                  aria-hidden="true"
-                  className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-                >
-                  Read only
-                </span>
-              )}
+              {managedByHermes && <ReadOnlyChip />}
             </span>
             <input
               aria-label="Base URL"
@@ -258,14 +270,7 @@ export function AgentSettingsSection() {
           <label className="text-[12px] text-muted-foreground">
             <span className="flex items-center justify-between gap-2">
               {managedByHermes ? "Gateway model" : "Model"}
-              {managedByHermes && (
-                <span
-                  aria-hidden="true"
-                  className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-                >
-                  Read only
-                </span>
-              )}
+              {managedByHermes && <ReadOnlyChip />}
             </span>
             <input
               aria-label={managedByHermes ? "Gateway model" : "Model"}
@@ -382,14 +387,7 @@ export function AgentSettingsSection() {
         <label className="text-[12px] text-muted-foreground">
           <span className="flex items-center justify-between gap-2">
             Session key
-            {managedByHermes && (
-              <span
-                aria-hidden="true"
-                className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-              >
-                Read only
-              </span>
-            )}
+            {managedByHermes && <ReadOnlyChip />}
           </span>
           <input
             aria-label="Session key"
