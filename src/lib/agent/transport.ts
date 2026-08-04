@@ -100,6 +100,11 @@ interface AgentTransportOptions {
   reconnectTimeoutMs?: number;
 }
 
+export interface AgentChatTransport extends ChatTransport<UIMessage> {
+  prepareAttachments(files: FileUIPart[]): Promise<void>;
+  forgetPreparedAttachments(files: FileUIPart[]): void;
+}
+
 export interface AgentTransportConnection {
   status: "connected" | "reconnecting" | "disconnected";
   error: string | null;
@@ -109,8 +114,27 @@ const DEFAULT_AGENT_RECONNECT_TIMEOUT_MS = 30_000;
 
 export function createAgentChatTransport(
   options: AgentTransportOptions = {},
-): ChatTransport<UIMessage> {
+): AgentChatTransport {
+  const preparedAttachmentContexts = new Map<string, string[]>();
   return {
+    async prepareAttachments(files) {
+      const prepared = await Promise.all(
+        files.map(async (file) => [
+          attachmentPreparationKey(file),
+          await prepareAgentAttachment(file),
+        ] as const),
+      );
+      for (const [key, context] of prepared) {
+        const contexts = preparedAttachmentContexts.get(key) ?? [];
+        contexts.push(context);
+        preparedAttachmentContexts.set(key, contexts);
+      }
+    },
+    forgetPreparedAttachments(files) {
+      for (const file of files) {
+        preparedAttachmentContexts.delete(attachmentPreparationKey(file));
+      }
+    },
     async sendMessages({ chatId, messages, trigger, messageId, abortSignal }) {
       const systemContext = options.getSystemContext?.()?.trim();
       const inputMessage = latestUserMessage(messages);
@@ -120,6 +144,7 @@ export function createAgentChatTransport(
       const agentMessages = await messagesToAgentMessages(
         messages,
         inputMessage.id,
+        preparedAttachmentContexts,
       );
       if (systemContext) {
         agentMessages.unshift({ role: "system", content: systemContext });
@@ -711,6 +736,7 @@ function enqueue(
 async function messagesToAgentMessages(
   messages: UIMessage[],
   submittedMessageId: string,
+  preparedAttachmentContexts?: Map<string, string[]>,
 ): Promise<AgentChatMessage[]> {
   const prepared = await Promise.all(
     messages.map(async (message) => ({
@@ -719,6 +745,9 @@ async function messagesToAgentMessages(
         await messageContentForHermes(
           message,
           message.id === submittedMessageId ? "submitted" : "history",
+          message.id === submittedMessageId
+            ? preparedAttachmentContexts
+            : undefined,
         )
       ).trim(),
     })),
@@ -754,6 +783,7 @@ function messageContentForTranscript(message: UIMessage): string {
 async function messageContentForHermes(
   message: UIMessage,
   attachmentPolicy: "submitted" | "history",
+  preparedAttachmentContexts?: Map<string, string[]>,
 ): Promise<string> {
   const { files, text } = messageTextAndFiles(message);
   const loadedFiles = files.filter((file) => Boolean(file.url));
@@ -763,36 +793,58 @@ async function messageContentForHermes(
       "An attachment is no longer loaded. Reattach it before sending.",
     );
   }
-  const preparedContext = await prepareAttachmentContext(loadedFiles);
+  const preparedContext = await prepareAttachmentContext(
+    loadedFiles,
+    preparedAttachmentContexts,
+  );
   return [text, preparedContext].filter(Boolean).join("\n\n");
 }
 
-async function prepareAttachmentContext(files: FileUIPart[]): Promise<string> {
+async function prepareAttachmentContext(
+  files: FileUIPart[],
+  preparedAttachmentContexts?: Map<string, string[]>,
+): Promise<string> {
   if (files.length === 0) return "";
   const contexts = await Promise.all(
     files.map(async (file) => {
-      if (!file.url) {
-        throw new Error(
-          "An attachment is no longer loaded. Reattach it before sending.",
-        );
+      const key = attachmentPreparationKey(file);
+      const prepared = preparedAttachmentContexts?.get(key)?.shift();
+      if (prepared) {
+        if (preparedAttachmentContexts?.get(key)?.length === 0) {
+          preparedAttachmentContexts.delete(key);
+        }
+        return prepared;
       }
-      const prepared = await tauriInvoke<PreparedAgentAttachment>(
-        "agent_attachment_prepare",
-        {
-          input: {
-            filename: file.filename,
-            mediaType: file.mediaType,
-            dataUrl: file.url,
-          },
-        },
-      );
-      if (!prepared?.context) {
-        throw new Error("Woodshed could not prepare the attachment.");
-      }
-      return prepared.context;
+      return prepareAgentAttachment(file);
     }),
   );
   return contexts.join("\n\n");
+}
+
+function attachmentPreparationKey(file: FileUIPart): string {
+  return `${file.mediaType}\u0000${file.filename ?? ""}\u0000${file.url}`;
+}
+
+async function prepareAgentAttachment(file: FileUIPart): Promise<string> {
+  if (!file.url) {
+    throw new Error(
+      "An attachment is no longer loaded. Reattach it before sending.",
+    );
+  }
+  const prepared = await tauriInvoke<PreparedAgentAttachment>(
+    "agent_attachment_prepare",
+    {
+      input: {
+        filename: file.filename,
+        mediaType: file.mediaType,
+        dataUrl: file.url,
+      },
+    },
+  );
+  if (!prepared?.context) {
+    throw new Error("Woodshed could not prepare the attachment.");
+  }
+  return prepared.context;
 }
 
 function isFilePart(

@@ -209,6 +209,24 @@ import {
 
 const LAST_AGENT_CHAT_STORAGE_KEY = "woodshed:agent:last-chat-id";
 const RECENT_AGENT_CHAT_WINDOW_MS = 5 * 60 * 1000;
+const AGENT_ATTACHMENT_ACCEPT =
+  "application/pdf,text/plain,text/markdown,.pdf,.txt,.md,.markdown";
+const AGENT_ATTACHMENT_SUPPORT_MESSAGE =
+  "Agent attachments currently support PDF and text files.";
+
+function isSupportedAgentAttachment(
+  file: Pick<FileUIPart, "filename" | "mediaType">,
+): boolean {
+  const mediaType = file.mediaType.toLowerCase();
+  if (
+    mediaType === "application/pdf" ||
+    mediaType === "text/plain" ||
+    mediaType === "text/markdown"
+  ) {
+    return true;
+  }
+  return /\.(?:pdf|txt|md|markdown)$/i.test(file.filename ?? "");
+}
 const AGENT_AREA_REFERENCE_LABELS: Record<string, string> = {
   woodshed: "Woodshed",
   "indie-thinkers": "Indie Thinkers",
@@ -891,6 +909,10 @@ function AgentSurfaceInner({
   async function submitWithFreshConfig(message: PromptInputMessage) {
     const text = message.text.trim();
     if (!text && message.files.length === 0) return;
+    if (message.files.some((file) => !isSupportedAgentAttachment(file))) {
+      setLastError(AGENT_ATTACHMENT_SUPPORT_MESSAGE);
+      throw new Error(AGENT_ATTACHMENT_SUPPORT_MESSAGE);
+    }
     if (submissionPendingRef.current || busy) {
       throw new Error("An Agent submission is already in progress.");
     }
@@ -906,6 +928,10 @@ function AgentSurfaceInner({
           "The active Hermes profile is unavailable. Check it in Hermes, then try again.",
         );
       }
+      // useChat inserts the user bubble before its transport starts. Finish
+      // bounded extraction first so a bad attachment cannot strand an
+      // optimistic message with no durable Agent run behind it.
+      await transport.prepareAttachments(message.files);
       if (!activeId) {
         await createChatAndSend(text, message.files, message.text.trim());
         return;
@@ -916,6 +942,7 @@ function AgentSurfaceInner({
         setLastError(error instanceof Error ? error.message : String(error));
       });
     } catch (error) {
+      transport.forgetPreparedAttachments(message.files);
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
@@ -1064,6 +1091,7 @@ function AgentSurfaceInner({
             configured={configured}
             displayName={displayName}
             lastError={lastError}
+            onAttachmentError={setLastError}
             compact={!pageMode}
             contextTitle={contextTitle}
             onSubmit={handleSubmit}
@@ -1078,6 +1106,7 @@ function AgentSurfaceInner({
             configured={configured}
             displayName={displayName}
             lastError={lastError}
+            onAttachmentError={setLastError}
             messages={messages}
             compact={!pageMode}
             onSubmit={handleSubmit}
@@ -1750,6 +1779,7 @@ function AgentEmptyState({
   contextTitle,
   displayName,
   lastError,
+  onAttachmentError,
   onSubmit,
   status,
   stop,
@@ -1761,6 +1791,7 @@ function AgentEmptyState({
   contextTitle?: string;
   displayName: string;
   lastError: string | null;
+  onAttachmentError: (message: string) => void;
   onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   status: ChatStatus;
   stop: () => void;
@@ -1806,6 +1837,7 @@ function AgentEmptyState({
             configured={configured}
             displayName={displayName}
             lastError={lastError}
+            onAttachmentError={onAttachmentError}
             compact={compact}
             onSubmit={onSubmit}
             placeholder={compact ? "" : "How can I help you today?"}
@@ -1827,6 +1859,7 @@ function AgentConversationView({
   lastError,
   messages,
   onRestoreCheckpoint,
+  onAttachmentError,
   onSubmit,
   onToolApprovalResponse,
   status,
@@ -1840,6 +1873,7 @@ function AgentConversationView({
   lastError: string | null;
   messages: UIMessage[];
   onRestoreCheckpoint: (messageIndex: number) => void;
+  onAttachmentError: (message: string) => void;
   onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   onToolApprovalResponse: ChatAddToolApproveResponseFunction;
   status: ChatStatus;
@@ -1897,6 +1931,7 @@ function AgentConversationView({
             configured={configured}
             displayName={displayName}
             lastError={lastError}
+            onAttachmentError={onAttachmentError}
             compact={compact}
             onSubmit={onSubmit}
             placeholder={compact ? "" : "Send follow-up"}
@@ -2764,6 +2799,7 @@ function AgentComposer({
   configured,
   displayName,
   lastError,
+  onAttachmentError,
   onSubmit,
   placeholder,
   status,
@@ -2776,6 +2812,7 @@ function AgentComposer({
   configured: boolean;
   displayName: string;
   lastError: string | null;
+  onAttachmentError: (message: string) => void;
   onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   placeholder?: string;
   status: ChatStatus;
@@ -2841,6 +2878,7 @@ function AgentComposer({
       {/* The full Agent uses a slim single-row composer. In the narrow page
           chat, the textarea keeps its own row above the attachment control. */}
       <PromptInput
+        accept={AGENT_ATTACHMENT_ACCEPT}
         className={cn(
           // className lands on the form; the visible box + border come from the
           // inner InputGroup (data-slot="input-group"), so neutralize its border,
@@ -2856,6 +2894,13 @@ function AgentComposer({
         )}
         maxFiles={4}
         maxFileSize={2 * 1024 * 1024}
+        onError={(error) =>
+          onAttachmentError(
+            error.code === "accept"
+              ? AGENT_ATTACHMENT_SUPPORT_MESSAGE
+              : error.message,
+          )
+        }
         onSubmit={onSubmit}
       >
         {attachments.files.length > 0 && (

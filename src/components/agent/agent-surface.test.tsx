@@ -47,6 +47,7 @@ const invokeMock = vi.hoisted(() => ({
   chatListPromise: null as Promise<unknown[]> | null,
   agentConfigError: null as Error | null,
   agentConfigPromise: null as Promise<unknown> | null,
+  attachmentPrepareError: null as Error | null,
 }));
 const tauriInvokeMock = vi.hoisted(() => vi.fn());
 
@@ -122,12 +123,19 @@ beforeEach(() => {
   invokeMock.chatListPromise = null;
   invokeMock.agentConfigError = null;
   invokeMock.agentConfigPromise = null;
+  invokeMock.attachmentPrepareError = null;
   tauriInvokeMock.mockReset();
   tauriInvokeMock.mockImplementation(async (command: string) => {
     if (command === "agent_config_get") {
       if (invokeMock.agentConfigError) throw invokeMock.agentConfigError;
       if (invokeMock.agentConfigPromise) return invokeMock.agentConfigPromise;
       return invokeMock.agentConfig;
+    }
+    if (command === "agent_attachment_prepare") {
+      if (invokeMock.attachmentPrepareError) {
+        throw invokeMock.attachmentPrepareError;
+      }
+      return { context: "[Attachment: synthetic prepared text]" };
     }
     if (command === "agent_chats_all") {
       return (
@@ -371,6 +379,121 @@ describe("AgentSurface voice controls", () => {
       "[&>[data-slot=input-group]]:!bg-transparent",
     );
     expect(composer).not.toHaveClass("rounded-full");
+  });
+
+  it("rejects an unsupported image before it can strand an Agent turn", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:synthetic-image"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    try {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PromptInputProvider>
+            <AgentSurface />
+          </PromptInputProvider>
+        </QueryClientProvider>,
+      );
+
+      await screen.findByPlaceholderText("How can I help you today?");
+      fireEvent.change(screen.getByLabelText("Upload files"), {
+        target: {
+          files: [
+            new File(["synthetic image"], "reference.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      });
+
+      expect(
+        await screen.findByText(
+          "Agent attachments currently support PDF and text files.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("reference.png")).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectUrl,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectUrl,
+      });
+    }
+  });
+
+  it("preserves a supported attachment when preparation fails before send", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:synthetic-pdf"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    try {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PromptInputProvider>
+            <AgentSurface />
+          </PromptInputProvider>
+        </QueryClientProvider>,
+      );
+
+      const textarea = await screen.findByPlaceholderText(
+        "How can I help you today?",
+      );
+      fireEvent.change(textarea, { target: { value: "Read this reference." } });
+      fireEvent.change(screen.getByLabelText("Upload files"), {
+        target: {
+          files: [
+            new File(["synthetic pdf"], "reference.pdf", {
+              type: "application/pdf",
+            }),
+          ],
+        },
+      });
+      invokeMock.attachmentPrepareError = new Error(
+        "The PDF could not be read.",
+      );
+      fireEvent.submit(textarea.closest("form")!);
+
+      expect(
+        await screen.findByText("The PDF could not be read."),
+      ).toBeInTheDocument();
+      expect(textarea).toHaveValue("Read this reference.");
+      expect(screen.getByText("reference.pdf")).toBeInTheDocument();
+      expect(
+        tauriInvokeMock.mock.calls.some(
+          ([command]) => command === "agent_chat_create",
+        ),
+      ).toBe(false);
+    } finally {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectUrl,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectUrl,
+      });
+    }
   });
 
   it("asks the transport to reconnect after hydrating an existing chat", async () => {

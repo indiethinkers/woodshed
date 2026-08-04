@@ -40,6 +40,26 @@ function stubAttachmentObjectUrls() {
 }
 
 describe("PromptInput attachments", () => {
+  it("accepts supported text extensions when the browser omits a MIME type", () => {
+    stubAttachmentObjectUrls();
+
+    render(
+      <PromptInputProvider>
+        <PromptInput accept=".md,.txt" onSubmit={vi.fn()}>
+          <AttachmentCount />
+        </PromptInput>
+      </PromptInputProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Upload files"), {
+      target: {
+        files: [new File(["synthetic note"], "reference.md")],
+      },
+    });
+
+    expect(screen.getByLabelText("Attachment count")).toHaveTextContent("1");
+  });
+
   it("reads the selected File directly and strips it from the submitted payload", async () => {
     stubAttachmentObjectUrls();
     const fetchMock = vi.fn().mockRejectedValue(new Error("blocked"));

@@ -177,6 +177,59 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("reuses attachment preparation performed before the optimistic user turn", async () => {
+    const file = {
+      type: "file" as const,
+      filename: "reference.pdf",
+      mediaType: "application/pdf",
+      url: "data:application/pdf;base64,JVBERi0xLjQK",
+    };
+    mocks.tauriInvoke
+      .mockResolvedValueOnce({
+        context: "[Attachment: reference.pdf]\nPrepared text.\n[/Attachment]",
+      })
+      .mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await transport.prepareAttachments([file]);
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Read this." }, file],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledTimes(2);
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      1,
+      "agent_attachment_prepare",
+      expect.anything(),
+    );
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      2,
+      "agent_run_create",
+      expect.objectContaining({
+        input: expect.objectContaining({
+          messages: [
+            {
+              role: "user",
+              content:
+                "Read this.\n\n[Attachment: reference.pdf]\nPrepared text.\n[/Attachment]",
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
   it("rejects an unloaded attachment instead of sending a filename hint", async () => {
     const transport = createAgentChatTransport({ pollIntervalMs: 0 });
 
