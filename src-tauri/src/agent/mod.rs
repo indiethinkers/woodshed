@@ -266,6 +266,23 @@ impl AgentStreamEvent {
         }
     }
 
+    pub fn tool_output_available(tool_call_id: String, output: Value) -> Self {
+        Self {
+            kind: "tool-output-available".to_string(),
+            delta: None,
+            error: None,
+            tool_call_id: Some(tool_call_id),
+            tool_name: None,
+            input_text_delta: None,
+            input: None,
+            output: Some(output),
+            error_text: None,
+            title: None,
+            dynamic: Some(true),
+            usage: None,
+        }
+    }
+
     pub fn usage(usage: AgentTokenUsage) -> Self {
         Self {
             kind: "usage".to_string(),
@@ -324,6 +341,8 @@ pub struct AgentVaultMessage {
     pub role: String,
     pub created_at: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_run_id: Option<String>,
 }
 
 /// Lightweight descriptor of the page a chat was started from (sidebar mode).
@@ -437,6 +456,8 @@ struct AgentMessageMeta {
     id: String,
     role: String,
     created: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_run_id: Option<String>,
 }
 
 pub fn normalize_meta(
@@ -1120,6 +1141,10 @@ fn parse_sse_event<Event>(
 where
     Event: FnMut(AgentStreamEvent) -> Result<(), String>,
 {
+    let event_name = event.lines().find_map(|line| {
+        let line = line.trim_end_matches('\r');
+        line.strip_prefix("event:").map(str::trim)
+    });
     let data = event
         .lines()
         .filter_map(|line| {
@@ -1140,6 +1165,9 @@ where
         serde_json::from_str(data).map_err(|e| format!("parse chat stream failed: {e}"))?;
     if let Some(err) = upstream_error_message(&parsed) {
         return Err(err);
+    }
+    if event_name == Some("hermes.tool.progress") {
+        return parse_hermes_tool_progress(&parsed, on_event);
     }
     let mut produced = false;
     if let Some(reasoning) = parsed
@@ -1191,6 +1219,64 @@ where
         on_event(AgentStreamEvent::usage(usage))?;
     }
     Ok(produced)
+}
+
+fn parse_hermes_tool_progress<Event>(payload: &Value, on_event: &mut Event) -> Result<bool, String>
+where
+    Event: FnMut(AgentStreamEvent) -> Result<(), String>,
+{
+    let Some(tool_call_id) = payload
+        .get("toolCallId")
+        .or_else(|| payload.get("tool_call_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(tool_name) = payload
+        .get("tool")
+        .or_else(|| payload.get("toolName"))
+        .or_else(|| payload.get("tool_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let tool_call_id = truncate(tool_call_id, 256);
+    let tool_name = truncate(tool_name, 128);
+
+    match status {
+        "running" => {
+            let title = payload
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| truncate(value, 240));
+            on_event(AgentStreamEvent::tool_input_available(
+                tool_call_id,
+                tool_name,
+                json!({}),
+                title,
+            ))?;
+            Ok(true)
+        }
+        "completed" => {
+            on_event(AgentStreamEvent::tool_output_available(
+                tool_call_id,
+                Value::Null,
+            ))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn token_usage_from_payload(payload: &Value) -> Option<AgentTokenUsage> {
@@ -1459,6 +1545,7 @@ fn parse_message_blocks(body: &str) -> anyhow::Result<Vec<AgentVaultMessage>> {
             role: meta.role,
             created_at: meta.created,
             content: trim_surrounding_newlines(&after_header[..message_end]).to_string(),
+            agent_run_id: meta.agent_run_id,
         });
         rest = &after_header[message_end + MESSAGE_END.len()..];
     }
@@ -1478,6 +1565,7 @@ fn serialize_message_block(message: &AgentVaultMessage) -> String {
         } else {
             message.created_at.clone()
         },
+        agent_run_id: message.agent_run_id.clone(),
     };
     let yaml = serde_yaml::to_string(&meta).unwrap_or_else(|_| {
         "id: msg-invalid\nrole: assistant\ncreated: 1970-01-01T00:00:00Z\n".to_string()
@@ -1941,6 +2029,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_event_forwards_hermes_tool_progress_lifecycle() {
+        let mut events = Vec::new();
+        let mut state = StreamParseState::default();
+        {
+            let mut on_event = |event: AgentStreamEvent| {
+                events.push(event);
+                Ok(())
+            };
+
+            let started = parse_sse_event(
+                "event: hermes.tool.progress\ndata: {\"tool\":\"web_search\",\"label\":\"Search the weekly forecast\",\"toolCallId\":\"call_weather\",\"status\":\"running\"}",
+                &mut state,
+                &mut on_event,
+            )
+            .unwrap();
+            let completed = parse_sse_event(
+                "event: hermes.tool.progress\ndata: {\"tool\":\"web_search\",\"toolCallId\":\"call_weather\",\"status\":\"completed\"}",
+                &mut state,
+                &mut on_event,
+            )
+            .unwrap();
+
+            assert!(started);
+            assert!(completed);
+        }
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "tool-input-available");
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("call_weather"));
+        assert_eq!(events[0].tool_name.as_deref(), Some("web_search"));
+        assert_eq!(
+            events[0].title.as_deref(),
+            Some("Search the weekly forecast")
+        );
+        assert_eq!(events[0].input, Some(json!({})));
+        assert_eq!(events[1].kind, "tool-output-available");
+        assert_eq!(events[1].tool_call_id.as_deref(), Some("call_weather"));
+    }
+
+    #[test]
     fn agent_chat_markdown_round_trips_messages() {
         let chat = AgentChatRecord {
             id: "agent-01h".to_string(),
@@ -1962,12 +2090,14 @@ mod tests {
                     role: "user".to_string(),
                     created_at: "2026-06-13T12:00:00-07:00".to_string(),
                     content: "Find loose threads.".to_string(),
+                    agent_run_id: None,
                 },
                 AgentVaultMessage {
                     id: "m2".to_string(),
                     role: "assistant".to_string(),
                     created_at: "2026-06-13T12:01:00-07:00".to_string(),
                     content: "Start with [[Woodshed]].".to_string(),
+                    agent_run_id: Some("agent-run-synthetic".to_string()),
                 },
             ],
         };
@@ -1975,6 +2105,10 @@ mod tests {
         assert!(raw.contains("type: agent_chat"));
         let parsed = parse_chat(&raw, "agent/agent-01h.md").unwrap();
         assert_eq!(parsed.title, "Loose threads");
+        assert_eq!(
+            parsed.messages[1].agent_run_id.as_deref(),
+            Some("agent-run-synthetic")
+        );
         assert!(parsed.pinned);
         let context = parsed.context.expect("context round-trips");
         assert_eq!(context.title, "June 20, 2026");

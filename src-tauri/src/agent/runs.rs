@@ -162,6 +162,23 @@ pub fn read(app_data_dir: &Path, run_id: &str) -> Result<Option<AgentRunRecord>,
     read_path(&path).map(Some)
 }
 
+pub fn read_for_conversation_by_ids(
+    app_data_dir: &Path,
+    conversation_id: &str,
+    run_ids: &[String],
+) -> Result<Vec<AgentRunRecord>, String> {
+    let mut runs = Vec::with_capacity(run_ids.len());
+    for run_id in run_ids {
+        let Some(run) = read(app_data_dir, run_id)? else {
+            continue;
+        };
+        if run.conversation_id == conversation_id {
+            runs.push(run);
+        }
+    }
+    Ok(runs)
+}
+
 pub fn read_all(app_data_dir: &Path) -> Result<Vec<AgentRunRecord>, String> {
     let dir = runs_dir(app_data_dir)?;
     let mut runs = Vec::new();
@@ -343,11 +360,12 @@ pub fn finalize_chat_once(chat: &mut super::AgentChatRecord, run: &AgentRunRecor
         .iter_mut()
         .find(|message| message.id == run.assistant_message_id)
     {
-        if message.content == *content {
+        if message.content == *content && message.agent_run_id.as_deref() == Some(run.id.as_str()) {
             return false;
         }
         message.content = content.clone();
         message.created_at = created_at;
+        message.agent_run_id = Some(run.id.clone());
         return true;
     }
     chat.messages.push(AgentVaultMessage {
@@ -355,6 +373,7 @@ pub fn finalize_chat_once(chat: &mut super::AgentChatRecord, run: &AgentRunRecor
         role: "assistant".to_string(),
         created_at,
         content: content.clone(),
+        agent_run_id: Some(run.id.clone()),
     });
     true
 }
@@ -459,6 +478,7 @@ mod tests {
                 role: "user".to_string(),
                 created_at: "2031-02-03T12:00:00Z".to_string(),
                 content: "Review the reference.".to_string(),
+                agent_run_id: None,
             },
             request_messages: vec![AgentChatMessage {
                 role: "user".to_string(),
@@ -510,6 +530,27 @@ mod tests {
         assert_eq!(runs[0].id, run.id);
         assert_eq!(runs[0].status, AgentRunStatus::Running);
         assert_eq!(runs[0].events.len(), 1);
+    }
+
+    #[test]
+    fn reads_only_requested_runs_owned_by_the_conversation() {
+        let temp = tempfile::tempdir().unwrap();
+        let (matching, _) = create_or_get(temp.path(), input(), "2031-02-03T12:00:00Z").unwrap();
+        let mut other_input = input();
+        other_input.conversation_id = "agent-conversation-2".to_string();
+        other_input.idempotency_key = "user-message-2".to_string();
+        other_input.input_message.id = "user-message-2".to_string();
+        let (other, _) = create_or_get(temp.path(), other_input, "2031-02-03T12:01:00Z").unwrap();
+
+        let runs = read_for_conversation_by_ids(
+            temp.path(),
+            "agent-conversation-1",
+            &[other.id, matching.id.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, matching.id);
     }
 
     #[test]
@@ -627,6 +668,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(assistant_messages.len(), 1);
         assert_eq!(assistant_messages[0].content, "The reference is ready.");
+        assert_eq!(
+            assistant_messages[0].agent_run_id.as_deref(),
+            Some(completed.id.as_str())
+        );
     }
 
     #[test]

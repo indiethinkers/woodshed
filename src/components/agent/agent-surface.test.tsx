@@ -1,6 +1,12 @@
 import type { DynamicToolUIPart, UIMessage } from "ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const chatMock = vi.hoisted(() => ({
@@ -89,6 +95,7 @@ import {
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
+  mergeHydratedConversationMessages,
   sortChatsByCreatedAt,
   toUiMessages,
 } from "./agent-surface";
@@ -191,10 +198,14 @@ describe("AgentSurface voice controls", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Hermes" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Hermes" }),
+      ).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole("button", { name: "Dictate" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Dictate" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Start voice conversation" }),
     ).not.toBeInTheDocument();
@@ -260,6 +271,28 @@ describe("AgentWorkIndicator", () => {
 });
 
 describe("AgentMessage activity state", () => {
+  it("separates the final response with the configured agent name", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming={false}
+        message={{
+          id: "assistant-complete",
+          role: "assistant",
+          parts: [{ type: "text", text: "A concise synthetic answer." }],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Hermes", { selector: "span" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("A concise synthetic answer.")).toBeInTheDocument();
+  });
+
   it("repairs incomplete Markdown while an assistant response is streaming", () => {
     const { container } = render(
       <AgentMessage
@@ -327,7 +360,9 @@ describe("AgentMessage activity state", () => {
     const status = screen.getByText("Hermes is working");
     expect(status.closest("button")).toBeNull();
     expect(screen.queryByText("Working remotely")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Sent context to Hermes"),
+    ).not.toBeInTheDocument();
   });
 
   it("promotes a prolonged silent wait into an honest Hermes activity log", () => {
@@ -344,9 +379,13 @@ describe("AgentMessage activity state", () => {
         />,
       );
 
-      expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Sent context to Hermes"),
+      ).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(3_999));
-      expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Sent context to Hermes"),
+      ).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1));
 
       expect(screen.getByText("Sent context to Hermes")).toBeInTheDocument();
@@ -387,7 +426,7 @@ describe("AgentMessage activity state", () => {
     expect(screen.getByText("synthetic notes")).toBeInTheDocument();
   });
 
-  it("renders reasoning summaries that Hermes explicitly streams", () => {
+  it("keeps streamed reasoning collapsed until the user opens it", () => {
     render(
       <AgentMessage
         displayName="Hermes"
@@ -409,8 +448,15 @@ describe("AgentMessage activity state", () => {
       />,
     );
 
-    expect(screen.getByText("Thinking through the response")).toBeInTheDocument();
+    expect(
+      screen.getByText("Thinking through the response"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Reasoned through it")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Checking the supplied context before answering."),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Thinking through the response"));
     expect(
       screen.getByText("Checking the supplied context before answering."),
     ).toBeInTheDocument();
@@ -440,7 +486,9 @@ describe("AgentMessage activity state", () => {
     );
 
     expect(screen.getByText("Reasoning")).toBeInTheDocument();
-    expect(screen.queryByText("Thinking through the response")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Thinking through the response"),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -476,10 +524,10 @@ describe("Agent background work", () => {
     );
 
     expect(screen.getByText("1 background run")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /1 background run/i }));
     fireEvent.click(
-      screen.getByRole("button", { name: /1 background run/i }),
+      screen.getByRole("button", { name: "Open Background research" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Open Background research" }));
     expect(onSelect).toHaveBeenCalledWith("agent-conversation-2");
   });
 
@@ -501,10 +549,14 @@ describe("Agent background work", () => {
     });
 
     const { rerender } = render(<AgentContextUsage run={run} />);
-    expect(screen.getByRole("button", { name: "1.5K tokens used" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "1.5K tokens used" }),
+    ).toBeInTheDocument();
 
     rerender(<AgentContextUsage run={syntheticRun()} />);
-    expect(screen.queryByRole("button", { name: /tokens used/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /tokens used/ }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -537,11 +589,147 @@ describe("AgentRunBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(onRetry).toHaveBeenCalledOnce();
-    expect(screen.getByText("The local agent was unavailable.")).toBeInTheDocument();
+    expect(
+      screen.getByText("The local agent was unavailable."),
+    ).toBeInTheDocument();
   });
 });
 
 describe("persisted agent attachments", () => {
+  it("rehydrates historical activity without replacing a live reconnect", () => {
+    const liveMessage: UIMessage = {
+      id: "agent-response-live",
+      role: "assistant",
+      parts: [
+        {
+          type: "reasoning",
+          text: "Checking a current synthetic request.",
+          state: "streaming",
+        },
+        { type: "text", text: "A partial response", state: "streaming" },
+      ],
+    };
+    const messages = mergeHydratedConversationMessages(
+      [
+        {
+          id: "agent-response-synthetic",
+          role: "assistant",
+          createdAt: "2031-02-03T12:00:02Z",
+          content: "The historical response is complete.",
+          agentRunId: "agent-run-synthetic",
+        },
+      ],
+      [
+        {
+          id: "agent-response-synthetic",
+          role: "assistant",
+          parts: [{ type: "text", text: "The historical response is complete." }],
+        },
+        liveMessage,
+      ],
+      {
+        hydratedChatId: "agent-conversation-1",
+        loadedChatId: "agent-conversation-1",
+      },
+      [
+        syntheticRun({
+          status: "completed",
+          events: [
+            { kind: "reasoning-delta", delta: "Checked the synthetic source." },
+            {
+              kind: "tool-input-available",
+              toolCallId: "call_reference",
+              toolName: "search_reference",
+              input: { query: "synthetic" },
+              title: "Search the reference",
+              dynamic: true,
+            },
+          ],
+          finalResponse: "The historical response is complete.",
+          finishedAt: "2031-02-03T12:00:02Z",
+        }),
+      ],
+    );
+
+    expect(messages[0]?.parts).toEqual([
+      {
+        type: "reasoning",
+        text: "Checked the synthetic source.",
+        state: "done",
+      },
+      {
+        type: "dynamic-tool",
+        toolName: "search_reference",
+        toolCallId: "call_reference",
+        state: "input-available",
+        input: { query: "synthetic" },
+        title: "Search the reference",
+      },
+      { type: "text", text: "The historical response is complete." },
+    ]);
+    expect(messages[1]).toBe(liveMessage);
+  });
+
+  it("restores completed Hermes activity from the durable run", () => {
+    const [message] = toUiMessages(
+      [
+        {
+          id: "agent-response-synthetic",
+          role: "assistant",
+          createdAt: "2031-02-03T12:00:02Z",
+          content: "The synthetic forecast is sunny.",
+          agentRunId: "agent-run-synthetic",
+        },
+      ],
+      [],
+      undefined,
+      [
+        syntheticRun({
+          assistantMessageId: "agent-response-synthetic",
+          status: "completed",
+          events: [
+            { kind: "reasoning-delta", delta: "Checked the forecast source." },
+            {
+              kind: "tool-input-available",
+              toolCallId: "call_weather",
+              toolName: "web_search",
+              input: {},
+              title: "Search the weekly forecast",
+              dynamic: true,
+            },
+            {
+              kind: "tool-output-available",
+              toolCallId: "call_weather",
+              output: null,
+              dynamic: true,
+            },
+            { kind: "delta", delta: "The synthetic forecast is sunny." },
+          ],
+          finalResponse: "The synthetic forecast is sunny.",
+          finishedAt: "2031-02-03T12:00:02Z",
+        }),
+      ],
+    );
+
+    expect(message.parts).toEqual([
+      {
+        type: "reasoning",
+        text: "Checked the forecast source.",
+        state: "done",
+      },
+      {
+        type: "dynamic-tool",
+        toolName: "web_search",
+        toolCallId: "call_weather",
+        state: "output-available",
+        input: {},
+        output: null,
+        title: "Search the weekly forecast",
+      },
+      { type: "text", text: "The synthetic forecast is sunny." },
+    ]);
+  });
+
   it("preserves a loaded attachment URL while hydrating the completed turn", () => {
     const [message] = toUiMessages(
       [
@@ -727,7 +915,9 @@ describe("AgentThoughtTool", () => {
       },
     } as DynamicToolUIPart;
 
-    render(<AgentThoughtTool onToolApprovalResponse={onApproval} part={part} />);
+    render(
+      <AgentThoughtTool onToolApprovalResponse={onApproval} part={part} />,
+    );
 
     expect(screen.getByText("Implementation plan")).toBeInTheDocument();
     expect(screen.getByText("Tool approval")).toBeInTheDocument();
@@ -789,7 +979,9 @@ describe("AgentThoughtTool", () => {
       input: { messageId: "msg_1" },
     } as DynamicToolUIPart;
 
-    render(<AgentThoughtTool onToolApprovalResponse={onApproval} part={part} />);
+    render(
+      <AgentThoughtTool onToolApprovalResponse={onApproval} part={part} />,
+    );
 
     expect(screen.getByText("Working with mail")).toBeInTheDocument();
     expect(screen.getByText("Tool approval")).toBeInTheDocument();

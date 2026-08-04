@@ -1,4 +1,10 @@
-import type { ChatTransport, FileUIPart, UIMessage, UIMessageChunk } from "ai";
+import type {
+  ChatTransport,
+  DynamicToolUIPart,
+  FileUIPart,
+  UIMessage,
+  UIMessageChunk,
+} from "ai";
 import { nanoid } from "nanoid";
 import { attachmentContextFromFiles } from "@/lib/agent/attachment-context";
 import { tauriInvoke } from "@/lib/tauri";
@@ -83,6 +89,7 @@ interface StreamPartIds {
   textId: string;
   reasoningId: string;
   reasoningStarted: boolean;
+  tools: Map<string, HydratedAgentTool>;
 }
 
 interface AgentTransportOptions {
@@ -112,7 +119,7 @@ export function createAgentChatTransport(
       let retryOf: string | undefined;
       let idempotencyKey = inputMessage.id;
       if (trigger === "regenerate-message") {
-        const recent = await listRuns(chatId);
+        const recent = await listAgentRunsForConversation(chatId);
         retryOf = recent.find(
           (run) =>
             run.assistantMessageId === messageId ||
@@ -136,7 +143,7 @@ export function createAgentChatTransport(
       return streamAgentRun(run, abortSignal, options);
     },
     async reconnectToStream({ chatId }) {
-      const runs = await listRuns(chatId);
+      const runs = await listAgentRunsForConversation(chatId);
       const active = runs.find(
         (run) => run.status === "queued" || run.status === "running",
       );
@@ -306,12 +313,33 @@ function coalesceAgentEvents(events: AgentRunEvent[]): AgentRunEvent[] {
   return coalesced;
 }
 
-async function listRuns(chatId: string): Promise<AgentRun[]> {
+export async function listAgentRunsForConversation(
+  chatId: string,
+): Promise<AgentRun[]> {
   return (
     (await tauriInvoke<AgentRun[]>("agent_runs_for_conversation", {
       conversationId: chatId,
     })) ?? []
   );
+}
+
+const AGENT_RUN_READ_BATCH_SIZE = 8;
+
+export async function listAgentRunsByIds(
+  conversationId: string,
+  runIds: string[],
+): Promise<AgentRun[]> {
+  const uniqueIds = [...new Set(runIds.map((id) => id.trim()).filter(Boolean))];
+  const runs: AgentRun[] = [];
+  for (let index = 0; index < uniqueIds.length; index += AGENT_RUN_READ_BATCH_SIZE) {
+    const batch = uniqueIds.slice(index, index + AGENT_RUN_READ_BATCH_SIZE);
+    const loaded = await tauriInvoke<AgentRun[]>("agent_runs_by_ids", {
+      conversationId,
+      runIds: batch,
+    });
+    if (loaded) runs.push(...loaded);
+  }
+  return runs;
 }
 
 export function latestAgentUsage(run: AgentRun | null): AgentTokenUsage | null {
@@ -321,6 +349,220 @@ export function latestAgentUsage(run: AgentRun | null): AgentTokenUsage | null {
     if (usage) return usage;
   }
   return null;
+}
+
+interface HydratedAgentTool {
+  errorText?: string;
+  input: unknown;
+  inputText: string;
+  output?: unknown;
+  state: DynamicToolUIPart["state"];
+  title?: string;
+  toolCallId: string;
+  toolName: string;
+}
+
+interface AgentToolTransition {
+  chunk: UIMessageChunk;
+  tool?: HydratedAgentTool;
+}
+
+/** Rebuild the visible assistant timeline from one durable Agent run. */
+export function messagePartsFromAgentRun(run: AgentRun): UIMessage["parts"] {
+  const reasoning = run.events
+    .filter((event) => event.kind === "reasoning-delta" && event.delta)
+    .map((event) => event.delta)
+    .join("");
+  const tools = new Map<string, HydratedAgentTool>();
+
+  for (const event of run.events) {
+    const toolCallId = event.toolCallId?.trim();
+    const transition = agentToolTransition(
+      event,
+      toolCallId ? tools.get(toolCallId) : undefined,
+    );
+    if (transition?.tool)
+      tools.set(transition.tool.toolCallId, transition.tool);
+  }
+
+  const parts: UIMessage["parts"] = [];
+  if (reasoning) {
+    parts.push({ type: "reasoning", text: reasoning, state: "done" });
+  }
+  for (const tool of tools.values()) {
+    parts.push(hydratedToolPart(tool));
+  }
+  const responseText =
+    run.finalResponse ??
+    run.events
+      .filter((event) => event.kind === "delta" && event.delta)
+      .map((event) => event.delta)
+      .join("");
+  if (responseText) parts.push({ type: "text", text: responseText });
+  return parts;
+}
+
+function hydratedToolPart(tool: HydratedAgentTool): DynamicToolUIPart {
+  const base = {
+    type: "dynamic-tool" as const,
+    toolName: tool.toolName,
+    toolCallId: tool.toolCallId,
+    ...(tool.title ? { title: tool.title } : {}),
+  };
+  if (tool.state === "output-available") {
+    return {
+      ...base,
+      state: tool.state,
+      input: tool.input,
+      output: tool.output,
+    };
+  }
+  if (tool.state === "output-error") {
+    return {
+      ...base,
+      state: tool.state,
+      input: tool.input,
+      errorText: tool.errorText || "Tool failed.",
+    };
+  }
+  if (tool.state === "input-available") {
+    return { ...base, state: tool.state, input: tool.input };
+  }
+  return { ...base, state: "input-streaming", input: tool.input };
+}
+
+function parseHydratedToolInput(raw: string): unknown {
+  const input = raw.trim();
+  if (!input) return {};
+  try {
+    return JSON.parse(input) as unknown;
+  } catch {
+    return input;
+  }
+}
+
+function agentToolTransition(
+  event: AgentRunEvent,
+  current?: HydratedAgentTool,
+): AgentToolTransition | null {
+  const toolCallId = event.toolCallId?.trim();
+  if (!toolCallId) return null;
+  const toolName = event.toolName?.trim() || current?.toolName;
+  const tool = current
+    ? { ...current }
+    : toolName
+      ? {
+          input: {},
+          inputText: "",
+          state: "input-streaming" as const,
+          toolCallId,
+          toolName,
+        }
+      : undefined;
+  if (tool && toolName) tool.toolName = toolName;
+  if (tool && event.title?.trim()) tool.title = event.title.trim();
+
+  switch (event.kind) {
+    case "tool-input-start":
+      if (!tool || !toolName) return null;
+      tool.state = "input-streaming";
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-start",
+          toolCallId,
+          toolName,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-input-delta": {
+      const inputTextDelta = event.inputTextDelta;
+      if (!inputTextDelta) return null;
+      if (tool) {
+        tool.state = "input-streaming";
+        tool.inputText += inputTextDelta;
+        tool.input = parseHydratedToolInput(tool.inputText);
+      }
+      return {
+        tool,
+        chunk: { type: "tool-input-delta", toolCallId, inputTextDelta },
+      };
+    }
+    case "tool-input-available":
+      if (!tool || !toolName) return null;
+      tool.state = "input-available";
+      tool.input = event.input ?? parseHydratedToolInput(tool.inputText);
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-available",
+          toolCallId,
+          toolName,
+          input: tool.input,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-input-error":
+      if (!tool || !toolName) return null;
+      tool.state = "output-error";
+      tool.input = event.input ?? parseHydratedToolInput(tool.inputText);
+      tool.errorText = event.errorText || "Tool input failed.";
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-error",
+          toolCallId,
+          toolName,
+          input: tool.input,
+          errorText: tool.errorText,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-output-available":
+      if (tool) {
+        tool.state = "output-available";
+        tool.output = event.output;
+      }
+      return {
+        tool,
+        chunk: {
+          type: "tool-output-available",
+          toolCallId,
+          output: event.output ?? {},
+          dynamic: event.dynamic ?? true,
+        },
+      };
+    case "tool-output-error": {
+      const errorText = event.errorText || "Tool output failed.";
+      if (tool) {
+        tool.state = "output-error";
+        tool.errorText = errorText;
+      }
+      return {
+        tool,
+        chunk: {
+          type: "tool-output-error",
+          toolCallId,
+          errorText,
+          dynamic: event.dynamic ?? true,
+        },
+      };
+    }
+    case "tool-output-denied":
+      if (tool) {
+        tool.state = "output-error";
+        tool.errorText = "Tool use was denied.";
+      }
+      return {
+        tool,
+        chunk: { type: "tool-output-denied", toolCallId },
+      };
+    default:
+      return null;
+  }
 }
 
 function latestUserMessage(messages: UIMessage[]): AgentRunInputMessage | null {
@@ -352,7 +594,13 @@ function startMessage(
   enqueue(controller, { type: "start", messageId });
   enqueue(controller, { type: "start-step" });
   enqueue(controller, { type: "text-start", id: textId });
-  return { messageId, reasoningId, reasoningStarted: false, textId };
+  return {
+    messageId,
+    reasoningId,
+    reasoningStarted: false,
+    textId,
+    tools: new Map<string, HydratedAgentTool>(),
+  };
 }
 
 function finishMessage(
@@ -393,85 +641,16 @@ function enqueueAgentEvent(
     });
     return;
   }
-  if (payload.kind === "tool-input-start") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-start",
-      toolCallId,
-      toolName,
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
+  const toolCallId = payload.toolCallId?.trim();
+  const transition = agentToolTransition(
+    payload,
+    toolCallId ? ids.tools.get(toolCallId) : undefined,
+  );
+  if (!transition) return;
+  if (transition.tool) {
+    ids.tools.set(transition.tool.toolCallId, transition.tool);
   }
-  if (payload.kind === "tool-input-delta") {
-    const toolCallId = payload.toolCallId;
-    const inputTextDelta = payload.inputTextDelta;
-    if (!toolCallId || !inputTextDelta) return;
-    enqueue(controller, {
-      type: "tool-input-delta",
-      toolCallId,
-      inputTextDelta,
-    });
-    return;
-  }
-  if (payload.kind === "tool-input-available") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-available",
-      toolCallId,
-      toolName,
-      input: payload.input ?? {},
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
-  }
-  if (payload.kind === "tool-input-error") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-error",
-      toolCallId,
-      toolName,
-      input: payload.input,
-      errorText: payload.errorText || "Tool input failed.",
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-available") {
-    if (!payload.toolCallId) return;
-    enqueue(controller, {
-      type: "tool-output-available",
-      toolCallId: payload.toolCallId,
-      output: payload.output ?? {},
-      dynamic: payload.dynamic ?? true,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-error") {
-    if (!payload.toolCallId) return;
-    enqueue(controller, {
-      type: "tool-output-error",
-      toolCallId: payload.toolCallId,
-      errorText: payload.errorText || "Tool output failed.",
-      dynamic: payload.dynamic ?? true,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-denied" && payload.toolCallId) {
-    enqueue(controller, {
-      type: "tool-output-denied",
-      toolCallId: payload.toolCallId,
-    });
-  }
+  enqueue(controller, transition.chunk);
 }
 
 function endReasoning(

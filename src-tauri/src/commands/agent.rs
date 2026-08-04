@@ -20,6 +20,7 @@ use tauri_plugin_store::StoreExt;
 const STORE_FILE: &str = "config.json";
 const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_AGENT_RUN_READ_IDS: usize = 8;
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_AGENT_PDF_PAGES: usize = 2_000;
@@ -621,6 +622,37 @@ pub fn agent_runs_for_conversation(
 }
 
 #[tauri::command]
+pub fn agent_runs_by_ids(
+    app: AppHandle,
+    state: State<AppState>,
+    conversation_id: String,
+    run_ids: Vec<String>,
+) -> Result<Vec<AgentRunDto>, String> {
+    validate_agent_run_read(&conversation_id, &run_ids)?;
+    let app_data = app_data_dir(&app)?;
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let mut output = Vec::new();
+    for run in runs::read_for_conversation_by_ids(&app_data, &conversation_id, &run_ids)? {
+        let run = reconcile_run(&app, &state, &app_data, run)?;
+        output.push(AgentRunDto::from(&run));
+    }
+    Ok(output)
+}
+
+fn validate_agent_run_read(conversation_id: &str, run_ids: &[String]) -> Result<(), String> {
+    crate::vault::validate_record_id(conversation_id.trim())?;
+    if run_ids.len() > MAX_AGENT_RUN_READ_IDS {
+        return Err(format!(
+            "agent run read is limited to {MAX_AGENT_RUN_READ_IDS} ids"
+        ));
+    }
+    for run_id in run_ids {
+        crate::vault::validate_record_id(run_id.trim())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn agent_runs_active(
     app: AppHandle,
     state: State<AppState>,
@@ -1115,6 +1147,24 @@ fn write_chat(
 mod tests {
     use super::*;
 
+    #[test]
+    fn agent_run_read_enforces_its_bounded_trust_boundary() {
+        let boundary_ids = (0..MAX_AGENT_RUN_READ_IDS)
+            .map(|index| format!("agent-run-{index}"))
+            .collect::<Vec<_>>();
+        validate_agent_run_read("agent-conversation-synthetic", &boundary_ids).unwrap();
+
+        let over_limit_ids = (0..=MAX_AGENT_RUN_READ_IDS)
+            .map(|index| format!("agent-run-{index}"))
+            .collect::<Vec<_>>();
+        let error =
+            validate_agent_run_read("agent-conversation-synthetic", &over_limit_ids).unwrap_err();
+        assert!(error.contains("limited"));
+
+        let malformed_ids = vec!["../outside".to_string()];
+        assert!(validate_agent_run_read("agent-conversation-synthetic", &malformed_ids,).is_err());
+    }
+
     fn synthetic_pdf(text: &str) -> Vec<u8> {
         let stream = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
         let objects = [
@@ -1155,6 +1205,7 @@ mod tests {
                 role: "user".to_string(),
                 created_at: "2031-02-03T12:00:00Z".to_string(),
                 content: "Summarize the attached notes.".to_string(),
+                agent_run_id: None,
             },
             request_messages: vec![agent::AgentChatMessage {
                 role: "user".to_string(),
@@ -1435,6 +1486,10 @@ mod tests {
         assert_eq!(
             assistant_messages[0].content,
             "The notes describe three decisions."
+        );
+        assert_eq!(
+            assistant_messages[0].agent_run_id.as_deref(),
+            Some(run.id.as_str())
         );
         assert_eq!(
             chat.messages

@@ -14,6 +14,7 @@ import {
   cancelAgentRun,
   createAgentChatTransport,
   listActiveAgentRuns,
+  listAgentRunsByIds,
 } from "./transport";
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
@@ -486,6 +487,24 @@ describe("createAgentChatTransport", () => {
     await expect(listActiveAgentRuns()).resolves.toEqual([active]);
 
     expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_runs_active");
+  });
+
+  it("loads durable conversation runs in bounded id batches", async () => {
+    const runIds = Array.from({ length: 10 }, (_, index) => `agent-run-${index}`);
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(runIds.slice(0, 8).map((id) => run({ id })))
+      .mockResolvedValueOnce(runIds.slice(8).map((id) => run({ id })));
+
+    await expect(listAgentRunsByIds("chat-1", runIds)).resolves.toHaveLength(10);
+
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(1, "agent_runs_by_ids", {
+      conversationId: "chat-1",
+      runIds: runIds.slice(0, 8),
+    });
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(2, "agent_runs_by_ids", {
+      conversationId: "chat-1",
+      runIds: runIds.slice(8),
+    });
   });
 
   it("owns explicit durable-run cancellation", async () => {

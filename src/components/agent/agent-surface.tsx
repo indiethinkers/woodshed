@@ -181,6 +181,7 @@ import {
   cancelAgentRun,
   createAgentChatTransport,
   latestAgentUsage,
+  messagePartsFromAgentRun,
 } from "@/lib/agent/transport";
 import {
   captureAgentPageContext,
@@ -192,7 +193,10 @@ import { useToday } from "@/lib/hooks/use-today";
 import { useVaultPath } from "@/lib/hooks/use-vault-path";
 import {
   ACTIVE_AGENT_RUNS_QUERY_KEY,
+  agentConversationRunsQueryKeyPrefix,
   useActiveAgentRuns,
+  useAgentConversationRuns,
+  updateAgentConversationRuns,
 } from "@/lib/hooks/use-agent-runs";
 import { cn } from "@/lib/utils";
 import { tauriInvoke } from "@/lib/tauri";
@@ -237,6 +241,7 @@ interface AgentVaultMessage {
   role: "system" | "user" | "assistant";
   createdAt: string;
   content: string;
+  agentRunId?: string | null;
 }
 
 interface AgentChatContext {
@@ -318,8 +323,25 @@ function AgentSurfaceInner({
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
+  const conversationRunIds = useMemo(
+    () =>
+      activeChat?.id === activeId
+        ? [...messageRunIdsFromMessages(activeChat.messages).values()]
+        : [],
+    [activeChat, activeId],
+  );
+  const {
+    data: conversationRuns = [],
+    error: conversationRunsError,
+    isFetched: conversationRunsFetched,
+  } = useAgentConversationRuns(
+    activeId,
+    conversationRunIds,
+    Boolean(activeId && activeChat?.id === activeId),
+  );
   const hydratingRef = useRef(false);
   const messageTimesRef = useRef<Map<string, string>>(new Map());
+  const messageRunIdsRef = useRef<Map<string, string>>(new Map());
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
   const pageContextRef = useRef({
@@ -355,6 +377,17 @@ function AgentSurfaceInner({
               ACTIVE_AGENT_RUNS_QUERY_KEY,
               (current = []) => updateActiveRunQueue(current, run),
             );
+            queryClient.setQueriesData<AgentRun[]>(
+              {
+                queryKey: agentConversationRunsQueryKeyPrefix(
+                  run.conversationId,
+                ),
+              },
+              (current) => updateAgentConversationRuns(current, run),
+            );
+            if (run.conversationId === activeIdRef.current) {
+              messageRunIdsRef.current.set(run.assistantMessageId, run.id);
+            }
           }
           if (!run || run.conversationId === activeIdRef.current) {
             setActiveRun(run);
@@ -385,7 +418,8 @@ function AgentSurfaceInner({
   const messagesRef = useRef<UIMessage[]>(messages);
   messagesRef.current = messages;
 
-  const displayName = config?.displayName?.trim() || activeChat?.agent || "Agent";
+  const displayName =
+    config?.displayName?.trim() || activeChat?.agent || "Agent";
   // `config` is null until agent_config_get resolves. Until then we don't know
   // whether the agent is configured, so config-dependent composer chrome (the
   // disabled textarea, the "connect in settings" helper, the dimmed send
@@ -452,6 +486,16 @@ function AgentSurfaceInner({
   }, [activeRunsError]);
 
   useEffect(() => {
+    if (conversationRunsError) {
+      setLastError(
+        conversationRunsError instanceof Error
+          ? conversationRunsError.message
+          : String(conversationRunsError),
+      );
+    }
+  }, [conversationRunsError]);
+
+  useEffect(() => {
     if (pageMode && urlChatId && urlChatId !== activeId) {
       setActiveId(urlChatId);
     }
@@ -462,6 +506,7 @@ function AgentSurfaceInner({
       setActiveRun(null);
       setActiveChat(null);
       messageTimesRef.current = new Map();
+      messageRunIdsRef.current = new Map();
       setMessages([]);
       return;
     }
@@ -484,14 +529,21 @@ function AgentSurfaceInner({
         messageTimesRef.current = new Map(
           chat.messages.map((message) => [message.id, message.createdAt]),
         );
-        const nextMessages = toUiMessages(chat.messages, messagesRef.current, {
-          hydratedChatId: chat.id,
-          loadedChatId: activeChat?.id ?? null,
-        });
+        messageRunIdsRef.current = messageRunIdsFromMessages(chat.messages);
+        const nextMessages = toUiMessages(
+          chat.messages,
+          messagesRef.current,
+          {
+            hydratedChatId: chat.id,
+            loadedChatId: activeChat?.id ?? null,
+          },
+        );
         setMessages(nextMessages);
         void resumeStream().catch((error) => {
           if (!cancelled) {
-            setLastError(error instanceof Error ? error.message : String(error));
+            setLastError(
+              error instanceof Error ? error.message : String(error),
+            );
           }
         });
       })
@@ -508,7 +560,41 @@ function AgentSurfaceInner({
     return () => {
       cancelled = true;
     };
-  }, [activeChat?.id, activeId, navigate, pageMode, resumeStream, setMessages]);
+  }, [
+    activeChat?.id,
+    activeId,
+    navigate,
+    pageMode,
+    resumeStream,
+    setMessages,
+  ]);
+
+  useEffect(() => {
+    if (
+      !conversationRunsFetched ||
+      !activeChat ||
+      activeChat.id !== activeId
+    ) {
+      return;
+    }
+    setMessages(
+      mergeHydratedConversationMessages(
+        activeChat.messages,
+        messagesRef.current,
+        {
+          hydratedChatId: activeChat.id,
+          loadedChatId: activeChat.id,
+        },
+        conversationRuns,
+      ),
+    );
+  }, [
+    activeChat,
+    activeId,
+    conversationRuns,
+    conversationRunsFetched,
+    setMessages,
+  ]);
 
   useEffect(() => {
     if (!pendingSend || !activeId || hydratingRef.current) return;
@@ -522,7 +608,11 @@ function AgentSurfaceInner({
   }, [error]);
 
   useEffect(() => {
-    if (!activeRun || activeRun.status === "queued" || activeRun.status === "running") {
+    if (
+      !activeRun ||
+      activeRun.status === "queued" ||
+      activeRun.status === "running"
+    ) {
       return;
     }
     let cancelled = false;
@@ -532,6 +622,7 @@ function AgentSurfaceInner({
       .then((chat) => {
         if (cancelled || !chat || chat.id !== activeIdRef.current) return;
         setActiveChat(chat);
+        messageRunIdsRef.current = messageRunIdsFromMessages(chat.messages);
         setChats((current) => upsertSummary(current, recordToSummary(chat)));
         if (
           activeRun.status === "completed" &&
@@ -544,10 +635,15 @@ function AgentSurfaceInner({
             chat.messages.map((message) => [message.id, message.createdAt]),
           );
           setMessages(
-            toUiMessages(chat.messages, messagesRef.current, {
-              hydratedChatId: chat.id,
-              loadedChatId: activeChat?.id ?? null,
-            }),
+            toUiMessages(
+              chat.messages,
+              messagesRef.current,
+              {
+                hydratedChatId: chat.id,
+                loadedChatId: activeChat?.id ?? null,
+              },
+              conversationRuns,
+            ),
           );
         }
       })
@@ -559,7 +655,7 @@ function AgentSurfaceInner({
     return () => {
       cancelled = true;
     };
-  }, [activeChat?.id, activeRun, setMessages, status]);
+  }, [activeChat?.id, activeRun, conversationRuns, setMessages, status]);
 
   async function saveActiveChat(
     chat: AgentChatRecord,
@@ -624,7 +720,11 @@ function AgentSurfaceInner({
       if (activeChat) {
         void saveActiveChat(
           activeChat,
-          toVaultMessages(next, messageTimesRef.current),
+          toVaultMessages(
+            next,
+            messageTimesRef.current,
+            messageRunIdsRef.current,
+          ),
         );
       }
       return next;
@@ -647,7 +747,9 @@ function AgentSurfaceInner({
       const record =
         activeChat?.id === chat.id
           ? activeChat
-          : await tauriInvoke<AgentChatRecord>("agent_chat_get", { id: chat.id });
+          : await tauriInvoke<AgentChatRecord>("agent_chat_get", {
+              id: chat.id,
+            });
       if (!record) return;
       const nextPinned = !chat.pinned;
       const next = await tauriInvoke<AgentChatRecord>("agent_chat_update", {
@@ -693,7 +795,9 @@ function AgentSurfaceInner({
       const record =
         activeChat?.id === chat.id
           ? activeChat
-          : await tauriInvoke<AgentChatRecord>("agent_chat_get", { id: chat.id });
+          : await tauriInvoke<AgentChatRecord>("agent_chat_get", {
+              id: chat.id,
+            });
       if (!record) return;
       const next = await tauriInvoke<AgentChatRecord>("agent_chat_update", {
         input: {
@@ -873,7 +977,7 @@ function AgentSurfaceInner({
             runs={backgroundRuns}
           />
         )}
-        {activeRun && (
+        {activeRun && activeRun.status !== "completed" && (
           <AgentRunBanner
             onRetry={configured ? retryRun : undefined}
             run={activeRun}
@@ -942,7 +1046,9 @@ function AgentConversationList({
         {loading ? (
           <div className="px-1 text-sm text-muted-foreground">Loading...</div>
         ) : chats.length === 0 ? (
-          <div className="px-1 text-sm text-muted-foreground">No chats yet.</div>
+          <div className="px-1 text-sm text-muted-foreground">
+            No chats yet.
+          </div>
         ) : (
           <div className="space-y-4">
             {pinnedChats.length > 0 && (
@@ -1120,12 +1226,12 @@ function AgentConversationRow({
         }}
       >
         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-list from-60% to-transparent pl-10 pr-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100">
-        <DropdownMenuTrigger
-          aria-label={`Actions for ${chat.title}`}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background/70 hover:text-foreground data-[popup-open]:bg-background/70 data-[popup-open]:text-foreground"
-        >
-          <MoreHorizontal className="size-4" strokeWidth={1.8} />
-        </DropdownMenuTrigger>
+          <DropdownMenuTrigger
+            aria-label={`Actions for ${chat.title}`}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-background/70 hover:text-foreground data-[popup-open]:bg-background/70 data-[popup-open]:text-foreground"
+          >
+            <MoreHorizontal className="size-4" strokeWidth={1.8} />
+          </DropdownMenuTrigger>
         </div>
         <DropdownMenuContent align="end" className="min-w-36" sideOffset={4}>
           <DropdownMenuItem
@@ -1223,7 +1329,11 @@ function AgentHeader({
             <span
               className={cn(
                 "size-1.5 rounded-full",
-                busy ? "bg-[#c46a3a]" : configured ? "bg-[#14845f]" : "bg-muted-foreground",
+                busy
+                  ? "bg-[#c46a3a]"
+                  : configured
+                    ? "bg-[#14845f]"
+                    : "bg-muted-foreground",
               )}
             />
             {busy ? "Working" : configured ? "Ready" : "Setup needed"}
@@ -1349,7 +1459,11 @@ function AgentSidebarHeader({
           </DropdownMenuTrigger>
           {/* align="start" so the menu opens rightward from the trigger (over
               the main content), never leftward over the outer nav rail. */}
-          <DropdownMenuContent align="start" className="w-[268px] p-1.5" sideOffset={6}>
+          <DropdownMenuContent
+            align="start"
+            className="w-[268px] p-1.5"
+            sideOffset={6}
+          >
             <DropdownMenuGroup>
               <DropdownMenuLabel className="flex items-center justify-between px-1.5 pb-1.5 pt-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
                 <span>Chats on this page</span>
@@ -1514,16 +1628,12 @@ function AgentEmptyState({
           compact ? "gap-3 px-5" : "gap-4 px-6",
         )}
       >
-        {!compact && (
-          <CadenceAvatar className="agent-msg-in" size="lg" />
-        )}
+        {!compact && <CadenceAvatar className="agent-msg-in" size="lg" />}
         <div className="agent-msg-in space-y-1.5">
           <h1
             className={cn(
               "leading-tight tracking-tight text-foreground/90",
-              compact
-                ? "text-[15px] font-semibold"
-                : "font-serif text-[26px]",
+              compact ? "text-[15px] font-semibold" : "font-serif text-[26px]",
             )}
           >
             {compact ? "Chat about this page" : displayName}
@@ -1705,7 +1815,11 @@ export function AgentWorkIndicator({
   // eventual response position, so the handoff reads as one continuous turn.
   // Theme tokens keep it correct in light/dark.
   return (
-    <Message aria-live="polite" className="max-w-full agent-msg-in" from="assistant">
+    <Message
+      aria-live="polite"
+      className="max-w-full agent-msg-in"
+      from="assistant"
+    >
       <MessageContent className="w-full max-w-none px-4">
         <AgentWorkingStatus displayName={displayName} />
       </MessageContent>
@@ -1793,7 +1907,10 @@ function CadenceAvatar({
         className,
       )}
     >
-      <Bot className={cn("cadence-icon", lg ? "size-6" : "size-4")} strokeWidth={1.8} />
+      <Bot
+        className={cn("cadence-icon", lg ? "size-6" : "size-4")}
+        strokeWidth={1.8}
+      />
     </div>
   );
 }
@@ -1824,7 +1941,9 @@ function AgentMessageInner({
   const reasoningText = isUser ? "" : reasoningTextFromMessage(message);
   const sourceParts = isUser ? [] : sourcePartsFromMessage(message);
   const toolParts = isUser ? [] : toolPartsFromMessage(message);
-  const responseArtifact = isUser ? null : agentArtifactFromResponse(responseText);
+  const responseArtifact = isUser
+    ? null
+    : agentArtifactFromResponse(responseText);
   const lastReasoningPart = message.parts
     .filter((part) => part.type === "reasoning")
     .at(-1);
@@ -1914,6 +2033,7 @@ function AgentMessageInner({
             {reasoningText && (
               <Reasoning
                 className="mb-5"
+                defaultOpen={false}
                 isStreaming={reasoningStreaming}
               >
                 <ReasoningTrigger />
@@ -1929,6 +2049,7 @@ function AgentMessageInner({
                 waitingForHermes={silentlyWaiting}
               />
             )}
+            {responseText && <AgentResponseHeader displayName={displayName} />}
             {responseText && (
               <MessageResponse
                 isAnimating={active}
@@ -1981,6 +2102,17 @@ export const AgentMessage = memo(
     previous.onToolApprovalResponse === next.onToolApprovalResponse,
 );
 AgentMessage.displayName = "AgentMessage";
+
+function AgentResponseHeader({ displayName }: { displayName: string }) {
+  return (
+    <div className="mb-3 flex items-center gap-2.5" data-agent-response-header>
+      <span className="text-[11px] font-semibold tracking-[0.04em] text-foreground/75">
+        {displayName}
+      </span>
+      <span aria-hidden className="h-px flex-1 bg-border/65" />
+    </div>
+  );
+}
 
 interface AgentResponseArtifactData {
   title: string;
@@ -2108,7 +2240,12 @@ function AgentActivityLog({
         stepCount={stepCount}
       />
       <ChainOfThoughtContent>
-        <ChainOfThoughtStep label="Sent context to Hermes" status="complete" />
+        {waitingForHermes && (
+          <ChainOfThoughtStep
+            label="Sent context to Hermes"
+            status="complete"
+          />
+        )}
         {waitingForHermes && toolParts.length === 0 && (
           <ChainOfThoughtStep
             description="No reasoning or tool activity has arrived yet."
@@ -2138,7 +2275,8 @@ function currentAgentActivityLabel(
     .find((part) => toolStatusFromPart(part) === "active");
   if (activeTool) {
     const toolName = toolNameFromPart(activeTool);
-    const title = "title" in activeTool ? activeTool.title ?? undefined : undefined;
+    const title =
+      "title" in activeTool ? (activeTool.title ?? undefined) : undefined;
     const input = "input" in activeTool ? activeTool.input : undefined;
     return agentToolDescriptor(toolName, title, input).label;
   }
@@ -2173,15 +2311,16 @@ function AgentThoughtToolDetail({
   plan?: StructuredPlanData | null;
 }) {
   const toolName = toolNameFromPart(part);
-  const title = "title" in part ? part.title ?? undefined : undefined;
+  const title = "title" in part ? (part.title ?? undefined) : undefined;
   const input = "input" in part ? part.input : undefined;
   const descriptor = agentToolDescriptor(toolName, title, input);
   const status = toolStatusFromPart(part);
   const approval = toolApprovalFromPart(part);
-  const hasInput = input !== undefined;
-  const hasOutput = "output" in part && part.output !== undefined;
+  const hasInput = hasMeaningfulToolValue(input);
+  const hasOutput = "output" in part && hasMeaningfulToolValue(part.output);
   const errorText = "errorText" in part ? part.errorText : undefined;
-  const needsAttention = part.state === "approval-requested" || status === "error";
+  const needsAttention =
+    part.state === "approval-requested" || status === "error";
   const hasPlan = Boolean(plan);
   const hasDetail =
     hasPlan || hasInput || hasOutput || Boolean(errorText) || Boolean(approval);
@@ -2285,6 +2424,16 @@ function AgentThoughtToolDetail({
   );
 }
 
+function hasMeaningfulToolValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return true;
+}
+
 type StructuredPlanStatus = "pending" | "in_progress" | "completed";
 
 interface StructuredPlanStep {
@@ -2314,7 +2463,8 @@ function AgentStructuredPlan({
         <div className="min-w-0">
           <PlanTitle>Implementation plan</PlanTitle>
           <PlanDescription>
-            {plan.explanation ?? `${completed} of ${plan.steps.length} complete`}
+            {plan.explanation ??
+              `${completed} of ${plan.steps.length} complete`}
           </PlanDescription>
         </div>
         <PlanTrigger />
@@ -2384,7 +2534,11 @@ function structuredPlanFromToolPart(
 
 function normalizePlanStatus(value: unknown): StructuredPlanStatus {
   if (value === "completed" || value === "complete") return "completed";
-  if (value === "in_progress" || value === "in-progress" || value === "active") {
+  if (
+    value === "in_progress" ||
+    value === "in-progress" ||
+    value === "active"
+  ) {
     return "in_progress";
   }
   return "pending";
@@ -2580,8 +2734,8 @@ function AgentComposer({
             ref={textareaRef}
           />
           {compact && <div aria-hidden className="order-3 flex-1" />}
-          {!compact && (
-            generating ? (
+          {!compact &&
+            (generating ? (
               <PromptInputSubmit
                 className="size-8 shrink-0 rounded-full border border-border bg-background/45 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 onStop={stop}
@@ -2599,13 +2753,13 @@ function AgentComposer({
               >
                 <ArrowUp className="size-4" strokeWidth={2.2} />
               </PromptInputSubmit>
-            )
-          )}
+            ))}
         </div>
       </PromptInput>
       {!compact && (
         <p className="mt-2 px-2 text-center text-[11px] leading-relaxed text-muted-foreground/70">
-          {displayName} is AI and can make mistakes. Please double-check responses.
+          {displayName} is AI and can make mistakes. Please double-check
+          responses.
         </p>
       )}
       {showUnconfigured && (
@@ -2616,7 +2770,10 @@ function AgentComposer({
           )}
         >
           Add a bearer key in{" "}
-          <Link className="text-foreground underline underline-offset-4" to="/settings/agent">
+          <Link
+            className="text-foreground underline underline-offset-4"
+            to="/settings/agent"
+          >
             Agent settings
           </Link>
           .
@@ -2638,6 +2795,7 @@ export function toUiMessages(
     hydratedChatId: string;
     loadedChatId: string | null;
   },
+  runs: AgentRun[] = [],
 ): UIMessage[] {
   const canRestoreLoadedAttachments =
     conversationIds?.hydratedChatId === conversationIds?.loadedChatId;
@@ -2646,12 +2804,25 @@ export function toUiMessages(
       ? loadedMessages.map((message) => [message.id, message])
       : [],
   );
+  const runsByAssistantMessageId = new Map(
+    runs.map((run) => [run.assistantMessageId, run]),
+  );
+  const runsById = new Map(runs.map((run) => [run.id, run]));
   return messages.map((message) => {
     if (message.role !== "user") {
+      const run = message.agentRunId
+        ? runsById.get(message.agentRunId)
+        : runsByAssistantMessageId.get(message.id);
+      const activityParts = run
+        ? messagePartsFromAgentRun(run).filter((part) => part.type !== "text")
+        : [];
       return {
         id: message.id,
         role: message.role,
-        parts: [{ type: "text" as const, text: message.content }],
+        parts: [
+          ...activityParts,
+          { type: "text" as const, text: message.content },
+        ],
       };
     }
 
@@ -2669,6 +2840,40 @@ export function toUiMessages(
       ],
     };
   });
+}
+
+function messageRunIdsFromMessages(
+  messages: AgentVaultMessage[],
+): Map<string, string> {
+  return new Map(
+    messages.flatMap((message): [string, string][] =>
+      message.agentRunId ? [[message.id, message.agentRunId]] : [],
+    ),
+  );
+}
+
+export function mergeHydratedConversationMessages(
+  messages: AgentVaultMessage[],
+  loadedMessages: UIMessage[],
+  conversationIds: {
+    hydratedChatId: string;
+    loadedChatId: string | null;
+  },
+  runs: AgentRun[],
+): UIMessage[] {
+  const hydratedMessages = toUiMessages(
+    messages,
+    loadedMessages,
+    conversationIds,
+    runs,
+  );
+  const hydratedIds = new Set(
+    hydratedMessages.map((message) => message.id),
+  );
+  return [
+    ...hydratedMessages,
+    ...loadedMessages.filter((message) => !hydratedIds.has(message.id)),
+  ];
 }
 
 function restoreLoadedAttachmentUrls(
@@ -2693,21 +2898,23 @@ function restoreLoadedAttachmentUrls(
 function toVaultMessages(
   messages: UIMessage[],
   times: Map<string, string>,
+  runIds: Map<string, string> = new Map(),
 ): AgentVaultMessage[] {
-  return messages
-    .map((message) => {
-      const content = messageContentForVault(message).trim();
-      if (!content) return null;
-      const createdAt = times.get(message.id) ?? new Date().toISOString();
-      times.set(message.id, createdAt);
-      return {
+  return messages.flatMap((message): AgentVaultMessage[] => {
+    const content = messageContentForVault(message).trim();
+    if (!content) return [];
+    const createdAt = times.get(message.id) ?? new Date().toISOString();
+    times.set(message.id, createdAt);
+    return [
+      {
         id: message.id || `msg-${nanoid()}`,
         role: message.role as AgentVaultMessage["role"],
         createdAt,
         content,
-      };
-    })
-    .filter((message): message is AgentVaultMessage => Boolean(message));
+        agentRunId: runIds.get(message.id),
+      },
+    ];
+  });
 }
 
 function messageText(message: UIMessage): string {
@@ -2721,7 +2928,9 @@ function messageContentForVault(message: UIMessage): string {
     .join("\n\n");
 }
 
-function filePartsFromMessage(message: UIMessage): (FileUIPart & { id: string })[] {
+function filePartsFromMessage(
+  message: UIMessage,
+): (FileUIPart & { id: string })[] {
   return message.parts.filter(isFilePart).map((part, index) => ({
     ...part,
     id:
@@ -2756,8 +2965,12 @@ type ReasoningPart = UIMessage["parts"][number] & {
   text: string;
 };
 
-function isReasoningPart(part: UIMessage["parts"][number]): part is ReasoningPart {
-  return part.type === "reasoning" && "text" in part && typeof part.text === "string";
+function isReasoningPart(
+  part: UIMessage["parts"][number],
+): part is ReasoningPart {
+  return (
+    part.type === "reasoning" && "text" in part && typeof part.text === "string"
+  );
 }
 
 type SourceUrlPart = UIMessage["parts"][number] & {
@@ -2770,8 +2983,12 @@ function sourcePartsFromMessage(message: UIMessage): SourceUrlPart[] {
   return message.parts.filter(isSourceUrlPart);
 }
 
-function isSourceUrlPart(part: UIMessage["parts"][number]): part is SourceUrlPart {
-  return part.type === "source-url" && "url" in part && typeof part.url === "string";
+function isSourceUrlPart(
+  part: UIMessage["parts"][number],
+): part is SourceUrlPart {
+  return (
+    part.type === "source-url" && "url" in part && typeof part.url === "string"
+  );
 }
 
 interface CitationSource {
@@ -2783,7 +3000,8 @@ interface CitationSource {
 
 function toCitationSource(source: SourceUrlPart): CitationSource | null {
   if (!isValidCitationUrl(source.url)) return null;
-  const title = source.title?.trim() || hostnameFromUrl(source.url) || source.url;
+  const title =
+    source.title?.trim() || hostnameFromUrl(source.url) || source.url;
   return {
     url: source.url,
     title,
@@ -2809,7 +3027,9 @@ function hostnameFromUrl(value: string): string {
   }
 }
 
-function agentArtifactFromResponse(text: string): AgentResponseArtifactData | null {
+function agentArtifactFromResponse(
+  text: string,
+): AgentResponseArtifactData | null {
   const lines = text.split("\n");
   const headerIndex = lines.findIndex((line) =>
     AGENT_ARTIFACT_HEADER_RE.test(line.trim()),
@@ -2817,7 +3037,9 @@ function agentArtifactFromResponse(text: string): AgentResponseArtifactData | nu
   if (headerIndex < 0) return null;
 
   const remaining = lines.slice(headerIndex);
-  const bulletCount = remaining.filter((line) => /^[-*]\s+\S/.test(line.trim())).length;
+  const bulletCount = remaining.filter((line) =>
+    /^[-*]\s+\S/.test(line.trim()),
+  ).length;
   if (bulletCount < 2) return null;
 
   const title = remaining[0]?.trim().replace(/:$/, "") || "Artifact";
@@ -2857,10 +3079,7 @@ function upsertSummary(
   return sortChatsByCreatedAt([next, ...filtered]);
 }
 
-function updateActiveRunQueue(
-  runs: AgentRun[],
-  next: AgentRun,
-): AgentRun[] {
+function updateActiveRunQueue(runs: AgentRun[], next: AgentRun): AgentRun[] {
   const remaining = runs.filter((run) => run.id !== next.id);
   if (next.status !== "queued" && next.status !== "running") {
     return remaining;
@@ -2969,10 +3188,7 @@ function forgetRecentAgentChatId(id?: string) {
 }
 
 function normalizeAgentResponseMarkdown(text: string): string {
-  return text
-    .split("\n")
-    .map(normalizeAgentResponseLine)
-    .join("\n");
+  return text.split("\n").map(normalizeAgentResponseLine).join("\n");
 }
 
 function normalizeAgentResponseLine(line: string): string {
@@ -2993,7 +3209,9 @@ function splitAreaQualifiedEntries(line: string): string | null {
   const entries = suffixes
     .map((suffix, index) => {
       const entryStart =
-        index === 0 ? 0 : (suffixes[index - 1].index ?? 0) + suffixes[index - 1][0].length;
+        index === 0
+          ? 0
+          : (suffixes[index - 1].index ?? 0) + suffixes[index - 1][0].length;
       const entryEnd = (suffix.index ?? 0) + suffix[0].length;
       return body.slice(entryStart, entryEnd).trim();
     })
@@ -3009,10 +3227,13 @@ function toSentenceCase(value: string): string {
 }
 
 function linkAgentAreaReferences(line: string): string {
-  return line.replace(AGENT_AREA_REFERENCE_RE, (_, prefix: string, id: string) => {
-    const label = AGENT_AREA_REFERENCE_LABELS[id.toLowerCase()];
-    return label ? `${prefix}[[${label}]]` : `${prefix}${id}`;
-  });
+  return line.replace(
+    AGENT_AREA_REFERENCE_RE,
+    (_, prefix: string, id: string) => {
+      const label = AGENT_AREA_REFERENCE_LABELS[id.toLowerCase()];
+      return label ? `${prefix}[[${label}]]` : `${prefix}${id}`;
+    },
+  );
 }
 
 function escapeRegExp(value: string): string {
