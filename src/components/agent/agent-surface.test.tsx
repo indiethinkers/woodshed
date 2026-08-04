@@ -87,10 +87,68 @@ import {
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
+  sortChatsByCreatedAt,
   toUiMessages,
 } from "./agent-surface";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import type { AgentRun } from "@/lib/agent/transport";
+
+describe("Agent conversation ordering", () => {
+  it("sorts chats by creation time descending even when an older chat was updated later", () => {
+    const sorted = sortChatsByCreatedAt([
+      {
+        id: "older-chat",
+        path: "agent/older-chat.md",
+        title: "Older chat",
+        agent: "Hermes",
+        model: "synthetic-model",
+        created: "2031-02-03T12:00:00Z",
+        updated: "2031-02-03T15:00:00Z",
+        lastMessageCreated: "2031-02-03T15:00:00Z",
+        pinned: false,
+        messageCount: 3,
+        preview: "Older chat received a later reply.",
+      },
+      {
+        id: "newer-chat",
+        path: "agent/newer-chat.md",
+        title: "Newer chat",
+        agent: "Hermes",
+        model: "synthetic-model",
+        created: "2031-02-03T14:00:00Z",
+        updated: "2031-02-03T14:00:00Z",
+        lastMessageCreated: "2031-02-03T14:00:00Z",
+        pinned: false,
+        messageCount: 1,
+        preview: "Newer chat.",
+      },
+    ]);
+
+    expect(sorted.map((chat) => chat.id)).toEqual(["newer-chat", "older-chat"]);
+  });
+
+  it("uses the chat id as a deterministic tie-breaker", () => {
+    const shared = {
+      path: "agent/synthetic-chat.md",
+      title: "Same title",
+      agent: "Hermes",
+      model: "synthetic-model",
+      created: "invalid",
+      updated: "2031-02-03T14:00:00Z",
+      lastMessageCreated: null,
+      pinned: false,
+      messageCount: 0,
+      preview: "",
+    };
+
+    const sorted = sortChatsByCreatedAt([
+      { ...shared, id: "chat-z" },
+      { ...shared, id: "chat-a" },
+    ]);
+
+    expect(sorted.map((chat) => chat.id)).toEqual(["chat-a", "chat-z"]);
+  });
+});
 
 describe("AgentSurface voice controls", () => {
   it("does not expose dictation or voice conversation controls", async () => {

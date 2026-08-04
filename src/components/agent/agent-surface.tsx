@@ -363,7 +363,7 @@ function AgentSurfaceInner({
         ]);
         if (cancelled) return;
         setConfig(nextConfig);
-        const nextSummaries = sortChatsByDate(summaries ?? []);
+        const nextSummaries = sortChatsByCreatedAt(summaries ?? []);
         setChats(nextSummaries);
         const restoredChatId =
           urlChatId ?? readRecentAgentChatId(nextSummaries);
@@ -607,7 +607,7 @@ function AgentSurfaceInner({
     // the autosave effect reads its title, so a stale title here would revert
     // the rename on the next message.
     setChats((current) =>
-      sortChatsByDate(
+      sortChatsByCreatedAt(
         current.map((entry) =>
           entry.id === chat.id ? { ...entry, title: nextTitle } : entry,
         ),
@@ -738,7 +738,7 @@ function AgentSurfaceInner({
     () =>
       pageMode
         ? []
-        : sortChatsByDate(
+        : sortChatsByCreatedAt(
             chats.filter(
               (chat) =>
                 chat.context?.route ===
@@ -853,7 +853,7 @@ function AgentConversationList({
   onSelect: (id: string) => void;
   onTogglePinned: (chat: AgentChatSummary) => void;
 }) {
-  const sortedChats = useMemo(() => sortChatsByDate(chats), [chats]);
+  const sortedChats = useMemo(() => sortChatsByCreatedAt(chats), [chats]);
   const pinnedChats = sortedChats.filter((chat) => chat.pinned);
   const recentChats = sortedChats.filter((chat) => !chat.pinned);
   return (
@@ -2516,7 +2516,7 @@ function upsertSummary(
   next: AgentChatSummary,
 ): AgentChatSummary[] {
   const filtered = chats.filter((chat) => chat.id !== next.id);
-  return sortChatsByDate([next, ...filtered]);
+  return sortChatsByCreatedAt([next, ...filtered]);
 }
 
 // Today's Cadence renders at `/`, but the same day is also reachable at the
@@ -2550,16 +2550,21 @@ function messageCountLabel(count: number): string {
   return `${count} message${count === 1 ? "" : "s"}`;
 }
 
-function sortChatsByDate(chats: AgentChatSummary[]): AgentChatSummary[] {
+export function sortChatsByCreatedAt(
+  chats: AgentChatSummary[],
+): AgentChatSummary[] {
   return [...chats].sort((a, b) => {
-    const byDate = chatSortDate(b).localeCompare(chatSortDate(a));
+    const byDate = chatCreatedTimestamp(b) - chatCreatedTimestamp(a);
     if (byDate !== 0) return byDate;
-    return a.title.localeCompare(b.title);
+    const byTitle = a.title.localeCompare(b.title);
+    if (byTitle !== 0) return byTitle;
+    return a.id.localeCompare(b.id);
   });
 }
 
-function chatSortDate(chat: AgentChatSummary): string {
-  return chat.lastMessageCreated || chat.updated || chat.created || "";
+function chatCreatedTimestamp(chat: AgentChatSummary): number {
+  const timestamp = Date.parse(chat.created);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function readRecentAgentChatId(chats: AgentChatSummary[]): string | null {
