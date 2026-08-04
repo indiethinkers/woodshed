@@ -27,6 +27,8 @@ const MAX_AGENT_STREAM_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGENT_STREAM_BUFFER: usize = 1024 * 1024;
 const MAX_AGENT_MESSAGES: usize = 512;
 const MAX_AGENT_INPUT_BYTES: usize = 8 * 1024 * 1024;
+const AGENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -826,23 +828,25 @@ where
     Start: FnMut() -> Result<(), String>,
     Event: FnMut(AgentStreamEvent) -> Result<(), String>,
 {
-    chat_completion_stream_with_idle_timeout(
+    chat_completion_stream_with_timeouts(
         config,
         api_key,
         input,
         &mut on_start,
         &mut on_event,
-        Duration::from_secs(300),
+        AGENT_STREAM_RESPONSE_TIMEOUT,
+        AGENT_STREAM_IDLE_TIMEOUT,
     )
     .await
 }
 
-async fn chat_completion_stream_with_idle_timeout<Start, Event>(
+async fn chat_completion_stream_with_timeouts<Start, Event>(
     config: &HermesConfigMeta,
     api_key: &str,
     input: AgentChatInput,
     on_start: &mut Start,
     on_event: &mut Event,
+    response_timeout: Duration,
     idle_timeout: Duration,
 ) -> Result<(), String>
 where
@@ -864,7 +868,7 @@ where
         .build()
         .map_err(|e| format!("build client failed: {e}"))?;
 
-    let mut response = client
+    let response = client
         .post(&chat_url)
         .bearer_auth(api_key)
         .header("Accept", "text/event-stream")
@@ -875,16 +879,22 @@ where
             "messages": messages,
             "stream": true,
         }))
-        .send()
+        .send();
+    let mut response = tokio::time::timeout(response_timeout, response)
         .await
+        .map_err(|_| stream_response_timeout_message())?
         .map_err(|e| format!("chat failed: {e}. Is the local Hermes gateway running?"))?;
 
     let status = response.status();
     let status_code = status.as_u16();
     if !status.is_success() {
-        let text = response_text_limited(response, MAX_AGENT_MODELS_RESPONSE)
-            .await
-            .map_err(|e| format!("read chat error response failed: {e}"))?;
+        let text = tokio::time::timeout(
+            response_timeout,
+            response_text_limited(response, MAX_AGENT_MODELS_RESPONSE),
+        )
+        .await
+        .map_err(|_| stream_error_response_timeout_message())?
+        .map_err(|e| format!("read chat error response failed: {e}"))?;
         return Err(format!(
             "Hermes returned HTTP {status_code}: {}",
             truncate(&text, 360)
@@ -934,6 +944,15 @@ where
 fn stream_read_failure_message() -> String {
     "Hermes ended its response unexpectedly. This agent run was saved as failed; try again."
         .to_string()
+}
+
+fn stream_response_timeout_message() -> String {
+    "Hermes did not start its response within 30 seconds. This agent run was saved as failed; try again."
+        .to_string()
+}
+
+fn stream_error_response_timeout_message() -> String {
+    "Hermes error response timed out. This agent run was saved as failed; try again.".to_string()
 }
 
 fn stream_idle_timeout_message() -> String {
@@ -1502,7 +1521,7 @@ mod tests {
         };
         let mut started = false;
         let mut output = String::new();
-        let result = chat_completion_stream_with_idle_timeout(
+        let result = chat_completion_stream_with_timeouts(
             &config,
             "synthetic-key",
             input,
@@ -1517,6 +1536,7 @@ mod tests {
                 Ok(())
             },
             Duration::from_millis(200),
+            Duration::from_millis(200),
         )
         .await;
         server.await.unwrap();
@@ -1524,6 +1544,96 @@ mod tests {
         assert!(result.is_ok(), "active stream failed: {result:?}");
         assert!(started);
         assert_eq!(output, "Still working");
+    }
+
+    #[tokio::test]
+    async fn silent_stream_times_out_without_discarding_the_process() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        let config = HermesConfigMeta {
+            base_url: format!("http://{address}/v1"),
+            ..HermesConfigMeta::default()
+        };
+        let result = chat_completion_stream_with_timeouts(
+            &config,
+            "synthetic-key",
+            synthetic_chat_input(),
+            &mut || Ok(()),
+            &mut |_| Ok(()),
+            Duration::from_millis(50),
+            Duration::from_millis(20),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert_eq!(result.unwrap_err(), stream_idle_timeout_message());
+    }
+
+    #[tokio::test]
+    async fn response_headers_and_error_bodies_are_bounded() {
+        use tokio::io::AsyncWriteExt;
+
+        for (headers, expected_error) in [
+            (None, "did not start its response within 30 seconds"),
+            (
+                Some(
+                    b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                        .as_slice(),
+                ),
+                "error response timed out",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                if let Some(headers) = headers {
+                    socket.write_all(headers).await.unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            });
+            let config = HermesConfigMeta {
+                base_url: format!("http://{address}/v1"),
+                ..HermesConfigMeta::default()
+            };
+            let result = chat_completion_stream_with_timeouts(
+                &config,
+                "synthetic-key",
+                synthetic_chat_input(),
+                &mut || Ok(()),
+                &mut |_| Ok(()),
+                Duration::from_millis(20),
+                Duration::from_millis(50),
+            )
+            .await;
+            server.await.unwrap();
+
+            let error = result.unwrap_err();
+            assert!(error.contains(expected_error), "got: {error}");
+        }
+    }
+
+    fn synthetic_chat_input() -> AgentChatInput {
+        AgentChatInput {
+            conversation_id: "synthetic-stream".to_string(),
+            messages: vec![AgentChatMessage {
+                role: "user".to_string(),
+                content: "Keep streaming synthetic output.".to_string(),
+            }],
+        }
     }
 
     #[test]
