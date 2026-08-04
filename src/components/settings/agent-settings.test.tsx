@@ -9,6 +9,11 @@ const config = vi.hoisted(() => ({
     | "stored"
     | "missing",
   model: "synthetic-model",
+  managedProfile: null as {
+    name: string;
+    port: number;
+    model: string;
+  } | null,
 }));
 const connection = vi.hoisted(() => ({
   error: null as Error | null,
@@ -16,8 +21,8 @@ const connection = vi.hoisted(() => ({
     ok: true,
     status: 200,
     modelFound: true,
-    models: ["hermes-agent"],
-    message: "Connected to Hermes and found the gateway model.",
+    models: ["focus"],
+    message: "Connected to Hermes and found the active profile model.",
   },
 }));
 const tauriInvokeMock = vi.hoisted(() => vi.fn());
@@ -33,13 +38,14 @@ describe("AgentSettingsSection", () => {
     config.baseUrl = "https://hermes.example.com/v1";
     config.credentialSource = "missing";
     config.model = "synthetic-model";
+    config.managedProfile = null;
     connection.error = null;
     connection.result = {
       ok: true,
       status: 200,
       modelFound: true,
-      models: ["hermes-agent"],
-      message: "Connected to Hermes and found the gateway model.",
+      models: ["focus"],
+      message: "Connected to Hermes and found the active profile model.",
     };
     tauriInvokeMock.mockReset();
     tauriInvokeMock.mockImplementation(async (command: string) => {
@@ -49,6 +55,7 @@ describe("AgentSettingsSection", () => {
           credentialSource: config.credentialSource,
           displayName: "Hermes",
           hasApiKey: config.credentialSource !== "missing",
+          managedProfile: config.managedProfile,
           model: config.model,
           sessionKey: "woodshed",
         };
@@ -84,10 +91,15 @@ describe("AgentSettingsSection", () => {
     config.baseUrl = "http://127.0.0.1:8642/v1";
     config.credentialSource = "hermes";
     config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+    };
 
     render(<AgentSettingsSection />);
 
-    expect(await screen.findByText("Hermes default profile")).toBeVisible();
+    expect(await screen.findByText("Focus profile")).toBeVisible();
     expect(screen.queryByLabelText("Bearer token")).not.toBeInTheDocument();
     expect(document.getElementById("hermes-token-help")).toBeNull();
     expect(screen.queryByText("Local authentication")).not.toBeInTheDocument();
@@ -97,11 +109,17 @@ describe("AgentSettingsSection", () => {
     config.baseUrl = "http://127.0.0.1:8642/v1";
     config.credentialSource = "hermes";
     config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+    };
 
     render(<AgentSettingsSection />);
 
-    expect(await screen.findByText("Hermes default profile")).toBeVisible();
+    expect(await screen.findByText("Focus profile")).toBeVisible();
     expect(screen.getByText("Not checked")).toBeVisible();
+    expect(screen.getByText(/focus on port 8651/i)).toBeVisible();
     expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Session key")).not.toBeInTheDocument();
@@ -113,6 +131,9 @@ describe("AgentSettingsSection", () => {
       screen.getByRole("button", { name: "Use a custom endpoint" }),
     );
 
+    expect(screen.getByLabelText("Base URL")).toHaveValue(
+      "http://127.0.0.1:8651/v1",
+    );
     expect(screen.getByLabelText("Base URL")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Model")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Session key")).not.toHaveAttribute(
@@ -121,10 +142,15 @@ describe("AgentSettingsSection", () => {
     expect(screen.getByText("Local authentication")).toBeVisible();
   });
 
-  it("shows setup guidance when the default profile credential is missing", async () => {
+  it("shows setup guidance when the active profile credential is missing", async () => {
     config.baseUrl = "http://127.0.0.1:8642/v1";
     config.credentialSource = "missing";
     config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+    };
 
     render(<AgentSettingsSection />);
 
@@ -138,6 +164,11 @@ describe("AgentSettingsSection", () => {
     config.baseUrl = "http://127.0.0.1:8642/v1";
     config.credentialSource = "hermes";
     config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+    };
 
     render(<AgentSettingsSection />);
 
@@ -147,7 +178,7 @@ describe("AgentSettingsSection", () => {
 
     expect(await screen.findByText("Connected")).toBeVisible();
     expect(
-      screen.getByText(/Hermes is running locally and responding/i),
+      screen.getByText(/Focus is running locally on port 8651/i),
     ).toBeVisible();
     expect(tauriInvokeMock).toHaveBeenCalledWith("agent_connection_test");
     expect(tauriInvokeMock).not.toHaveBeenCalledWith(
@@ -160,6 +191,11 @@ describe("AgentSettingsSection", () => {
     config.baseUrl = "http://127.0.0.1:8642/v1";
     config.credentialSource = "hermes";
     config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+    };
     connection.error = new Error(
       "Connect failed. Is the local Hermes gateway running?",
     );

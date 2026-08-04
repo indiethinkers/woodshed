@@ -447,7 +447,12 @@ fn extract_pdf_text(_bytes: &[u8]) -> Result<String, String> {
 pub fn agent_config_get(app: AppHandle) -> Result<AgentConfig, String> {
     let meta = read_meta(&app)?;
     let credential_source = agent::key::source(&app, &meta);
-    Ok(agent::public_config(meta, credential_source))
+    let managed_profile = agent::key::managed_profile(&app, &meta);
+    Ok(agent::public_config(
+        meta,
+        credential_source,
+        managed_profile,
+    ))
 }
 
 #[tauri::command]
@@ -467,7 +472,12 @@ pub fn agent_config_set(app: AppHandle, input: AgentConfigInput) -> Result<Agent
 
     write_meta(&app, &meta)?;
     let credential_source = agent::key::source(&app, &meta);
-    Ok(agent::public_config(meta, credential_source))
+    let managed_profile = agent::key::managed_profile(&app, &meta);
+    Ok(agent::public_config(
+        meta,
+        credential_source,
+        managed_profile,
+    ))
 }
 
 #[tauri::command]
@@ -476,20 +486,29 @@ pub fn agent_config_clear(app: AppHandle) -> Result<AgentConfig, String> {
     let meta = HermesConfigMeta::default();
     write_meta(&app, &meta)?;
     let credential_source = agent::key::source(&app, &meta);
-    Ok(agent::public_config(meta, credential_source))
+    let managed_profile = agent::key::managed_profile(&app, &meta);
+    Ok(agent::public_config(
+        meta,
+        credential_source,
+        managed_profile,
+    ))
 }
 
 #[tauri::command]
 pub async fn agent_connection_test(app: AppHandle) -> Result<AgentConnectionTestResult, String> {
-    let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
-    agent::test_connection(&meta, &api_key).await
+    let stored_meta = read_meta(&app)?;
+    let connection =
+        agent::key::resolve_connection(&app, &stored_meta).map_err(|e| e.to_string())?;
+    agent::test_connection(&connection.config, &connection.api_key).await
 }
 
 #[tauri::command]
 pub fn agent_chat_stream(app: AppHandle, input: AgentChatStreamInput) -> Result<(), String> {
-    let meta = read_meta(&app)?;
-    let api_key = agent::key::resolve(&app, &meta).map_err(|e| e.to_string())?;
+    let stored_meta = read_meta(&app)?;
+    let connection =
+        agent::key::resolve_connection(&app, &stored_meta).map_err(|e| e.to_string())?;
+    let meta = connection.config;
+    let api_key = connection.api_key;
     let stream_id = input.stream_id.clone();
     let stream_id_for_event = stream_id.clone();
     let chat_input = AgentChatInput {
@@ -891,8 +910,11 @@ async fn run_agent_job_inner(
         return Ok(());
     }
 
-    let meta = read_meta(app)?;
-    let api_key = agent::key::resolve(app, &meta).map_err(|error| error.to_string())?;
+    let stored_meta = read_meta(app)?;
+    let connection =
+        agent::key::resolve_connection(app, &stored_meta).map_err(|error| error.to_string())?;
+    let meta = connection.config;
+    let api_key = connection.api_key;
     let chat_input = AgentChatInput {
         conversation_id: run.session_id.clone(),
         messages: run.request_messages.clone(),

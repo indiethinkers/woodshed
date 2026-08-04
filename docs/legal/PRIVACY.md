@@ -31,9 +31,10 @@ cache.
   Woodshed stores it as a progress event in the corresponding run record.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
-  operating-system account isolation and disk encryption. Local Hermes keys are
-  read from the default profile—or, for an explicit custom loopback endpoint,
-  the profile owning that port—without being copied into Woodshed.
+  operating-system account isolation and disk encryption. The standard local
+  connection reads the active Hermes profile's key; an explicit custom
+  loopback endpoint reads the profile owning that port. Neither key is copied
+  into Woodshed.
   Google Calendar secret iCal URLs are stored in the operating-system credential
   store. Legacy plaintext configuration values are migrated and scrubbed on
   first use.
@@ -80,8 +81,9 @@ other exceptions described below.
   fetches the URLs directly. Loading an image can reveal your IP address and
   time of access to the image host.
 - **Hermes-compatible agent endpoint:** Woodshed's standard local connection
-  uses the default Hermes profile. Change that profile's model or provider in
-  Hermes; Woodshed displays the connection details without managing them. An
+  follows the active Hermes profile, including its configured API port and
+  advertised gateway model. Switch profiles or change the model or provider in
+  Hermes; Woodshed displays connection status without managing them. An
   explicit agent command sends the selected instruction and relevant vault or
   email content directly to that endpoint, or to an explicitly configured
   custom endpoint. Proposed record creation and mail archive actions require

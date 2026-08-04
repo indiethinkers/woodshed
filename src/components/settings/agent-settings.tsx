@@ -17,6 +17,11 @@ interface AgentConfig {
   sessionKey: string;
   hasApiKey: boolean;
   credentialSource: "environment" | "hermes" | "stored" | "missing";
+  managedProfile: {
+    name: string;
+    port: number;
+    model: string;
+  } | null;
 }
 
 interface AgentConnectionTestResult {
@@ -34,6 +39,11 @@ const DEFAULT_CONFIG: AgentConfig = {
   sessionKey: "woodshed",
   hasApiKey: false,
   credentialSource: "missing",
+  managedProfile: {
+    name: "default",
+    port: 8642,
+    model: "hermes-agent",
+  },
 };
 const MASKED_KEY_VALUE = "configured-password";
 
@@ -162,15 +172,21 @@ export function AgentSettingsSection() {
   const hasKey = config?.hasApiKey ?? false;
   const credentialSource = config?.credentialSource ?? "missing";
   const isLocalHermes = isLoopbackAgentUrl(baseUrl);
-  const isDefaultHermes =
-    baseUrl === DEFAULT_CONFIG.baseUrl && model === DEFAULT_CONFIG.model;
+  const managedProfile = config?.managedProfile ?? DEFAULT_CONFIG.managedProfile;
+  const followsHermesProfile = config === null || config.managedProfile !== null;
   const connectionMode: "default" | "local" | "remote" =
-    isDefaultHermes && !editingCustomEndpoint
+    followsHermesProfile && !editingCustomEndpoint
       ? "default"
       : isLocalHermes
         ? "local"
         : "remote";
   const managedByHermes = connectionMode === "default";
+  const managedProfileName = managedProfile?.name ?? "default";
+  const managedProfileLabel =
+    managedProfileName === "default"
+      ? "Default"
+      : `${managedProfileName.charAt(0).toUpperCase()}${managedProfileName.slice(1)}`;
+  const managedProfilePort = managedProfile?.port ?? 8642;
   const disabled = busy !== "idle" || config === null;
   const showingStoredKey = hasKey && !isReplacingKey;
   const keyInputValue = showingStoredKey ? MASKED_KEY_VALUE : apiKey;
@@ -196,8 +212,7 @@ export function AgentSettingsSection() {
         : testResult?.ok
           ? {
               label: "Connected",
-              message:
-                "Hermes is running locally and responding with the configured gateway model.",
+              message: `${managedProfileLabel} is running locally on port ${managedProfilePort} and responding with the configured gateway model.`,
               tone: "connected" as const,
             }
           : testResult
@@ -209,14 +224,12 @@ export function AgentSettingsSection() {
             : credentialSource === "missing"
               ? {
                   label: "Setup needed",
-                  message:
-                    "Woodshed could not find API_SERVER_KEY in the default Hermes profile. Configure it in Hermes, then test again.",
+                  message: `Woodshed could not find API_SERVER_KEY in the ${managedProfileName} Hermes profile. Configure it in Hermes, then test again.`,
                   tone: "attention" as const,
                 }
               : {
                   label: "Not checked",
-                  message:
-                    "The default profile is configured. Test the connection to confirm Hermes is running locally.",
+                  message: `The active Hermes profile is ${managedProfileName} on port ${managedProfilePort}. Test the connection to confirm its gateway is running.`,
                   tone: "neutral" as const,
                 };
   const managedCardClass =
@@ -248,7 +261,7 @@ export function AgentSettingsSection() {
       label="Hermes"
       description={
         managedByHermes
-          ? "Woodshed uses the default Hermes profile on this machine. Change its model and provider in Hermes."
+          ? "Woodshed follows the active Hermes profile on this machine. Change its model and provider in Hermes."
           : connectionMode === "local"
             ? "Use an existing Hermes HTTP endpoint on this machine. Woodshed discovers its local profile key."
             : "Connect to a remote Hermes-compatible HTTP endpoint with an explicit bearer key."
@@ -265,7 +278,7 @@ export function AgentSettingsSection() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-[13px] font-medium text-foreground">
-                      Hermes default profile
+                      {managedProfileLabel} profile
                     </p>
                     <span
                       aria-live="polite"
@@ -299,7 +312,12 @@ export function AgentSettingsSection() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setEditingCustomEndpoint(true)}
+                  onClick={() => {
+                    setBaseUrl(
+                      `http://127.0.0.1:${managedProfilePort}/v1`,
+                    );
+                    setEditingCustomEndpoint(true);
+                  }}
                   disabled={disabled}
                   className="inline-flex items-center justify-center rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
                 >

@@ -87,6 +87,15 @@ pub struct AgentConfig {
     pub session_key: String,
     pub has_api_key: bool,
     pub credential_source: CredentialSource,
+    pub managed_profile: Option<ManagedHermesProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedHermesProfile {
+    pub name: String,
+    pub port: u16,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -522,7 +531,11 @@ pub fn normalize_meta(
     })
 }
 
-pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource) -> AgentConfig {
+pub fn public_config(
+    meta: HermesConfigMeta,
+    credential_source: CredentialSource,
+    managed_profile: Option<ManagedHermesProfile>,
+) -> AgentConfig {
     let has_api_key = if uses_default_profile(&meta) {
         credential_source != CredentialSource::Missing
     } else {
@@ -545,6 +558,7 @@ pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource
         session_key: meta.session_key,
         has_api_key,
         credential_source,
+        managed_profile,
     }
 }
 
@@ -2197,7 +2211,7 @@ mod tests {
         let parsed: HermesConfigMeta = serde_json::from_str(&raw).unwrap();
         assert!(parsed.api_key.is_none());
 
-        let public = public_config(parsed, CredentialSource::Missing);
+        let public = public_config(parsed, CredentialSource::Missing, None);
         assert!(!public.has_api_key);
         assert_eq!(public.credential_source, CredentialSource::Missing);
         let public_raw = serde_json::to_string(&public).unwrap();

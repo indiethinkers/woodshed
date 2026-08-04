@@ -72,14 +72,15 @@ Gmail App Passwords and custom Hermes bearer keys live in an atomic, owner-only
 (`0600`) `secrets.json` file under the application-data directory. It is
 plaintext by design and relies on operating-system account isolation and
 full-disk encryption; it is never included in logs, diagnostics, exports, or the
-vault. The standard local Agent connection reads the default Hermes profile key
-from a bounded, regular, non-symlink file; custom loopback endpoints resolve the
-profile that owns their configured port. Local keys are used only for loopback
-endpoints. Secret iCal URLs remain in the
-operating-system credential store. `config.json` stores only non-secret account
-metadata. Older plaintext fields are accepted solely for one-time migration and
-are skipped during serialization; legacy Gmail and Hermes Keychain entries are
-imported only after a verified write to `secrets.json`.
+vault. The standard local Agent connection follows Hermes's active profile and
+reads its port, advertised gateway model, and key from bounded, regular,
+non-symlink files; custom loopback endpoints resolve the profile that owns their
+configured port. Local keys are used only for loopback endpoints. Secret iCal
+URLs remain in the operating-system credential store. `config.json` stores only
+non-secret account metadata. Older plaintext fields are accepted solely for
+one-time migration and are skipped during serialization; legacy Gmail and
+Hermes Keychain entries are imported only after a verified write to
+`secrets.json`.
 
 ## Network policy
 
@@ -136,7 +137,7 @@ in total; base64, filenames, and content types are validated again inside the
 bounded send command. Agent request, response, attachment, and stream budgets
 are enforced independently.
 
-The standard Hermes endpoint is the default local profile. Explicit custom
+The standard Hermes endpoint follows the active local profile. Explicit custom
 endpoints may also intentionally be local, so Hermes endpoints are not subject
 to the public-host SSRF rule. Their URL syntax, requests, response sizes, stream
 sizes, and timeouts are still bounded.

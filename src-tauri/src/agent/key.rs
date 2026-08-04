@@ -1,6 +1,4 @@
-use super::{
-    is_default_profile_connection, uses_default_profile, CredentialSource, HermesConfigMeta,
-};
+use super::{uses_default_profile, CredentialSource, HermesConfigMeta, ManagedHermesProfile};
 use crate::credentials::{CredentialBroker, CredentialId};
 use keyring::Entry;
 use std::fs::{self, OpenOptions};
@@ -24,41 +22,70 @@ pub enum KeyError {
     Storage(String),
 }
 
-pub fn resolve(app: &tauri::AppHandle, config: &HermesConfigMeta) -> Result<String, KeyError> {
-    if let Some(key) = env_key() {
-        return Ok(key);
-    }
-    if let Some(key) = read_env_local()? {
-        return Ok(key);
-    }
-    if let Some(home) = hermes_home(app) {
-        if let Some(key) = discover_hermes_key(&home, &config.base_url, &config.model) {
-            return Ok(key);
+pub struct ResolvedConnection {
+    pub config: HermesConfigMeta,
+    pub api_key: String,
+}
+
+struct ManagedProfileSelection {
+    profile: ManagedHermesProfile,
+    api_key: Option<String>,
+}
+
+pub fn resolve_connection(
+    app: &tauri::AppHandle,
+    config: &HermesConfigMeta,
+) -> Result<ResolvedConnection, KeyError> {
+    let managed = uses_default_profile(config);
+    let (runtime_config, hermes_key) = match hermes_home(app) {
+        Some(home) if managed => {
+            let selection = managed_profile_for_home(&home);
+            let mut runtime = config.clone();
+            runtime.base_url = format!("http://127.0.0.1:{}/v1", selection.profile.port);
+            runtime.model = selection.profile.model;
+            (runtime, selection.api_key)
         }
-    }
-    if uses_default_profile(config) {
+        Some(home) => (
+            config.clone(),
+            discover_hermes_key(&home, &config.base_url, &config.model),
+        ),
+        None => (config.clone(), None),
+    };
+
+    let api_key = if let Some(key) = env_key() {
+        key
+    } else if let Some(key) = read_env_local()? {
+        key
+    } else if let Some(key) = hermes_key {
+        key
+    } else if managed {
         return Err(KeyError::Missing);
-    }
-    let broker = CredentialBroker::for_app(app).map_err(KeyError::Storage)?;
-    if let Some(key) = broker
-        .resolve(&CredentialId::agent())
-        .map_err(KeyError::Storage)?
-        .and_then(|value| super::normalize_api_key(&value))
-    {
-        return Ok(key);
-    }
-    if let Some(key) = legacy_keychain_key() {
-        store(app, &key).map_err(KeyError::Storage)?;
-        if let Err(error) = forget_legacy_keychain() {
-            eprintln!("forget migrated Hermes keychain entry: {error}");
+    } else {
+        let broker = CredentialBroker::for_app(app).map_err(KeyError::Storage)?;
+        if let Some(key) = broker
+            .resolve(&CredentialId::agent())
+            .map_err(KeyError::Storage)?
+            .and_then(|value| super::normalize_api_key(&value))
+        {
+            key
+        } else if let Some(key) = legacy_keychain_key() {
+            store(app, &key).map_err(KeyError::Storage)?;
+            if let Err(error) = forget_legacy_keychain() {
+                eprintln!("forget migrated Hermes keychain entry: {error}");
+            }
+            key
+        } else if let Some(key) = config.api_key.as_deref().and_then(super::normalize_api_key) {
+            store(app, &key).map_err(KeyError::Storage)?;
+            key
+        } else {
+            return Err(KeyError::Missing);
         }
-        return Ok(key);
-    }
-    if let Some(key) = config.api_key.as_deref().and_then(super::normalize_api_key) {
-        store(app, &key).map_err(KeyError::Storage)?;
-        return Ok(key);
-    }
-    Err(KeyError::Missing)
+    };
+
+    Ok(ResolvedConnection {
+        config: runtime_config,
+        api_key,
+    })
 }
 
 pub fn store(app: &tauri::AppHandle, value: &str) -> Result<(), String> {
@@ -96,10 +123,14 @@ pub fn source(app: &tauri::AppHandle, config: &HermesConfigMeta) -> CredentialSo
     if env_key().is_some() || read_env_local().ok().flatten().is_some() {
         return CredentialSource::Environment;
     }
-    if hermes_home(app)
-        .and_then(|home| discover_hermes_key(&home, &config.base_url, &config.model))
-        .is_some()
-    {
+    let hermes_key = hermes_home(app).and_then(|home| {
+        if uses_default_profile(config) {
+            managed_profile_key(&home)
+        } else {
+            discover_hermes_key(&home, &config.base_url, &config.model)
+        }
+    });
+    if hermes_key.is_some() {
         return CredentialSource::Hermes;
     }
     if uses_default_profile(config) {
@@ -157,12 +188,88 @@ fn hermes_home(app: &tauri::AppHandle) -> Option<PathBuf> {
     app.path().home_dir().ok().map(|home| home.join(".hermes"))
 }
 
-fn discover_hermes_key(home: &Path, base_url: &str, model: &str) -> Option<String> {
-    let target_port = local_base_port(base_url)?;
-    if is_default_profile_connection(base_url, model) {
-        return hermes_key_for_port(&home.join(".env"), target_port);
+pub fn managed_profile(
+    app: &tauri::AppHandle,
+    config: &HermesConfigMeta,
+) -> Option<ManagedHermesProfile> {
+    if !uses_default_profile(config) {
+        return None;
+    }
+    Some(
+        hermes_home(app)
+            .map(|home| managed_profile_for_home(&home).profile)
+            .unwrap_or_else(default_managed_profile),
+    )
+}
+
+fn managed_profile_key(home: &Path) -> Option<String> {
+    managed_profile_for_home(home).api_key
+}
+
+fn managed_profile_for_home(home: &Path) -> ManagedProfileSelection {
+    if let Some(name) = active_profile(home) {
+        if let Some(path) = profile_env_path(home, &name) {
+            if let Some(selection) = read_managed_profile(&path, &name) {
+                return selection;
+            }
+        }
     }
 
+    let path = home.join(".env");
+    read_managed_profile(&path, "default").unwrap_or_else(|| ManagedProfileSelection {
+        profile: default_managed_profile(),
+        api_key: None,
+    })
+}
+
+fn profile_env_path(home: &Path, profile: &str) -> Option<PathBuf> {
+    if profile == "default" {
+        return Some(home.join(".env"));
+    }
+    let profiles = home.join("profiles");
+    let profile_dir = profiles.join(profile);
+    (is_real_directory(&profiles) && is_real_directory(&profile_dir))
+        .then(|| profile_dir.join(".env"))
+}
+
+fn read_managed_profile(path: &Path, name: &str) -> Option<ManagedProfileSelection> {
+    let content = read_bounded_regular(path, MAX_ENV_FILE_BYTES)?;
+    let port = parse_env_content(&content, "API_SERVER_PORT")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8642);
+    let model = parse_env_content(&content, "API_SERVER_MODEL_NAME")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| managed_model_name(name));
+    let api_key = parse_env_content(&content, "API_SERVER_KEY")
+        .and_then(|value| super::normalize_api_key(&value));
+    Some(ManagedProfileSelection {
+        profile: ManagedHermesProfile {
+            name: name.to_string(),
+            port,
+            model,
+        },
+        api_key,
+    })
+}
+
+fn default_managed_profile() -> ManagedHermesProfile {
+    ManagedHermesProfile {
+        name: "default".to_string(),
+        port: 8642,
+        model: crate::agent::DEFAULT_MODEL.to_string(),
+    }
+}
+
+fn managed_model_name(profile_name: &str) -> String {
+    if matches!(profile_name, "default" | "custom") {
+        crate::agent::DEFAULT_MODEL.to_string()
+    } else {
+        profile_name.to_string()
+    }
+}
+
+fn discover_hermes_key(home: &Path, base_url: &str, model: &str) -> Option<String> {
+    let target_port = local_base_port(base_url)?;
     let mut candidates = Vec::new();
     if let Some(active) = active_profile(home) {
         if active == "default" {
@@ -332,48 +439,50 @@ mod tests {
     fn discovers_the_matching_local_hermes_profile_without_paste() {
         let temp = tempfile::TempDir::new().unwrap();
         let root_profile = temp.path().join(".env");
-        let cadence = temp.path().join("profiles/cadence");
-        let motif = temp.path().join("profiles/motif");
-        fs::create_dir_all(&cadence).unwrap();
-        fs::create_dir_all(&motif).unwrap();
-        fs::write(temp.path().join("active_profile"), "motif\n").unwrap();
+        let focus = temp.path().join("profiles/focus");
+        let review = temp.path().join("profiles/review");
+        fs::create_dir_all(&focus).unwrap();
+        fs::create_dir_all(&review).unwrap();
+        fs::write(temp.path().join("active_profile"), "review\n").unwrap();
         fs::write(
             root_profile,
             "API_SERVER_PORT=8642\nAPI_SERVER_KEY=root-secret\n",
         )
         .unwrap();
         fs::write(
-            cadence.join(".env"),
-            "API_SERVER_PORT=8644\nAPI_SERVER_KEY=Bearer cadence-secret\n",
+            focus.join(".env"),
+            "API_SERVER_PORT=8651\nAPI_SERVER_KEY=Bearer focus-secret\n",
         )
         .unwrap();
         fs::write(
-            motif.join(".env"),
-            "API_SERVER_PORT=8644\nAPI_SERVER_KEY=Bearer motif-secret\n",
+            review.join(".env"),
+            "API_SERVER_PORT=8651\nAPI_SERVER_KEY=Bearer review-secret\n",
         )
         .unwrap();
 
         assert_eq!(
-            discover_hermes_key(temp.path(), "http://127.0.0.1:8644/v1", "cadence").as_deref(),
-            Some("motif-secret")
+            discover_hermes_key(temp.path(), "http://127.0.0.1:8651/v1", "focus").as_deref(),
+            Some("review-secret")
         );
         assert_eq!(
             discover_hermes_key(temp.path(), "http://127.0.0.1:8642/v1", "hermes-agent").as_deref(),
             Some("root-secret")
         );
         assert_eq!(
-            discover_hermes_key(temp.path(), "https://agent.example.com/v1", "cadence"),
+            discover_hermes_key(temp.path(), "https://agent.example.com/v1", "focus"),
             None
         );
         assert_eq!(local_base_port("not a URL"), None);
     }
 
     #[test]
-    fn default_profile_key_wins_when_an_active_profile_reuses_its_port() {
+    fn managed_connection_follows_the_active_profile_port_and_key() {
         let temp = tempfile::TempDir::new().unwrap();
-        let active = temp.path().join("profiles/active-custom");
+        let active = temp.path().join("profiles/focus");
+        let next = temp.path().join("profiles/review");
         fs::create_dir_all(&active).unwrap();
-        fs::write(temp.path().join("active_profile"), "active-custom\n").unwrap();
+        fs::create_dir_all(&next).unwrap();
+        fs::write(temp.path().join("active_profile"), "focus\n").unwrap();
         fs::write(
             temp.path().join(".env"),
             "API_SERVER_PORT=8642\nAPI_SERVER_KEY=default-secret\n",
@@ -381,49 +490,83 @@ mod tests {
         .unwrap();
         fs::write(
             active.join(".env"),
-            "API_SERVER_PORT=8642\nAPI_SERVER_KEY=custom-secret\n",
+            "API_SERVER_PORT=8651\nAPI_SERVER_MODEL_NAME=focus-gateway\nAPI_SERVER_KEY=active-secret\n",
+        )
+        .unwrap();
+        fs::write(
+            next.join(".env"),
+            "API_SERVER_PORT=8653\nAPI_SERVER_KEY=next-secret\n",
         )
         .unwrap();
 
+        let profile = managed_profile_for_home(temp.path()).profile;
         assert_eq!(
-            discover_hermes_key(temp.path(), "http://127.0.0.1:8642/v1", "hermes-agent").as_deref(),
-            Some("default-secret")
+            profile,
+            ManagedHermesProfile {
+                name: "focus".to_string(),
+                port: 8651,
+                model: "focus-gateway".to_string(),
+            }
+        );
+        assert_eq!(
+            managed_profile_key(temp.path()).as_deref(),
+            Some("active-secret")
+        );
+        assert_eq!(profile.model, "focus-gateway");
+
+        fs::write(temp.path().join("active_profile"), "review\n").unwrap();
+        let profile = managed_profile_for_home(temp.path()).profile;
+        assert_eq!(
+            profile,
+            ManagedHermesProfile {
+                name: "review".to_string(),
+                port: 8653,
+                model: "review".to_string(),
+            }
+        );
+        assert_eq!(
+            managed_profile_key(temp.path()).as_deref(),
+            Some("next-secret")
         );
     }
 
     #[test]
-    fn default_profile_does_not_borrow_a_custom_profile_key() {
+    fn managed_connection_falls_back_to_the_default_profile() {
         let temp = tempfile::TempDir::new().unwrap();
-        let active = temp.path().join("profiles/active-custom");
-        fs::create_dir_all(&active).unwrap();
-        fs::write(temp.path().join("active_profile"), "active-custom\n").unwrap();
+        fs::write(temp.path().join("active_profile"), "missing-profile\n").unwrap();
         fs::write(
-            active.join(".env"),
-            "API_SERVER_PORT=8642\nAPI_SERVER_KEY=custom-secret\n",
+            temp.path().join(".env"),
+            "API_SERVER_PORT=8652\nAPI_SERVER_KEY=default-secret\n",
         )
         .unwrap();
 
+        let profile = managed_profile_for_home(temp.path()).profile;
         assert_eq!(
-            discover_hermes_key(
-                temp.path(),
-                crate::agent::DEFAULT_BASE_URL,
-                crate::agent::DEFAULT_MODEL,
-            ),
-            None
+            profile,
+            ManagedHermesProfile {
+                name: "default".to_string(),
+                port: 8652,
+                model: crate::agent::DEFAULT_MODEL.to_string(),
+            }
         );
+        assert_eq!(
+            managed_profile_key(temp.path()).as_deref(),
+            Some("default-secret")
+        );
+        assert_eq!(profile.model, crate::agent::DEFAULT_MODEL);
     }
 
     #[test]
     fn only_the_exact_default_connection_uses_default_profile_policy() {
-        assert!(is_default_profile_connection(
+        assert!(crate::agent::is_default_profile_connection(
             crate::agent::DEFAULT_BASE_URL,
             crate::agent::DEFAULT_MODEL
         ));
-        assert!(!is_default_profile_connection(
+        assert!(!crate::agent::is_default_profile_connection(
             "http://127.0.0.1:8644/v1",
             crate::agent::DEFAULT_MODEL
         ));
-        assert!(!is_default_profile_connection(
+        assert!(!crate::agent::is_default_profile_connection(
             crate::agent::DEFAULT_BASE_URL,
             "custom-agent"
         ));
@@ -442,11 +585,11 @@ mod tests {
         )
         .unwrap();
         fs::create_dir_all(temp.path().join("profiles")).unwrap();
-        symlink(outside.path(), temp.path().join("profiles/cadence")).unwrap();
-        fs::write(temp.path().join("active_profile"), "cadence\n").unwrap();
+        symlink(outside.path(), temp.path().join("profiles/linked-profile")).unwrap();
+        fs::write(temp.path().join("active_profile"), "linked-profile\n").unwrap();
 
         assert_eq!(
-            discover_hermes_key(temp.path(), "http://127.0.0.1:8644/v1", "cadence"),
+            discover_hermes_key(temp.path(), "http://127.0.0.1:8644/v1", "linked-profile"),
             None
         );
 
