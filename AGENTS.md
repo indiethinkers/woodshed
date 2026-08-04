@@ -208,7 +208,8 @@ changing behavior:
 - Record schemas: `src-tauri/src/parsers/` and domain-specific renderers
 - Registered commands: the invoke handler in `src-tauri/src/lib.rs`
 - Routes: `src/routes/` and the generated route tree
-- Main navigation: `src/components/layout/sidebar.tsx`
+- Main navigation: `src/components/layout/sidebar.tsx` and
+  `src/components/layout/title-bar-actions.tsx`
 - Permissions: `src-tauri/capabilities/` and Tauri configuration
 - Verification commands: `README.md`, `package.json`, and `Cargo.toml`
 

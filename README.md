@@ -59,12 +59,13 @@ packaging instructions live in
 |---|---|
 | **Cadence** | Combines the daily journal, calendar schedule, and task rail |
 | **Mail** | Unifies configured Gmail inboxes, searchable sent/archive folders, drafts, and replies |
-| **Agent** | Stores AI conversations as vault records and adds page-aware chat |
+| **Agent** | Stores AI conversations as vault records, keeps submitted runs working across navigation, and shows streamed replies, reasoning, tool and plan progress, and provider-reported usage when available |
 | **Notebook** | Provides long-form Markdown editing plus folder browsing for adopted files |
 | **Resources** | Captures web links, metadata, highlights, and personal notes |
 | **People** | Acts as a personal CRM connected to events, notes, mail, and areas |
 | **Databases** | Supports resizable structured tables, board views, rows, and generated tag tables |
 | **Areas** | Groups related notes, tasks, events, and people around a focus |
+| **Graph** | Visualizes vault wikilinks and backlinks from the title bar or command palette; it has no numbered shortcut |
 
 ### Features across every surface
 
@@ -393,8 +394,8 @@ to disable automatic refresh.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 
-Generated Agent plans show confirmation before creating records, archiving mail,
-or performing other supported mutations.
+Agent-proposed mutations show their concrete operation and require confirmation
+before creating records, archiving mail, or performing other supported writes.
 
 See the [privacy notice](docs/legal/PRIVACY.md) and
 [security model](docs/SECURITY-MODEL.md) for the complete boundaries.

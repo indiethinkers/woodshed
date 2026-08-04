@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** August 3, 2026
+**Effective:** July 26, 2026 · **Last updated:** August 4, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -27,7 +27,8 @@ cache.
   SQLite search index, a rebuildable iCal event cache, durable Agent run records,
   and rotating local logs. Agent run records include submitted message context,
   progress events, final responses, and errors so a request can survive page
-  navigation or reload.
+  navigation or reload. When the configured provider reports token usage,
+  Woodshed stores it as a progress event in the corresponding run record.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. Local Hermes keys are

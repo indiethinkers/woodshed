@@ -63,8 +63,10 @@ conversation id, submitted message context, streamed progress, terminal result,
 and error state. The webview can poll or cancel through narrow commands but does
 not own the network request. Completion writes one deterministic assistant
 message id to the vault transcript, and repeat finalization checks that id before
-writing. After an app restart, a queued or running record with no process-local
-owner becomes a recoverable failure when it is next read.
+writing. The global active-run query considers only process-owned run ids and
+reads at most 20 run records per poll. After an app restart, a queued or running
+record with no process-local owner becomes a recoverable failure when it is next
+read.
 
 Gmail App Passwords and custom Hermes bearer keys live in an atomic, owner-only
 (`0600`) `secrets.json` file under the application-data directory. It is
@@ -138,11 +140,11 @@ sizes, stream sizes, and timeouts are still bounded.
 
 ## Explicit authority
 
-External writes are initiated by the user. Agent-generated action plans display
-the concrete operation fields—including resource URLs and task scheduling—and
-require confirmation before creating records or archiving mail. Confirmation
-text is normalized and bounded before display, and execution uses those exact
-confirmed values.
+External writes are initiated by the user. Agent-proposed mutations display the
+concrete operation fields—including resource URLs and task scheduling—and require
+confirmation before creating records or archiving mail. Confirmation text is
+normalized and bounded before display, and execution uses those exact confirmed
+values.
 
 ## Residual assumptions
 
