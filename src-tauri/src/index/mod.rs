@@ -957,7 +957,11 @@ fn migrate_mail_attention(conn: &mut Connection) -> Result<()> {
         columns
     };
     if !columns.iter().any(|column| column == "needs_attention") {
-        conn.execute(
+        // Keep the schema change and its legacy-row projection atomic. If the
+        // process stops during the backfill, SQLite rolls the added column
+        // back too, so the next startup can safely retry the whole migration.
+        let tx = conn.transaction()?;
+        tx.execute(
             "ALTER TABLE mail_summaries \
              ADD COLUMN needs_attention INTEGER NOT NULL DEFAULT 0",
             [],
@@ -965,7 +969,7 @@ fn migrate_mail_attention(conn: &mut Connection) -> Result<()> {
         .context("ALTER TABLE add mail attention state")?;
 
         let rows = {
-            let mut stmt = conn.prepare("SELECT path, summary_json FROM mail_summaries")?;
+            let mut stmt = tx.prepare("SELECT path, summary_json FROM mail_summaries")?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -973,7 +977,6 @@ fn migrate_mail_attention(conn: &mut Connection) -> Result<()> {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
         };
-        let tx = conn.transaction()?;
         for (path, summary_json) in rows {
             let needs_attention = serde_json::from_str::<MailAttentionProjection>(&summary_json)
                 .map(|summary| !summary.read && !summary.viewed)
@@ -983,7 +986,13 @@ fn migrate_mail_attention(conn: &mut Connection) -> Result<()> {
                 params![i64::from(needs_attention), path],
             )?;
         }
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mail_summaries_attention \
+             ON mail_summaries(needs_attention, path)",
+            [],
+        )?;
         tx.commit()?;
+        return Ok(());
     }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mail_summaries_attention \
@@ -2123,6 +2132,58 @@ mod tests {
 
         let handle = IndexHandle::open(&path).unwrap();
         assert_eq!(handle.mail_folder_unread_count("inbox/").unwrap(), 1);
+    }
+
+    #[test]
+    fn interrupted_mail_attention_migration_rolls_back_and_retries() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("interrupted-mail.db");
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mail_summaries (
+                path TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                date_ms INTEGER NOT NULL,
+                summary_json TEXT NOT NULL
+            );
+            INSERT INTO mail_summaries (path, thread_id, date_ms, summary_json)
+            VALUES (
+                'inbox/synthetic.md',
+                'thread-synthetic',
+                0,
+                '{\"read\":false,\"viewed\":false}'
+            );
+            CREATE TRIGGER interrupt_attention_backfill
+            BEFORE UPDATE ON mail_summaries
+            BEGIN
+                SELECT RAISE(ABORT, 'synthetic interruption');
+            END;",
+        )
+        .unwrap();
+
+        assert!(migrate_mail_attention(&mut conn).is_err());
+        let columns_after_failure = {
+            let mut stmt = conn.prepare("PRAGMA table_info(mail_summaries)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(!columns_after_failure
+            .iter()
+            .any(|column| column == "needs_attention"));
+
+        conn.execute("DROP TRIGGER interrupt_attention_backfill", [])
+            .unwrap();
+        migrate_mail_attention(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mail_summaries WHERE needs_attention = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     fn doc(kind: &'static str, id: &str, title: &str, body: &str) -> IndexedDoc {

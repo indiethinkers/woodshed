@@ -117,10 +117,27 @@ function needsAttention(email: EmailSummary | null | undefined): boolean {
   return Boolean(email && !email.read && email.viewed !== true);
 }
 
-function decrementUnreadCount(qc: QueryClient) {
-  qc.setQueryData<number | undefined>(MAIL_UNREAD_COUNT_KEY, (count) =>
-    count === undefined ? count : Math.max(0, count - 1),
-  );
+function decrementUnreadCount(qc: QueryClient): Promise<void> {
+  // Stop an older aggregate read before publishing the optimistic value. The
+  // query function cannot abort the native command, but TanStack Query will
+  // ignore its eventual stale result after cancellation.
+  const cancellation = qc.cancelQueries({
+    queryKey: MAIL_UNREAD_COUNT_KEY,
+    exact: true,
+  });
+  const current = qc.getQueryData<number>(MAIL_UNREAD_COUNT_KEY);
+  const optimistic = current === undefined ? undefined : Math.max(0, current - 1);
+  if (optimistic !== undefined) {
+    qc.setQueryData(MAIL_UNREAD_COUNT_KEY, optimistic);
+  }
+  return cancellation.then(() => {
+    if (optimistic === undefined) return;
+    // Cancellation can restore its pre-fetch snapshot. Never raise a lower
+    // value written by another optimistic mutation while cancellation settled.
+    qc.setQueryData<number | undefined>(MAIL_UNREAD_COUNT_KEY, (count) =>
+      count === undefined ? optimistic : Math.min(count, optimistic),
+    );
+  });
 }
 
 function refreshUnreadCount(qc: QueryClient) {
@@ -383,8 +400,6 @@ export function useThread(threadId: string | null | undefined) {
  * calls or unnecessary cache writes.
  */
 async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
-  await cancelMailReads(qc, id);
-
   const previousList = qc.getQueryData<MailCache>(["emails"]);
   const previousOne = qc.getQueryData<EmailSummary | null>(["email", id]);
   const previousListEmail = findCachedEmail(previousList, id)?.email;
@@ -422,8 +437,17 @@ async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
     return;
   }
 
+  // Capture and publish the aggregate change before cancellation yields. A
+  // second open for the same message marks its cached copies viewed while it
+  // shares this request; delaying this check would then miss the decrement.
+  const unreadCountSettled = wasUnread
+    ? decrementUnreadCount(qc)
+    : Promise.resolve();
   updateMailCopies(qc, id, asViewed);
-  if (wasUnread) decrementUnreadCount(qc);
+  await Promise.all([cancelMailReads(qc, id), unreadCountSettled]);
+  // Cancellation may restore a query snapshot captured before the optimistic
+  // write, so publish the viewed state again after every read has settled.
+  updateMailCopies(qc, id, asViewed);
   try {
     await mailMarkRead(id);
   } catch (error) {
@@ -498,14 +522,16 @@ export function useArchiveOne() {
     });
     const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousEmail = findCachedEmail(previousList, id);
-    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
+    const unreadCountSettled = needsAttention(previousEmail?.email)
+      ? decrementUnreadCount(qc)
+      : Promise.resolve();
     hideArchivedEmail(qc, id);
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
     const archiveRequest = mailArchiveOne(id);
     try {
-      await cancelExistingReads;
+      await Promise.all([cancelExistingReads, unreadCountSettled]);
       await archiveRequest;
       await qc.cancelQueries({ queryKey: ["emails"] });
       qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
@@ -539,13 +565,15 @@ export function useSnoozeOne() {
     });
     const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousEmail = findCachedEmail(previousList, id);
-    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
+    const unreadCountSettled = needsAttention(previousEmail?.email)
+      ? decrementUnreadCount(qc)
+      : Promise.resolve();
     hideArchivedEmail(qc, id);
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
     try {
-      await cancelExistingReads;
+      await Promise.all([cancelExistingReads, unreadCountSettled]);
       await mailSnooze({ id, snoozedUntil });
       await qc.cancelQueries({ queryKey: ["emails"] });
       qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
@@ -589,12 +617,15 @@ export function useDeleteOne() {
   return async (id: string) => {
     const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousEmail = findCachedEmail(previousList, id);
-    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
+    const unreadCountSettled = needsAttention(previousEmail?.email)
+      ? decrementUnreadCount(qc)
+      : Promise.resolve();
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
     try {
-      await mailDeleteOne(id);
+      const deleteRequest = mailDeleteOne(id);
+      await Promise.all([deleteRequest, unreadCountSettled]);
       qc.invalidateQueries({ queryKey: ["email", id] });
       qc.invalidateQueries({ queryKey: ["thread"] });
       refreshUnreadCount(qc);

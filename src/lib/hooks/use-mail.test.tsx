@@ -260,6 +260,7 @@ describe("useMarkRead", () => {
     });
     const email = makeEmail();
     qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
 
     let finishSync!: () => void;
     invokeMock.mockImplementationOnce(
@@ -279,11 +280,83 @@ describe("useMarkRead", () => {
       second = result.current(email.id);
     });
 
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
     await act(async () => {
       finishSync();
       await Promise.all([first, second]);
     });
+  });
+
+  it("decrements once when mark-read overlaps an archive", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
+    invokeMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => ({ markRead: useMarkRead(), archive: useArchiveOne() }),
+      { wrapper: makeWrapper(qc) },
+    );
+
+    let markRead!: Promise<void>;
+    let archive!: Promise<void>;
+    act(() => {
+      markRead = result.current.markRead(email.id);
+      archive = result.current.archive(email.id);
+    });
+
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
+    await act(async () => {
+      await Promise.all([markRead, archive]);
+    });
+  });
+
+  it("ignores an older unread-count result after marking read", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
+
+    let resolveStaleCount!: (count: number) => void;
+    const staleCountRequest = qc
+      .fetchQuery({
+        queryKey: ["mail-unread-count"],
+        queryFn: () =>
+          new Promise<number>((resolve) => {
+            resolveStaleCount = resolve;
+          }),
+        staleTime: 0,
+      })
+      .catch(() => undefined);
+    invokeMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let markRead!: Promise<void>;
+    act(() => {
+      markRead = result.current(email.id);
+    });
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
+
+    resolveStaleCount(2);
+    await act(async () => {
+      await Promise.all([markRead, staleCountRequest]);
+    });
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
   });
 
   it("updates a thread cache that appears while provider sync is pending", async () => {
