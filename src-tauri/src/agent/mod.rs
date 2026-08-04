@@ -826,6 +826,29 @@ where
     Start: FnMut() -> Result<(), String>,
     Event: FnMut(AgentStreamEvent) -> Result<(), String>,
 {
+    chat_completion_stream_with_idle_timeout(
+        config,
+        api_key,
+        input,
+        &mut on_start,
+        &mut on_event,
+        Duration::from_secs(300),
+    )
+    .await
+}
+
+async fn chat_completion_stream_with_idle_timeout<Start, Event>(
+    config: &HermesConfigMeta,
+    api_key: &str,
+    input: AgentChatInput,
+    on_start: &mut Start,
+    on_event: &mut Event,
+    idle_timeout: Duration,
+) -> Result<(), String>
+where
+    Start: FnMut() -> Result<(), String>,
+    Event: FnMut(AgentStreamEvent) -> Result<(), String>,
+{
     let base_url = normalize_base_url(&config.base_url)?;
     let chat_url = format!("{base_url}/chat/completions");
     let session_id = input.conversation_id.trim();
@@ -837,7 +860,7 @@ where
     let messages = normalize_chat_messages(input.messages)?;
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| format!("build client failed: {e}"))?;
 
@@ -873,9 +896,9 @@ where
     let mut parse_state = StreamParseState::default();
     let mut produced = false;
     let mut received_bytes = 0usize;
-    while let Some(chunk) = response
-        .chunk()
+    while let Some(chunk) = tokio::time::timeout(idle_timeout, response.chunk())
         .await
+        .map_err(|_| stream_idle_timeout_message())?
         .map_err(|_| stream_read_failure_message())?
     {
         received_bytes = received_bytes.saturating_add(chunk.len());
@@ -885,15 +908,15 @@ where
             ));
         }
         buffer.push_str(&String::from_utf8_lossy(&chunk));
-        produced |= drain_sse_buffer(&mut buffer, &mut parse_state, &mut on_event)?;
+        produced |= drain_sse_buffer(&mut buffer, &mut parse_state, on_event)?;
         if buffer.len() > MAX_AGENT_STREAM_BUFFER {
             return Err("Hermes stream contained an oversized event".to_string());
         }
     }
     if !buffer.trim().is_empty() {
-        produced |= parse_sse_event(&buffer, &mut parse_state, &mut on_event)?;
+        produced |= parse_sse_event(&buffer, &mut parse_state, on_event)?;
     }
-    produced |= finish_stream_parse(&mut parse_state, &mut on_event)?;
+    produced |= finish_stream_parse(&mut parse_state, on_event)?;
     // A stream that completes without ever emitting assistant text is a failure,
     // not an empty success — Hermes does this when the upstream model is rate
     // limited or unavailable and sends no content deltas. Without this the UI
@@ -910,6 +933,11 @@ where
 
 fn stream_read_failure_message() -> String {
     "Hermes ended its response unexpectedly. This agent run was saved as failed; try again."
+        .to_string()
+}
+
+fn stream_idle_timeout_message() -> String {
+    "Hermes stopped sending updates for five minutes. This agent run was saved as failed; try again."
         .to_string()
 }
 
@@ -1431,6 +1459,71 @@ mod tests {
         assert!(message.contains("ended its response unexpectedly"));
         assert!(message.contains("saved as failed"));
         assert!(!message.contains("error decoding response body"));
+    }
+
+    #[tokio::test]
+    async fn active_stream_can_outlive_its_idle_timeout_window() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            for payload in [
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Still \"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"working\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            ] {
+                let chunk = format!("{:x}\r\n{payload}\r\n", payload.len());
+                if socket.write_all(chunk.as_bytes()).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        });
+
+        let config = HermesConfigMeta {
+            base_url: format!("http://{address}/v1"),
+            ..HermesConfigMeta::default()
+        };
+        let input = AgentChatInput {
+            conversation_id: "synthetic-stream".to_string(),
+            messages: vec![AgentChatMessage {
+                role: "user".to_string(),
+                content: "Keep streaming synthetic output.".to_string(),
+            }],
+        };
+        let mut started = false;
+        let mut output = String::new();
+        let result = chat_completion_stream_with_idle_timeout(
+            &config,
+            "synthetic-key",
+            input,
+            &mut || {
+                started = true;
+                Ok(())
+            },
+            &mut |event| {
+                if event.kind == "delta" {
+                    output.push_str(event.delta.as_deref().unwrap_or_default());
+                }
+                Ok(())
+            },
+            Duration::from_millis(200),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert!(result.is_ok(), "active stream failed: {result:?}");
+        assert!(started);
+        assert_eq!(output, "Still working");
     }
 
     #[test]

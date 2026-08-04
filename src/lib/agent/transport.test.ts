@@ -282,6 +282,42 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("polls active runs every 100ms by default for responsive streaming", async () => {
+    vi.useFakeTimers();
+    let stream: ReadableStream<UIMessageChunk> | undefined;
+    try {
+      mocks.tauriInvoke
+        .mockResolvedValueOnce(
+          run({ status: "running", events: [], finalResponse: null }),
+        )
+        .mockResolvedValueOnce(run());
+      const transport = createAgentChatTransport();
+
+      stream = await transport.sendMessages({
+        abortSignal: undefined,
+        chatId: "chat-1",
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            parts: [{ type: "text", text: "Stream a synthetic response." }],
+          },
+        ],
+        trigger: "submit-message",
+        messageId: "message-1",
+      });
+
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(2);
+    } finally {
+      await stream?.cancel();
+      vi.useRealTimers();
+    }
+  });
+
   it("coalesces a burst of text events from one poll into one UI update", async () => {
     const deltas = Array.from({ length: 250 }, (_, index) => ({
       kind: "delta" as const,

@@ -9,10 +9,11 @@ use crate::vault as vault_lib;
 use crate::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
@@ -55,7 +56,6 @@ enum AgentPdfHelperResponse {
 struct AgentRunProgress {
     response: String,
     pending_events: Vec<agent::AgentStreamEvent>,
-    last_flush: Instant,
 }
 
 fn push_coalesced_agent_event(
@@ -840,7 +840,6 @@ async fn run_agent_job_inner(
     let progress = Arc::new(Mutex::new(AgentRunProgress {
         response: String::new(),
         pending_events: Vec::new(),
-        last_flush: Instant::now(),
     }));
     let progress_for_events = progress.clone();
     let stream = agent::chat_completion_stream(
@@ -849,53 +848,26 @@ async fn run_agent_job_inner(
         chat_input,
         || Ok(()),
         |event| {
-            let pending_events = {
-                let mut progress = progress_for_events.lock_recover();
-                if event.kind == "delta" {
-                    if let Some(delta) = event.delta.as_deref() {
-                        progress.response.push_str(delta);
-                    }
+            let mut progress = progress_for_events.lock_recover();
+            if event.kind == "delta" {
+                if let Some(delta) = event.delta.as_deref() {
+                    progress.response.push_str(delta);
                 }
-                push_coalesced_agent_event(&mut progress.pending_events, event);
-                if progress.last_flush.elapsed() < AGENT_RUN_EVENT_FLUSH_INTERVAL {
-                    Vec::new()
-                } else {
-                    progress.last_flush = Instant::now();
-                    std::mem::take(&mut progress.pending_events)
-                }
-            };
-            if pending_events.is_empty() {
-                return Ok(());
             }
-            let _mutation = state.agent_run_mutations.lock_recover();
-            runs::append_events(
-                &app_data,
-                run_id,
-                pending_events,
-                &chrono::Local::now().to_rfc3339(),
-            )?;
+            push_coalesced_agent_event(&mut progress.pending_events, event);
             Ok(())
         },
     );
-    tokio::pin!(stream);
-    let stream_result = tokio::select! {
-        result = &mut stream => Some(result),
-        _ = wait_for_cancel(cancel_rx) => None,
-    };
-    let (final_response, pending_events) = {
-        let mut progress = progress.lock_recover();
-        (
-            progress.response.clone(),
-            std::mem::take(&mut progress.pending_events),
-        )
-    };
+    let stream_result = wait_for_agent_stream(
+        stream,
+        wait_for_cancel(cancel_rx),
+        AGENT_RUN_EVENT_FLUSH_INTERVAL,
+        || flush_agent_run_events(&app_data, &state, run_id, &progress),
+    )
+    .await;
+    let final_response = progress.lock_recover().response.clone();
+    flush_agent_run_events(&app_data, &state, run_id, &progress)?;
     let _mutation = state.agent_run_mutations.lock_recover();
-    runs::append_events(
-        &app_data,
-        run_id,
-        pending_events,
-        &chrono::Local::now().to_rfc3339(),
-    )?;
     match stream_result {
         None => {
             runs::cancel(&app_data, run_id, &chrono::Local::now().to_rfc3339())?;
@@ -912,6 +884,58 @@ async fn run_agent_job_inner(
         }
     }
     Ok(())
+}
+
+fn flush_agent_run_events(
+    app_data: &Path,
+    state: &AppState,
+    run_id: &str,
+    progress: &Arc<Mutex<AgentRunProgress>>,
+) -> Result<(), String> {
+    let pending_events = {
+        let mut progress = progress.lock_recover();
+        std::mem::take(&mut progress.pending_events)
+    };
+    if pending_events.is_empty() {
+        return Ok(());
+    }
+    let _mutation = state.agent_run_mutations.lock_recover();
+    runs::append_events(
+        app_data,
+        run_id,
+        pending_events,
+        &chrono::Local::now().to_rfc3339(),
+    )?;
+    Ok(())
+}
+
+async fn wait_for_agent_stream<Stream, Cancel, Flush>(
+    stream: Stream,
+    cancel: Cancel,
+    flush_interval: Duration,
+    mut flush: Flush,
+) -> Option<Result<(), String>>
+where
+    Stream: Future<Output = Result<(), String>>,
+    Cancel: Future<Output = ()>,
+    Flush: FnMut() -> Result<(), String>,
+{
+    tokio::pin!(stream);
+    tokio::pin!(cancel);
+    let mut interval = tokio::time::interval(flush_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            result = &mut stream => return Some(result),
+            _ = &mut cancel => return None,
+            _ = interval.tick() => {
+                if let Err(error) = flush() {
+                    return Some(Err(error));
+                }
+            }
+        }
+    }
 }
 
 async fn wait_for_cancel(receiver: &mut tokio::sync::watch::Receiver<bool>) {
@@ -1191,6 +1215,31 @@ mod tests {
         );
         assert_eq!(events[1].kind, "reasoning-delta");
         assert_eq!(events[1].delta.as_deref(), Some("checking sources"));
+    }
+
+    #[tokio::test]
+    async fn agent_stream_flush_timer_runs_without_another_event() {
+        let mut flushes = 0;
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            wait_for_agent_stream(
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                },
+                std::future::pending(),
+                Duration::from_millis(10),
+                || {
+                    flushes += 1;
+                    Err("stop after scheduled flush".to_string())
+                },
+            ),
+        )
+        .await
+        .expect("scheduled flush should run without another stream event");
+
+        assert_eq!(result, Some(Err("stop after scheduled flush".to_string())));
+        assert_eq!(flushes, 1);
     }
 
     #[test]

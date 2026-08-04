@@ -213,7 +213,7 @@ function streamAgentRun(
       if (accept(initialRun)) return;
 
       while (!stopped) {
-        await delay(options.pollIntervalMs ?? 300);
+        await delay(options.pollIntervalMs ?? 100);
         if (stopped) return;
         try {
           const run = await tauriInvoke<AgentRun | null>("agent_run_get", {
