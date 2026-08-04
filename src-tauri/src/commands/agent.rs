@@ -58,6 +58,36 @@ struct AgentRunProgress {
     last_flush: Instant,
 }
 
+fn push_coalesced_agent_event(
+    events: &mut Vec<agent::AgentStreamEvent>,
+    event: agent::AgentStreamEvent,
+) {
+    if let Some(previous) = events.last_mut() {
+        if previous.kind == event.kind && matches!(event.kind.as_str(), "delta" | "reasoning-delta")
+        {
+            if let (Some(existing), Some(incoming)) =
+                (previous.delta.as_mut(), event.delta.as_deref())
+            {
+                existing.push_str(incoming);
+                return;
+            }
+        }
+        if previous.kind == "tool-input-delta"
+            && event.kind == "tool-input-delta"
+            && previous.tool_call_id == event.tool_call_id
+        {
+            if let (Some(existing), Some(incoming)) = (
+                previous.input_text_delta.as_mut(),
+                event.input_text_delta.as_deref(),
+            ) {
+                existing.push_str(incoming);
+                return;
+            }
+        }
+    }
+    events.push(event);
+}
+
 /// Convert user-selected attachment bytes into bounded text before Hermes sees
 /// the message. The agent receives neither the original filesystem path nor a
 /// filename-only hint, so it has no reason to probe Desktop, Photos, or Music
@@ -826,7 +856,7 @@ async fn run_agent_job_inner(
                         progress.response.push_str(delta);
                     }
                 }
-                progress.pending_events.push(event);
+                push_coalesced_agent_event(&mut progress.pending_events, event);
                 if progress.last_flush.elapsed() < AGENT_RUN_EVENT_FLUSH_INTERVAL {
                     Vec::new()
                 } else {
@@ -1128,6 +1158,39 @@ mod tests {
         .unwrap();
         assert_eq!(late_completion.status, runs::AgentRunStatus::Cancelled);
         assert!(late_completion.final_response.is_none());
+    }
+
+    #[test]
+    fn adjacent_agent_deltas_are_compacted_before_persistence() {
+        let mut events = Vec::new();
+        for index in 0..250 {
+            push_coalesced_agent_event(
+                &mut events,
+                agent::AgentStreamEvent::text_delta(format!("token-{index} ")),
+            );
+        }
+        push_coalesced_agent_event(
+            &mut events,
+            agent::AgentStreamEvent::reasoning_delta("checking ".to_string()),
+        );
+        push_coalesced_agent_event(
+            &mut events,
+            agent::AgentStreamEvent::reasoning_delta("sources".to_string()),
+        );
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "delta");
+        assert_eq!(
+            events[0]
+                .delta
+                .as_deref()
+                .unwrap()
+                .matches("token-")
+                .count(),
+            250
+        );
+        assert_eq!(events[1].kind, "reasoning-delta");
+        assert_eq!(events[1].delta.as_deref(), Some("checking sources"));
     }
 
     #[test]

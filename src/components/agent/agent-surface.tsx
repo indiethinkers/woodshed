@@ -27,6 +27,7 @@ import {
 import { nanoid } from "nanoid";
 import {
   Fragment,
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -1654,15 +1655,7 @@ function CadenceAvatar({
   );
 }
 
-export function AgentMessage({
-  compact = false,
-  displayName,
-  isFirst,
-  isLastMessage,
-  isStreaming,
-  message,
-  onToolApprovalResponse,
-}: {
+interface AgentMessageProps {
   compact?: boolean;
   displayName: string;
   isFirst: boolean;
@@ -1670,7 +1663,17 @@ export function AgentMessage({
   isStreaming: boolean;
   message: UIMessage;
   onToolApprovalResponse: ChatAddToolApproveResponseFunction;
-}) {
+}
+
+function AgentMessageInner({
+  compact = false,
+  displayName,
+  isFirst,
+  isLastMessage,
+  isStreaming,
+  message,
+  onToolApprovalResponse,
+}: AgentMessageProps) {
   const text = messageText(message);
   const isUser = message.role === "user";
   const fileParts = isUser ? filePartsFromMessage(message) : [];
@@ -1806,6 +1809,19 @@ export function AgentMessage({
     </Message>
   );
 }
+
+export const AgentMessage = memo(
+  AgentMessageInner,
+  (previous, next) =>
+    previous.compact === next.compact &&
+    previous.displayName === next.displayName &&
+    previous.isFirst === next.isFirst &&
+    previous.isLastMessage === next.isLastMessage &&
+    previous.isStreaming === next.isStreaming &&
+    previous.message === next.message &&
+    previous.onToolApprovalResponse === next.onToolApprovalResponse,
+);
+AgentMessage.displayName = "AgentMessage";
 
 interface AgentResponseArtifactData {
   title: string;

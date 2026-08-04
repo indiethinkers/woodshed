@@ -171,7 +171,7 @@ function streamAgentRun(
       };
       const accept = (run: AgentRun): boolean => {
         options.onRunChange?.(run);
-        for (const event of run.events.slice(eventIndex)) {
+        for (const event of coalesceAgentEvents(run.events.slice(eventIndex))) {
           enqueueAgentEvent(controller, ids, event);
           if (event.kind === "delta" && event.delta) emittedText += event.delta;
         }
@@ -240,6 +240,50 @@ function streamAgentRun(
       stopped = true;
     },
   });
+}
+
+/**
+ * A durable run records model output at provider-token granularity. Polling can
+ * therefore discover hundreds of adjacent deltas at once. Replaying every one
+ * through the AI SDK forces React to rebuild and reparse the growing message
+ * hundreds of times in one task. Merge only adjacent, semantically equivalent
+ * deltas so tool/reasoning boundaries and their ordering remain intact while
+ * each poll produces a bounded number of UI updates.
+ */
+function coalesceAgentEvents(events: AgentRunEvent[]): AgentRunEvent[] {
+  const coalesced: AgentRunEvent[] = [];
+  for (const event of events) {
+    const previous = coalesced.at(-1);
+    if (event.kind === "delta" && event.delta) {
+      if (previous?.kind === "delta") {
+        previous.delta = `${previous.delta ?? ""}${event.delta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    if (event.kind === "reasoning-delta" && event.delta) {
+      if (previous?.kind === "reasoning-delta") {
+        previous.delta = `${previous.delta ?? ""}${event.delta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    if (event.kind === "tool-input-delta" && event.inputTextDelta) {
+      if (
+        previous?.kind === "tool-input-delta" &&
+        previous.toolCallId === event.toolCallId
+      ) {
+        previous.inputTextDelta = `${previous.inputTextDelta ?? ""}${event.inputTextDelta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    coalesced.push(event);
+  }
+  return coalesced;
 }
 
 async function listRuns(chatId: string): Promise<AgentRun[]> {

@@ -282,6 +282,40 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("coalesces a burst of text events from one poll into one UI update", async () => {
+    const deltas = Array.from({ length: 250 }, (_, index) => ({
+      kind: "delta" as const,
+      delta: `token-${index} `,
+    }));
+    const finalResponse = deltas.map((event) => event.delta).join("");
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockResolvedValueOnce(run({ events: deltas, finalResponse }));
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Stream a synthetic response." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+    const textDeltas = chunks.filter((chunk) => chunk.type === "text-delta");
+
+    expect(textDeltas).toEqual([
+      expect.objectContaining({ delta: finalResponse }),
+    ]);
+  });
+
   it("surfaces a durable failed status and its stored error", async () => {
     mocks.tauriInvoke.mockResolvedValueOnce(
       run({

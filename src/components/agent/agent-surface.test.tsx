@@ -1,4 +1,4 @@
-import type { DynamicToolUIPart } from "ai";
+import type { DynamicToolUIPart, UIMessage } from "ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -233,6 +233,38 @@ describe("AgentWorkIndicator", () => {
 });
 
 describe("AgentMessage activity state", () => {
+  it("does not reparse an unchanged prior message when its parent rerenders", () => {
+    const parts: UIMessage["parts"] = [
+      { type: "text", text: "A stable synthetic response." },
+    ];
+    let partReads = 0;
+    const message = {
+      id: "assistant-stable",
+      role: "assistant",
+    } as UIMessage;
+    Object.defineProperty(message, "parts", {
+      get() {
+        partReads += 1;
+        return parts;
+      },
+    });
+    const onToolApprovalResponse = vi.fn();
+    const props = {
+      displayName: "Hermes",
+      isFirst: true,
+      isLastMessage: false,
+      isStreaming: true,
+      message,
+      onToolApprovalResponse,
+    };
+    const { rerender } = render(<AgentMessage {...props} />);
+    const initialPartReads = partReads;
+
+    rerender(<AgentMessage {...props} />);
+
+    expect(partReads).toBe(initialPartReads);
+  });
+
   it("shows a compact non-collapsible wait state before meaningful activity arrives", () => {
     render(
       <AgentMessage
