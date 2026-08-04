@@ -466,12 +466,14 @@ action.
 
 The standard loopback endpoint follows Hermes's active profile and authenticates
 without a pasted token. Woodshed reads that profile's port, advertised gateway
-model, and key from bounded, regular, non-symlink profile files and uses the key
-in place without copying it. Explicit custom loopback endpoints resolve the
-profile owning their configured API port; custom remote endpoints require a
-bearer key stored through `CredentialBroker`. The active profile and its model
-and provider are changed in Hermes, while Woodshed displays connection status
-and hides managed connection fields.
+model, and key from bounded, regular, non-symlink `.env` and `config.yaml`
+files, applies Hermes's environment-over-config precedence, and uses the key in
+place without copying it. A named active profile that cannot be read safely
+fails closed instead of falling back to another profile. Explicit custom
+loopback endpoints resolve the profile owning their configured API port; custom
+remote endpoints require a bearer key stored through `CredentialBroker`. The
+active profile and its model and provider are changed in Hermes, while Woodshed
+displays connection status and hides managed connection fields.
 
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.

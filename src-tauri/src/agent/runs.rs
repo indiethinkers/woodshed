@@ -35,6 +35,8 @@ pub struct AgentRunRecord {
     pub final_response: Option<String>,
     pub error: Option<String>,
     pub retry_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
     #[serde(default)]
     pub transcript_finalized_at: Option<String>,
 }
@@ -147,6 +149,7 @@ pub fn create_or_get(
         final_response: None,
         error: None,
         retry_of: input.retry_of,
+        resolved_model: None,
         transcript_finalized_at: None,
     };
     write(app_data_dir, &run)?;
@@ -260,6 +263,20 @@ pub fn append_events(
     })
 }
 
+pub fn set_resolved_model(
+    app_data_dir: &Path,
+    run_id: &str,
+    model: &str,
+    now: &str,
+) -> Result<AgentRunRecord, String> {
+    update(app_data_dir, run_id, |run| {
+        if is_active(run.status) {
+            run.resolved_model = Some(model.to_string());
+            run.updated_at = now.to_string();
+        }
+    })
+}
+
 pub fn complete(
     app_data_dir: &Path,
     run_id: &str,
@@ -343,6 +360,17 @@ pub fn ensure_user_message_once(chat: &mut super::AgentChatRecord, run: &AgentRu
         return false;
     }
     chat.messages.push(run.input_message.clone());
+    true
+}
+
+pub fn apply_resolved_model(chat: &mut super::AgentChatRecord, run: &AgentRunRecord) -> bool {
+    let Some(model) = run.resolved_model.as_deref() else {
+        return false;
+    };
+    if chat.model == model {
+        return false;
+    }
+    chat.model = model.to_string();
     true
 }
 
@@ -530,6 +558,27 @@ mod tests {
         assert_eq!(runs[0].id, run.id);
         assert_eq!(runs[0].status, AgentRunStatus::Running);
         assert_eq!(runs[0].events.len(), 1);
+    }
+
+    #[test]
+    fn resolved_model_updates_the_durable_chat_frontmatter() {
+        let temp = tempfile::tempdir().unwrap();
+        let (run, _) = create_or_get(temp.path(), input(), "2031-02-03T12:00:00Z").unwrap();
+        mark_running(temp.path(), &run.id, "2031-02-03T12:00:01Z").unwrap();
+        let run = set_resolved_model(
+            temp.path(),
+            &run.id,
+            "focus-gateway",
+            "2031-02-03T12:00:02Z",
+        )
+        .unwrap();
+        let mut chat = chat();
+
+        assert!(apply_resolved_model(&mut chat, &run));
+        assert_eq!(chat.model, "focus-gateway");
+        assert!(!apply_resolved_model(&mut chat, &run));
+        let markdown = super::super::serialize_chat(&chat).unwrap();
+        assert!(markdown.contains("model: focus-gateway"));
     }
 
     #[test]

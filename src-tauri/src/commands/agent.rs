@@ -446,8 +446,7 @@ fn extract_pdf_text(_bytes: &[u8]) -> Result<String, String> {
 #[tauri::command]
 pub fn agent_config_get(app: AppHandle) -> Result<AgentConfig, String> {
     let meta = read_meta(&app)?;
-    let credential_source = agent::key::source(&app, &meta);
-    let managed_profile = agent::key::managed_profile(&app, &meta);
+    let (credential_source, managed_profile) = agent::key::describe(&app, &meta);
     Ok(agent::public_config(
         meta,
         credential_source,
@@ -471,8 +470,7 @@ pub fn agent_config_set(app: AppHandle, input: AgentConfigInput) -> Result<Agent
     }
 
     write_meta(&app, &meta)?;
-    let credential_source = agent::key::source(&app, &meta);
-    let managed_profile = agent::key::managed_profile(&app, &meta);
+    let (credential_source, managed_profile) = agent::key::describe(&app, &meta);
     Ok(agent::public_config(
         meta,
         credential_source,
@@ -485,8 +483,7 @@ pub fn agent_config_clear(app: AppHandle) -> Result<AgentConfig, String> {
     agent::key::forget(&app)?;
     let meta = HermesConfigMeta::default();
     write_meta(&app, &meta)?;
-    let credential_source = agent::key::source(&app, &meta);
-    let managed_profile = agent::key::managed_profile(&app, &meta);
+    let (credential_source, managed_profile) = agent::key::describe(&app, &meta);
     Ok(agent::public_config(
         meta,
         credential_source,
@@ -499,7 +496,9 @@ pub async fn agent_connection_test(app: AppHandle) -> Result<AgentConnectionTest
     let stored_meta = read_meta(&app)?;
     let connection =
         agent::key::resolve_connection(&app, &stored_meta).map_err(|e| e.to_string())?;
-    agent::test_connection(&connection.config, &connection.api_key).await
+    let mut result = agent::test_connection(&connection.config, &connection.api_key).await?;
+    result.managed_profile = connection.managed_profile;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -915,6 +914,16 @@ async fn run_agent_job_inner(
         agent::key::resolve_connection(app, &stored_meta).map_err(|error| error.to_string())?;
     let meta = connection.config;
     let api_key = connection.api_key;
+    let run = {
+        let _mutation = state.agent_run_mutations.lock_recover();
+        runs::set_resolved_model(
+            &app_data,
+            run_id,
+            &meta.model,
+            &chrono::Local::now().to_rfc3339(),
+        )?
+    };
+    ensure_run_user_message(app, &state, &run)?;
     let chat_input = AgentChatInput {
         conversation_id: run.session_id.clone(),
         messages: run.request_messages.clone(),
@@ -1098,7 +1107,9 @@ fn ensure_run_user_message(
     run: &AgentRunRecord,
 ) -> Result<(), String> {
     let mut chat = load_or_create_run_chat(app, run)?;
-    if runs::ensure_user_message_once(&mut chat, run) {
+    let user_changed = runs::ensure_user_message_once(&mut chat, run);
+    let model_changed = runs::apply_resolved_model(&mut chat, run);
+    if user_changed || model_changed {
         update_chat_metadata(&mut chat, run.input_message.created_at.as_str());
         let vault = vault_root(app)?;
         let path = agent::chat_path(&vault, &chat.id)?;
@@ -1115,7 +1126,8 @@ fn reconcile_completed_chat(
     let mut chat = load_or_create_run_chat(app, run)?;
     let user_changed = runs::ensure_user_message_once(&mut chat, run);
     let assistant_changed = runs::finalize_chat_once(&mut chat, run);
-    if user_changed || assistant_changed {
+    let model_changed = runs::apply_resolved_model(&mut chat, run);
+    if user_changed || assistant_changed || model_changed {
         update_chat_metadata(&mut chat, run.updated_at.as_str());
         let vault = vault_root(app)?;
         let path = agent::chat_path(&vault, &chat.id)?;

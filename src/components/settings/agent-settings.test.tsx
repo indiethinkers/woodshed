@@ -13,6 +13,7 @@ const config = vi.hoisted(() => ({
     name: string;
     port: number;
     model: string;
+    available: boolean;
   } | null,
 }));
 const connection = vi.hoisted(() => ({
@@ -23,6 +24,12 @@ const connection = vi.hoisted(() => ({
     modelFound: true,
     models: ["focus"],
     message: "Connected to Hermes and found the active profile model.",
+    managedProfile: null as {
+      name: string;
+      port: number;
+      model: string;
+      available: boolean;
+    } | null,
   },
 }));
 const tauriInvokeMock = vi.hoisted(() => vi.fn());
@@ -46,6 +53,7 @@ describe("AgentSettingsSection", () => {
       modelFound: true,
       models: ["focus"],
       message: "Connected to Hermes and found the active profile model.",
+      managedProfile: null,
     };
     tauriInvokeMock.mockReset();
     tauriInvokeMock.mockImplementation(async (command: string) => {
@@ -95,6 +103,7 @@ describe("AgentSettingsSection", () => {
       name: "focus",
       port: 8651,
       model: "focus-gateway",
+      available: true,
     };
 
     render(<AgentSettingsSection />);
@@ -113,6 +122,7 @@ describe("AgentSettingsSection", () => {
       name: "focus",
       port: 8651,
       model: "focus-gateway",
+      available: true,
     };
 
     render(<AgentSettingsSection />);
@@ -134,12 +144,26 @@ describe("AgentSettingsSection", () => {
     expect(screen.getByLabelText("Base URL")).toHaveValue(
       "http://127.0.0.1:8651/v1",
     );
+    expect(screen.getByLabelText("Model")).toHaveValue("focus-gateway");
     expect(screen.getByLabelText("Base URL")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Model")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Session key")).not.toHaveAttribute(
       "readonly",
     );
     expect(screen.getByText("Local authentication")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(tauriInvokeMock).toHaveBeenCalledWith(
+        "agent_config_set",
+        expect.objectContaining({
+          input: expect.objectContaining({
+            baseUrl: "http://127.0.0.1:8651/v1",
+            model: "focus-gateway",
+          }),
+        }),
+      );
+    });
   });
 
   it("shows setup guidance when the active profile credential is missing", async () => {
@@ -150,6 +174,7 @@ describe("AgentSettingsSection", () => {
       name: "focus",
       port: 8651,
       model: "focus-gateway",
+      available: true,
     };
 
     render(<AgentSettingsSection />);
@@ -168,6 +193,13 @@ describe("AgentSettingsSection", () => {
       name: "focus",
       port: 8651,
       model: "focus-gateway",
+      available: true,
+    };
+    connection.result.managedProfile = {
+      name: "review",
+      port: 8653,
+      model: "review-gateway",
+      available: true,
     };
 
     render(<AgentSettingsSection />);
@@ -178,7 +210,7 @@ describe("AgentSettingsSection", () => {
 
     expect(await screen.findByText("Connected")).toBeVisible();
     expect(
-      screen.getByText(/Focus is running locally on port 8651/i),
+      screen.getByText(/Review is running locally on port 8653/i),
     ).toBeVisible();
     expect(tauriInvokeMock).toHaveBeenCalledWith("agent_connection_test");
     expect(tauriInvokeMock).not.toHaveBeenCalledWith(
@@ -195,6 +227,7 @@ describe("AgentSettingsSection", () => {
       name: "focus",
       port: 8651,
       model: "focus-gateway",
+      available: true,
     };
     connection.error = new Error(
       "Connect failed. Is the local Hermes gateway running?",
@@ -210,5 +243,23 @@ describe("AgentSettingsSection", () => {
     expect(
       screen.getByText(/Is the local Hermes gateway running/i),
     ).toBeVisible();
+  });
+
+  it("shows an unreadable active profile as unavailable", async () => {
+    config.baseUrl = "http://127.0.0.1:8642/v1";
+    config.credentialSource = "missing";
+    config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "review",
+      port: 8642,
+      model: "review",
+      available: false,
+    };
+
+    render(<AgentSettingsSection />);
+
+    expect(await screen.findByText("Unavailable")).toBeVisible();
+    expect(screen.getByText(/could not safely read/i)).toBeVisible();
+    expect(screen.queryByText("Setup needed")).not.toBeInTheDocument();
   });
 });

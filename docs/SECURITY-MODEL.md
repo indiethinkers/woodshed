@@ -74,12 +74,14 @@ plaintext by design and relies on operating-system account isolation and
 full-disk encryption; it is never included in logs, diagnostics, exports, or the
 vault. The standard local Agent connection follows Hermes's active profile and
 reads its port, advertised gateway model, and key from bounded, regular,
-non-symlink files; custom loopback endpoints resolve the profile that owns their
-configured port. Local keys are used only for loopback endpoints. Secret iCal
-URLs remain in the operating-system credential store. `config.json` stores only
-non-secret account metadata. Older plaintext fields are accepted solely for
-one-time migration and are skipped during serialization; legacy Gmail and
-Hermes Keychain entries are imported only after a verified write to
+non-symlink `.env` and `config.yaml` files with environment values taking
+precedence. An unreadable named active profile fails closed rather than routing
+through a different profile. Custom loopback endpoints resolve the profile that
+owns their configured port. Local keys are used only for loopback endpoints.
+Secret iCal URLs remain in the operating-system credential store. `config.json`
+stores only non-secret account metadata. Older plaintext fields are accepted
+solely for one-time migration and are skipped during serialization; legacy Gmail
+and Hermes Keychain entries are imported only after a verified write to
 `secrets.json`.
 
 ## Network policy

@@ -96,6 +96,7 @@ pub struct ManagedHermesProfile {
     pub name: String,
     pub port: u16,
     pub model: String,
+    pub available: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -129,6 +130,7 @@ pub struct AgentConnectionTestResult {
     pub model_found: bool,
     pub models: Vec<String>,
     pub message: String,
+    pub managed_profile: Option<ManagedHermesProfile>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -811,6 +813,7 @@ pub async fn test_connection(
                 "Hermes returned HTTP {status_code}: {}",
                 truncate(&text, 240)
             ),
+            managed_profile: None,
         });
     }
 
@@ -835,6 +838,7 @@ pub async fn test_connection(
         model_found,
         models,
         message,
+        managed_profile: None,
     })
 }
 

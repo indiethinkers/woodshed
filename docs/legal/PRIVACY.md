@@ -32,9 +32,9 @@ cache.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. The standard local
-  connection reads the active Hermes profile's key; an explicit custom
-  loopback endpoint reads the profile owning that port. Neither key is copied
-  into Woodshed.
+  connection reads the active Hermes profile's key from its bounded `.env` or
+  `config.yaml`; an explicit custom loopback endpoint reads the profile owning
+  that port. Neither key is copied into Woodshed.
   Google Calendar secret iCal URLs are stored in the operating-system credential
   store. Legacy plaintext configuration values are migrated and scrubbed on
   first use.

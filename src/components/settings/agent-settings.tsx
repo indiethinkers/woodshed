@@ -21,6 +21,7 @@ interface AgentConfig {
     name: string;
     port: number;
     model: string;
+    available: boolean;
   } | null;
 }
 
@@ -30,6 +31,7 @@ interface AgentConnectionTestResult {
   modelFound: boolean;
   models: string[];
   message: string;
+  managedProfile: AgentConfig["managedProfile"];
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -43,6 +45,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     name: "default",
     port: 8642,
     model: "hermes-agent",
+    available: true,
   },
 };
 const MASKED_KEY_VALUE = "configured-password";
@@ -147,9 +150,23 @@ export function AgentSettingsSection() {
       const result = await tauriInvoke<AgentConnectionTestResult>(
         "agent_connection_test",
       );
+      const testedProfile = result?.managedProfile;
+      if (testedProfile) {
+        setConfig((current) =>
+          current
+            ? { ...current, managedProfile: testedProfile }
+            : current,
+        );
+      }
       setTestResult(result);
     } catch (e) {
       setConnectionError(e instanceof Error ? e.message : String(e));
+      try {
+        const next = await tauriInvoke<AgentConfig>("agent_config_get");
+        if (next) setConfig(next);
+      } catch {
+        // Preserve the original connection error if status refresh also fails.
+      }
     } finally {
       setBusy("idle");
     }
@@ -187,6 +204,7 @@ export function AgentSettingsSection() {
       ? "Default"
       : `${managedProfileName.charAt(0).toUpperCase()}${managedProfileName.slice(1)}`;
   const managedProfilePort = managedProfile?.port ?? 8642;
+  const managedProfileAvailable = managedProfile?.available ?? false;
   const disabled = busy !== "idle" || config === null;
   const showingStoredKey = hasKey && !isReplacingKey;
   const keyInputValue = showingStoredKey ? MASKED_KEY_VALUE : apiKey;
@@ -209,6 +227,13 @@ export function AgentSettingsSection() {
             message: connectionError,
             tone: "unavailable" as const,
           }
+        : !managedProfileAvailable
+          ? {
+              label: "Unavailable",
+              message:
+                "Woodshed could not safely read the active Hermes profile. Check the profile in Hermes, then test again.",
+              tone: "unavailable" as const,
+            }
         : testResult?.ok
           ? {
               label: "Connected",
@@ -316,6 +341,7 @@ export function AgentSettingsSection() {
                     setBaseUrl(
                       `http://127.0.0.1:${managedProfilePort}/v1`,
                     );
+                    setModel(managedProfile?.model ?? DEFAULT_CONFIG.model);
                     setEditingCustomEndpoint(true);
                   }}
                   disabled={disabled}

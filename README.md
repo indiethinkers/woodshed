@@ -390,8 +390,9 @@ to disable automatic refresh.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent action.
   The standard local connection follows Hermes's active profile and reads its
-  port, advertised gateway model, and key directly; switch profiles or change
-  the model and provider in Hermes, not Woodshed.
+  API-server port, advertised gateway model, and key from that profile's
+  `.env` and `config.yaml` using Hermes's environment-over-config precedence;
+  switch profiles or change the model and provider in Hermes, not Woodshed.
   Custom loopback endpoints read the matching local profile; remote endpoint
   keys use the owner-only app-data file.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
