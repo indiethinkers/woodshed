@@ -45,6 +45,8 @@ const invokeMock = vi.hoisted(() => ({
   }>,
   chatModel: "synthetic-model",
   chatListPromise: null as Promise<unknown[]> | null,
+  agentConfigError: null as Error | null,
+  agentConfigPromise: null as Promise<unknown> | null,
 }));
 const tauriInvokeMock = vi.hoisted(() => vi.fn());
 
@@ -118,9 +120,13 @@ beforeEach(() => {
   invokeMock.chatMessages = [];
   invokeMock.chatModel = "synthetic-model";
   invokeMock.chatListPromise = null;
+  invokeMock.agentConfigError = null;
+  invokeMock.agentConfigPromise = null;
   tauriInvokeMock.mockReset();
   tauriInvokeMock.mockImplementation(async (command: string) => {
     if (command === "agent_config_get") {
+      if (invokeMock.agentConfigError) throw invokeMock.agentConfigError;
+      if (invokeMock.agentConfigPromise) return invokeMock.agentConfigPromise;
       return invokeMock.agentConfig;
     }
     if (command === "agent_chats_all") {
@@ -429,6 +435,91 @@ describe("AgentSurface voice controls", () => {
     ).toBeEnabled();
   });
 
+  it("preserves an unsent draft when the Hermes preflight fails", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(
+      "How can I help you today?",
+    );
+    fireEvent.change(textarea, { target: { value: "Keep this draft." } });
+    invokeMock.agentConfigError = new Error("Hermes preflight unavailable");
+    fireEvent.submit(textarea.closest("form")!);
+
+    expect(
+      await screen.findByText("Hermes preflight unavailable"),
+    ).toBeInTheDocument();
+    expect(textarea).toHaveValue("Keep this draft.");
+    expect(chatMock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unsent draft when chat creation fails", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(
+      "How can I help you today?",
+    );
+    fireEvent.change(textarea, { target: { value: "Keep this new chat." } });
+    fireEvent.submit(textarea.closest("form")!);
+
+    expect(
+      await screen.findByText("Woodshed did not create the Agent chat."),
+    ).toBeInTheDocument();
+    expect(textarea).toHaveValue("Keep this new chat.");
+  });
+
+  it("allows only one Hermes preflight for repeated submits", async () => {
+    let resolveConfig: (value: unknown) => void = () => {};
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    const textarea = await screen.findByPlaceholderText(
+      "How can I help you today?",
+    );
+    fireEvent.change(textarea, { target: { value: "Send this once." } });
+    invokeMock.agentConfigPromise = new Promise((resolve) => {
+      resolveConfig = resolve;
+    });
+    const form = textarea.closest("form")!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(
+        tauriInvokeMock.mock.calls.filter(
+          ([command]) => command === "agent_config_get",
+        ),
+      ).toHaveLength(2);
+    });
+
+    resolveConfig(invokeMock.agentConfig);
+  });
+
   it("preserves the resolved gateway model in checkpoint updates", () => {
     expect(modelForAgentChatUpdate({ model: "resolved-gateway" })).toBe(
       "resolved-gateway",
@@ -466,6 +557,29 @@ describe("Agent header run status", () => {
     expect(topbar).toContainElement(
       screen.getByText("Running in the background"),
     );
+  });
+
+  it("shows a transport interruption without calling the durable run failed", () => {
+    render(
+      <AgentHeader
+        configResolved
+        configured
+        context={null}
+        displayName="Hermes"
+        run={syntheticRun()}
+        status="submitted"
+        transportConnection={{
+          status: "disconnected",
+          error: "Agent backend unavailable",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Connection interrupted")).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
   });
 });
 

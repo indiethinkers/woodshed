@@ -94,9 +94,15 @@ interface StreamPartIds {
 
 interface AgentTransportOptions {
   getSystemContext?: () => string | null;
+  onConnectionChange?: (connection: AgentTransportConnection) => void;
   onRunChange?: (run: AgentRun | null) => void;
   pollIntervalMs?: number;
   reconnectTimeoutMs?: number;
+}
+
+export interface AgentTransportConnection {
+  status: "connected" | "reconnecting" | "disconnected";
+  error: string | null;
 }
 
 const DEFAULT_AGENT_RECONNECT_TIMEOUT_MS = 30_000;
@@ -184,7 +190,16 @@ function streamAgentRun(
       let eventIndex = 0;
       let emittedText = "";
       let pollFailureStartedAt: number | null = null;
-      let latestRun = initialRun;
+      let connection: AgentTransportConnection | null = null;
+
+      const reportConnection = (
+        status: AgentTransportConnection["status"],
+        error: string | null = null,
+      ) => {
+        if (connection?.status === status && connection.error === error) return;
+        connection = { status, error };
+        options.onConnectionChange?.(connection);
+      };
 
       const close = () => {
         if (stopped) return;
@@ -201,7 +216,6 @@ function streamAgentRun(
         close();
       };
       const accept = (run: AgentRun): boolean => {
-        latestRun = run;
         options.onRunChange?.(run);
         for (const event of coalesceAgentEvents(run.events.slice(eventIndex))) {
           enqueueAgentEvent(controller, ids, event);
@@ -242,6 +256,7 @@ function streamAgentRun(
         return;
       }
       abortSignal?.addEventListener("abort", abort, { once: true });
+      reportConnection("connected");
       if (accept(initialRun)) return;
 
       while (!stopped) {
@@ -256,26 +271,26 @@ function streamAgentRun(
             return;
           }
           pollFailureStartedAt = null;
+          reportConnection("connected");
           if (accept(run)) return;
         } catch (error) {
           const now = Date.now();
           pollFailureStartedAt ??= now;
           const reconnectTimeoutMs =
             options.reconnectTimeoutMs ?? DEFAULT_AGENT_RECONNECT_TIMEOUT_MS;
-          if (now - pollFailureStartedAt < reconnectTimeoutMs) continue;
-
           const message =
             error instanceof Error ? error.message : String(error);
-          const failedRun: AgentRun = {
-            ...latestRun,
-            status: "failed",
-            error: message,
-            updatedAt: new Date(now).toISOString(),
-            finishedAt: new Date(now).toISOString(),
-          };
-          options.onRunChange?.(failedRun);
-          fail(message);
-          return;
+          reportConnection(
+            now - pollFailureStartedAt < reconnectTimeoutMs
+              ? "reconnecting"
+              : "disconnected",
+            message,
+          );
+          // A renderer-side transport failure cannot authoritatively fail the
+          // durable backend job. Keep polling so a restarted Tauri process can
+          // return the stored terminal state; enabling Retry here could launch
+          // duplicate work while the original run is still alive.
+          continue;
         }
       }
     },

@@ -333,14 +333,17 @@ describe("createAgentChatTransport", () => {
     });
   });
 
-  it("turns a terminal backend disconnect into a visible failed run", async () => {
+  it("reports a backend disconnect without fabricating a failed durable run", async () => {
     mocks.tauriInvoke
       .mockResolvedValueOnce(
         run({ status: "running", events: [], finalResponse: null }),
       )
-      .mockRejectedValueOnce(new Error("backend unavailable"));
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockResolvedValueOnce(run());
     const onRunChange = vi.fn();
+    const onConnectionChange = vi.fn();
     const transport = createAgentChatTransport({
+      onConnectionChange,
       onRunChange,
       pollIntervalMs: 0,
       reconnectTimeoutMs: 0,
@@ -361,16 +364,23 @@ describe("createAgentChatTransport", () => {
     });
     const chunks = await readChunks(stream);
 
-    expect(onRunChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        status: "failed",
-        error: "backend unavailable",
-      }),
-    );
-    expect(chunks).toContainEqual({
-      type: "error",
-      errorText: "backend unavailable",
+    expect(onConnectionChange).toHaveBeenCalledWith({
+      status: "disconnected",
+      error: "backend unavailable",
     });
+    expect(onConnectionChange).toHaveBeenLastCalledWith({
+      status: "connected",
+      error: null,
+    });
+    expect(onRunChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(onRunChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" }),
+    );
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({ type: "error" }),
+    );
   });
 
   it("polls active runs every 100ms by default for responsive streaming", async () => {

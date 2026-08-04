@@ -179,6 +179,7 @@ import {
 import { canUseAgentConfig, type AgentConfig } from "@/lib/agent/config";
 import {
   type AgentRun,
+  type AgentTransportConnection,
   cancelAgentRun,
   createAgentChatTransport,
   latestAgentUsage,
@@ -323,9 +324,16 @@ function AgentSurfaceInner({
   const [activeChat, setActiveChat] = useState<AgentChatRecord | null>(null);
   const [activeId, setActiveId] = useState<string | null>(urlChatId);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
+  const [transportConnection, setTransportConnection] =
+    useState<AgentTransportConnection>({
+      status: "connected",
+      error: null,
+    });
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
+  const [submissionPending, setSubmissionPending] = useState(false);
+  const submissionPendingRef = useRef(false);
   const requestedChatIdRef = useRef(urlChatId);
   const conversationRunIds = useMemo(
     () =>
@@ -397,6 +405,7 @@ function AgentSurfaceInner({
             setActiveRun(run);
           }
         },
+        onConnectionChange: setTransportConnection,
       }),
     [pageMode, queryClient],
   );
@@ -436,7 +445,10 @@ function AgentSurfaceInner({
   const effectiveStatus: ChatStatus =
     runActive && status === "ready" ? "submitted" : status;
   const busy =
-    effectiveStatus === "submitted" || effectiveStatus === "streaming";
+    runActive ||
+    submissionPending ||
+    effectiveStatus === "submitted" ||
+    effectiveStatus === "streaming";
   const canSubmit = configured && !busy;
   const backgroundRuns = useMemo(
     () => activeRuns.filter((run) => run.conversationId !== activeId),
@@ -872,37 +884,44 @@ function AgentSurfaceInner({
     }
   }
 
-  function handleSubmit(message: PromptInputMessage) {
-    void submitWithFreshConfig(message);
+  function handleSubmit(message: PromptInputMessage): Promise<void> {
+    return submitWithFreshConfig(message);
   }
 
   async function submitWithFreshConfig(message: PromptInputMessage) {
     const text = message.text.trim();
-    if ((!text && message.files.length === 0) || busy) return;
-    setLastError(null);
-    let nextConfig: AgentConfig;
+    if (!text && message.files.length === 0) return;
+    if (submissionPendingRef.current || busy) {
+      throw new Error("An Agent submission is already in progress.");
+    }
+    submissionPendingRef.current = true;
+    setSubmissionPending(true);
     try {
+      setLastError(null);
       const refreshed = await tauriInvoke<AgentConfig>("agent_config_get");
       if (!refreshed) throw new Error("Woodshed could not read Agent settings.");
-      nextConfig = refreshed;
-      setConfig(nextConfig);
+      setConfig(refreshed);
+      if (!canUseAgentConfig(refreshed)) {
+        throw new Error(
+          "The active Hermes profile is unavailable. Check it in Hermes, then try again.",
+        );
+      }
+      if (!activeId) {
+        await createChatAndSend(text, message.files, message.text.trim());
+        return;
+      }
+      rememberRecentAgentChatId(activeId);
+      const request = sendMessage({ files: message.files, text });
+      void Promise.resolve(request).catch((error) => {
+        setLastError(error instanceof Error ? error.message : String(error));
+      });
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error));
-      return;
+      throw error;
+    } finally {
+      submissionPendingRef.current = false;
+      setSubmissionPending(false);
     }
-    if (!canUseAgentConfig(nextConfig)) {
-      setLastError(
-        "The active Hermes profile is unavailable. Check it in Hermes, then try again.",
-      );
-      return;
-    }
-    if (!activeId) {
-      await createChatAndSend(text, message.files, message.text.trim());
-      return;
-    }
-    rememberRecentAgentChatId(activeId);
-    sendMessage({ files: message.files, text });
-    textInput.clear();
   }
 
   function cancelRun() {
@@ -933,33 +952,29 @@ function AgentSurfaceInner({
     files: FileUIPart[],
     titleText: string,
   ) {
-    try {
-      // Sidebar chats are started from a specific page; persist that page's
-      // label + route so the full Agent view can show what's attached as
-      // context. Page mode has no attached page, so context stays null.
-      const context = pageMode
-        ? null
-        : {
-            title: pageContextRef.current.title,
-            route: canonicalAgentRoute(pageContextRef.current.pathname, today),
-          };
-      const created = await tauriInvoke<AgentChatRecord>("agent_chat_create", {
-        input: {
-          title: titleFromText(titleText || attachmentTitleFromFiles(files)),
-          context,
-        },
-      });
-      if (!created) return;
-      setChats((current) => upsertSummary(current, recordToSummary(created)));
-      setActiveChat(created);
-      requestedChatIdRef.current = created.id;
-      setActiveId(created.id);
-      rememberRecentAgentChatId(created.id);
-      setPendingSend({ files, text });
-      if (pageMode) void navigate({ href: `/agent?chat=${created.id}` });
-    } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error));
-    }
+    // Sidebar chats are started from a specific page; persist that page's
+    // label + route so the full Agent view can show what's attached as
+    // context. Page mode has no attached page, so context stays null.
+    const context = pageMode
+      ? null
+      : {
+          title: pageContextRef.current.title,
+          route: canonicalAgentRoute(pageContextRef.current.pathname, today),
+        };
+    const created = await tauriInvoke<AgentChatRecord>("agent_chat_create", {
+      input: {
+        title: titleFromText(titleText || attachmentTitleFromFiles(files)),
+        context,
+      },
+    });
+    if (!created) throw new Error("Woodshed did not create the Agent chat.");
+    setChats((current) => upsertSummary(current, recordToSummary(created)));
+    setActiveChat(created);
+    requestedChatIdRef.current = created.id;
+    setActiveId(created.id);
+    rememberRecentAgentChatId(created.id);
+    setPendingSend({ files, text });
+    if (pageMode) void navigate({ href: `/agent?chat=${created.id}` });
   }
 
   // Sidebar chats are pinned to the page they were started from (context.route).
@@ -1016,6 +1031,7 @@ function AgentSurfaceInner({
             onRetry={configured ? retryRun : undefined}
             run={activeRun}
             status={effectiveStatus}
+            transportConnection={transportConnection}
           />
         ) : (
           <AgentSidebarHeader
@@ -1038,6 +1054,7 @@ function AgentSurfaceInner({
           <AgentRunBanner
             onRetry={configured ? retryRun : undefined}
             run={activeRun}
+            transportConnection={transportConnection}
           />
         )}
         {messages.length === 0 ? (
@@ -1343,6 +1360,7 @@ export function AgentHeader({
   onRetry,
   run,
   status,
+  transportConnection = { status: "connected", error: null },
 }: {
   configResolved: boolean;
   configured: boolean;
@@ -1351,6 +1369,7 @@ export function AgentHeader({
   onRetry?: () => void;
   run: AgentRun | null;
   status: ChatStatus;
+  transportConnection?: AgentTransportConnection;
 }) {
   const busy = status === "submitted" || status === "streaming";
   const visibleRun = run && run.status !== "completed" ? run : null;
@@ -1361,7 +1380,11 @@ export function AgentHeader({
           {displayName}
         </div>
         {visibleRun && (
-          <AgentRunTopbarStatus onRetry={onRetry} run={visibleRun} />
+          <AgentRunTopbarStatus
+            onRetry={onRetry}
+            run={visibleRun}
+            transportConnection={transportConnection}
+          />
         )}
         {context?.title && (
           // The page this chat was started from (sidebar mode). A link back to
@@ -1431,11 +1454,20 @@ function agentRunStatusLabel(status: AgentRun["status"]): string {
 function AgentRunTopbarStatus({
   onRetry,
   run,
+  transportConnection,
 }: {
   onRetry?: () => void;
   run: AgentRun;
+  transportConnection: AgentTransportConnection;
 }) {
   const active = run.status === "queued" || run.status === "running";
+  const connectionInterrupted =
+    active && transportConnection.status !== "connected";
+  const label = connectionInterrupted
+    ? transportConnection.status === "reconnecting"
+      ? "Reconnecting…"
+      : "Connection interrupted"
+    : agentRunStatusLabel(run.status);
   return (
     <div
       aria-live="polite"
@@ -1444,7 +1476,7 @@ function AgentRunTopbarStatus({
         run.status === "failed" && "text-destructive",
       )}
       data-agent-topbar-status
-      title={run.error ?? undefined}
+      title={transportConnection.error ?? run.error ?? undefined}
     >
       {run.status === "failed" || run.status === "cancelled" ? (
         <X className="size-3 shrink-0" />
@@ -1455,7 +1487,7 @@ function AgentRunTopbarStatus({
         />
       )}
       <span className="truncate font-medium">
-        {agentRunStatusLabel(run.status)}
+        {label}
       </span>
       {run.status === "failed" && onRetry && (
         <button
@@ -1659,12 +1691,20 @@ function AgentSidebarHeader({
 export function AgentRunBanner({
   onRetry,
   run,
+  transportConnection = { status: "connected", error: null },
 }: {
   onRetry?: () => void;
   run: AgentRun;
+  transportConnection?: AgentTransportConnection;
 }) {
   const active = run.status === "queued" || run.status === "running";
-  const label = agentRunStatusLabel(run.status);
+  const connectionInterrupted =
+    active && transportConnection.status !== "connected";
+  const label = connectionInterrupted
+    ? transportConnection.status === "reconnecting"
+      ? "Reconnecting…"
+      : "Connection interrupted"
+    : agentRunStatusLabel(run.status);
   return (
     <div
       aria-live="polite"
@@ -1721,7 +1761,7 @@ function AgentEmptyState({
   contextTitle?: string;
   displayName: string;
   lastError: string | null;
-  onSubmit: (message: PromptInputMessage) => void;
+  onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   status: ChatStatus;
   stop: () => void;
 }) {
@@ -1800,7 +1840,7 @@ function AgentConversationView({
   lastError: string | null;
   messages: UIMessage[];
   onRestoreCheckpoint: (messageIndex: number) => void;
-  onSubmit: (message: PromptInputMessage) => void;
+  onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   onToolApprovalResponse: ChatAddToolApproveResponseFunction;
   status: ChatStatus;
   stop: () => void;
@@ -2736,7 +2776,7 @@ function AgentComposer({
   configured: boolean;
   displayName: string;
   lastError: string | null;
-  onSubmit: (message: PromptInputMessage) => void;
+  onSubmit: (message: PromptInputMessage) => void | Promise<void>;
   placeholder?: string;
   status: ChatStatus;
   stop: () => void;
