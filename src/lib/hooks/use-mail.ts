@@ -18,6 +18,7 @@ import {
   mailGetFull,
   mailGetLocal,
   mailInboxPage,
+  mailInboxUnreadCount,
   mailFolderPage,
   mailMarkRead,
   mailReply,
@@ -41,13 +42,13 @@ import {
   type MailSnoozeRestoreResult,
   type ReplyInput,
   type SendResult,
-  shouldShowUnreadIndicator,
 } from "@/lib/mail-lib/types";
 
 type MailCache = InfiniteData<MailPage, number>;
 type MailStateUpdater = <T extends EmailSummary>(email: T) => T;
 
 const HIDDEN_ARCHIVE_IDS_KEY = ["mail-hidden-archive-ids"] as const;
+const MAIL_UNREAD_COUNT_KEY = ["mail-unread-count"] as const;
 const EMPTY_ARCHIVE_IDS: string[] = [];
 const MARK_READ_IN_FLIGHT = new Map<string, Promise<void>>();
 
@@ -110,6 +111,20 @@ function asViewed<T extends EmailSummary>(email: T): T {
 
 function asUnviewed<T extends EmailSummary>(email: T): T {
   return { ...email, viewed: false };
+}
+
+function needsAttention(email: EmailSummary | null | undefined): boolean {
+  return Boolean(email && !email.read && email.viewed !== true);
+}
+
+function decrementUnreadCount(qc: QueryClient) {
+  qc.setQueryData<number | undefined>(MAIL_UNREAD_COUNT_KEY, (count) =>
+    count === undefined ? count : Math.max(0, count - 1),
+  );
+}
+
+function refreshUnreadCount(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: MAIL_UNREAD_COUNT_KEY });
 }
 
 function updateMailCopies(
@@ -251,12 +266,12 @@ export function useAllMail() {
 
 /** Persistent navigation signal for mail that still needs attention. */
 export function useHasUnreadMail(enabled = true) {
-  const query = useMailFolder("inbox", "", enabled);
-  const { fetchNextPage, hasNextPage, isFetchingNextPage } = query;
-  useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
-  return query.data?.some(shouldShowUnreadIndicator) ?? false;
+  const { data = 0 } = useQuery({
+    queryKey: MAIL_UNREAD_COUNT_KEY,
+    queryFn: mailInboxUnreadCount,
+    enabled,
+  });
+  return data > 0;
 }
 
 /**
@@ -336,6 +351,7 @@ export function useRefreshMail() {
     qc.invalidateQueries({ queryKey: ["email"] });
     qc.invalidateQueries({ queryKey: ["email-full"] });
     qc.invalidateQueries({ queryKey: ["thread"] });
+    refreshUnreadCount(qc);
     return result;
   };
 }
@@ -392,6 +408,11 @@ async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
     previousOne?.viewed === true ||
     previousThreads.some(([, email]) => email.viewed === true) ||
     previousFullMessages.some(([, email]) => email.viewed === true);
+  const wasUnread =
+    needsAttention(previousListEmail) ||
+    needsAttention(previousOne) ||
+    previousThreads.some(([, email]) => needsAttention(email)) ||
+    previousFullMessages.some(([, email]) => needsAttention(email));
   if (
     !listNeedsUpdate &&
     !oneNeedsUpdate &&
@@ -402,6 +423,7 @@ async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
   }
 
   updateMailCopies(qc, id, asViewed);
+  if (wasUnread) decrementUnreadCount(qc);
   try {
     await mailMarkRead(id);
   } catch (error) {
@@ -416,10 +438,12 @@ async function markReadAndUpdateCaches(qc: QueryClient, id: string) {
         ? asViewed
         : asUnviewed,
     );
+    refreshUnreadCount(qc);
     throw error;
   }
   await cancelMailReads(qc, id);
   updateMailCopies(qc, id, asRead);
+  refreshUnreadCount(qc);
   // A full-message read may have started before the local update. Refresh
   // it from the now-updated record instead of retaining a stale copy for
   // its five-minute stale window.
@@ -474,6 +498,7 @@ export function useArchiveOne() {
     });
     const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousEmail = findCachedEmail(previousList, id);
+    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
     hideArchivedEmail(qc, id);
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
@@ -490,6 +515,7 @@ export function useArchiveOne() {
       qc.invalidateQueries({ queryKey: ["emails"] });
       qc.invalidateQueries({ queryKey: ["email", id] });
       qc.invalidateQueries({ queryKey: ["thread"] });
+      refreshUnreadCount(qc);
     } catch (e) {
       if (previousEmail) {
         qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
@@ -497,6 +523,7 @@ export function useArchiveOne() {
         );
       }
       showArchivedEmail(qc, id);
+      refreshUnreadCount(qc);
       throw e;
     }
   };
@@ -512,6 +539,7 @@ export function useSnoozeOne() {
     });
     const previousList = qc.getQueryData<MailCache>(["emails"]);
     const previousEmail = findCachedEmail(previousList, id);
+    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
     hideArchivedEmail(qc, id);
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
@@ -527,6 +555,7 @@ export function useSnoozeOne() {
       void qc.invalidateQueries({ queryKey: ["emails"] });
       void qc.invalidateQueries({ queryKey: ["email", id] });
       void qc.invalidateQueries({ queryKey: ["thread"] });
+      refreshUnreadCount(qc);
     } catch (error) {
       if (previousEmail) {
         qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
@@ -534,6 +563,7 @@ export function useSnoozeOne() {
         );
       }
       showArchivedEmail(qc, id);
+      refreshUnreadCount(qc);
       throw error;
     }
   };
@@ -547,6 +577,7 @@ export function useRestoreDueSnoozes() {
       void qc.invalidateQueries({ queryKey: ["emails"] });
       void qc.invalidateQueries({ queryKey: ["email"] });
       void qc.invalidateQueries({ queryKey: ["thread"] });
+      refreshUnreadCount(qc);
     }
     return result;
   }, [qc]);
@@ -557,6 +588,8 @@ export function useDeleteOne() {
   const qc = useQueryClient();
   return async (id: string) => {
     const previousList = qc.getQueryData<MailCache>(["emails"]);
+    const previousEmail = findCachedEmail(previousList, id);
+    if (needsAttention(previousEmail?.email)) decrementUnreadCount(qc);
     qc.setQueryData<MailCache | undefined>(["emails"], (old) =>
       updateCachedEmails(old, (email) => (email.id === id ? null : email)),
     );
@@ -564,8 +597,10 @@ export function useDeleteOne() {
       await mailDeleteOne(id);
       qc.invalidateQueries({ queryKey: ["email", id] });
       qc.invalidateQueries({ queryKey: ["thread"] });
+      refreshUnreadCount(qc);
     } catch (e) {
       if (previousList) qc.setQueryData(["emails"], previousList);
+      refreshUnreadCount(qc);
       throw e;
     }
   };

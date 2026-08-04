@@ -55,7 +55,8 @@ other exceptions described below.
   state; SMTP sends mail, replies, and user-selected attachments. Synced
   messages and attachment copies are written to the local vault. If automatic
   refresh is enabled, IMAP polling runs at the selected interval while
-  Woodshed is running and may produce a content-free in-app new-mail notice.
+  Woodshed is running; the navigation rail indicates only whether unread mail
+  exists, without showing sender, subject, account, or message content.
   A snooze you create also authorizes Woodshed to restore that message through
   IMAP when its locally stored deadline becomes due while the app is running.
 - **Google Calendar or another iCal host:** an explicit Sync—or the optional

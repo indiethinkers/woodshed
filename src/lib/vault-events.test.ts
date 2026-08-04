@@ -148,6 +148,9 @@ describe("invalidateAfterIndexRebuild", () => {
     invalidateAfterIndexRebuild(queryClient);
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["emails"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["mail-unread-count"],
+    });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["tagTable"] });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ["tagsWithCounts"],

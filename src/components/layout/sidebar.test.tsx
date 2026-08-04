@@ -58,6 +58,19 @@ describe("Sidebar unread mail state", () => {
     });
     expect(mailLink).toHaveAttribute("data-unread", "true");
     expect(mailLink).toHaveClass("text-blue-500");
+    expect(mailLink.querySelector("[data-unread-indicator]")).toBeInTheDocument();
+  });
+
+  it("keeps unread Mail blue while Mail is the active route", () => {
+    mocks.hasUnreadMail = true;
+    mocks.pathname = "/mail";
+    render(<Sidebar mailReady />);
+
+    const mailLink = screen.getByRole("link", {
+      name: "Mail, unread messages",
+    });
+    expect(mailLink).toHaveClass("bg-muted-foreground/15", "text-blue-500");
+    expect(mailLink).not.toHaveClass("text-foreground");
   });
 
   it("returns the Mail navigation icon to neutral when all mail is read", () => {

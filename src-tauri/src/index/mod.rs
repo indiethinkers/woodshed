@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS mail_summaries (
     path         TEXT PRIMARY KEY,
     thread_id    TEXT NOT NULL,
     date_ms      INTEGER NOT NULL,
+    needs_attention INTEGER NOT NULL DEFAULT 0,
     summary_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mail_summaries_date
@@ -218,6 +219,7 @@ impl IndexHandle {
         conn.execute_batch(SCHEMA_SQL).context("apply schema")?;
         migrate_space_to_area(&conn).context("migrate space → area column")?;
         migrate_created_at(&conn).context("add index creation timestamp")?;
+        migrate_mail_attention(&mut conn).context("add indexed mail attention state")?;
         backfill_normalized_edges_once(&mut conn).context("backfill normalized index edges")?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -345,6 +347,18 @@ impl IndexHandle {
         limit: usize,
     ) -> Result<(Vec<mail::EmailSummary>, Option<usize>)> {
         self.mail_folder_page("inbox/", None, offset, limit)
+    }
+
+    pub fn mail_folder_unread_count(&self, path_prefix: &str) -> Result<usize> {
+        let conn = self.conn.lock_recover();
+        let count = conn.query_row(
+            "SELECT COUNT(*) FROM mail_summaries \
+             WHERE needs_attention = 1 \
+               AND substr(path, 1, length(?1)) = ?1",
+            params![path_prefix],
+            |row| row.get::<_, i64>(0),
+        )?;
+        usize::try_from(count).context("mail unread count exceeds platform limits")
     }
 
     pub fn mail_thread_paths(&self, thread_id: &str) -> Result<Vec<String>> {
@@ -927,6 +941,58 @@ fn migrate_created_at(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct MailAttentionProjection {
+    read: bool,
+    #[serde(default)]
+    viewed: bool,
+}
+
+fn migrate_mail_attention(conn: &mut Connection) -> Result<()> {
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(mail_summaries)")?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        columns
+    };
+    if !columns.iter().any(|column| column == "needs_attention") {
+        conn.execute(
+            "ALTER TABLE mail_summaries \
+             ADD COLUMN needs_attention INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .context("ALTER TABLE add mail attention state")?;
+
+        let rows = {
+            let mut stmt = conn.prepare("SELECT path, summary_json FROM mail_summaries")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        let tx = conn.transaction()?;
+        for (path, summary_json) in rows {
+            let needs_attention = serde_json::from_str::<MailAttentionProjection>(&summary_json)
+                .map(|summary| !summary.read && !summary.viewed)
+                .unwrap_or(false);
+            tx.execute(
+                "UPDATE mail_summaries SET needs_attention = ?1 WHERE path = ?2",
+                params![i64::from(needs_attention), path],
+            )?;
+        }
+        tx.commit()?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mail_summaries_attention \
+         ON mail_summaries(needs_attention, path)",
+        [],
+    )?;
+    Ok(())
+}
+
 fn backfill_normalized_edges_once(conn: &mut Connection) -> Result<()> {
     let complete = conn
         .query_row(
@@ -1130,13 +1196,21 @@ fn upsert_mail_summary_with(
         .map(|date| date.timestamp_millis())
         .unwrap_or(0);
     conn.execute(
-        "INSERT INTO mail_summaries (path, thread_id, date_ms, summary_json) \
-         VALUES (?1, ?2, ?3, ?4) \
+        "INSERT INTO mail_summaries \
+           (path, thread_id, date_ms, needs_attention, summary_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
          ON CONFLICT(path) DO UPDATE SET \
            thread_id = excluded.thread_id, \
            date_ms = excluded.date_ms, \
+           needs_attention = excluded.needs_attention, \
            summary_json = excluded.summary_json",
-        params![path, summary.thread_id, date_ms, summary_json],
+        params![
+            path,
+            summary.thread_id,
+            date_ms,
+            i64::from(!summary.read && !summary.viewed),
+            summary_json
+        ],
     )
     .context("upsert mail summary")?;
     Ok(())
@@ -2020,6 +2094,37 @@ mod tests {
         assert!(columns.iter().any(|column| column == "created_at"));
     }
 
+    #[test]
+    fn opening_an_existing_index_backfills_mail_attention() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("legacy-mail.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mail_summaries (
+                path TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                date_ms INTEGER NOT NULL,
+                summary_json TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mail_summaries (path, thread_id, date_ms, summary_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "inbox/synthetic.md",
+                "thread-synthetic",
+                0,
+                r#"{"read":false,"viewed":false}"#,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let handle = IndexHandle::open(&path).unwrap();
+        assert_eq!(handle.mail_folder_unread_count("inbox/").unwrap(), 1);
+    }
+
     fn doc(kind: &'static str, id: &str, title: &str, body: &str) -> IndexedDoc {
         IndexedDoc {
             kind,
@@ -2578,6 +2683,12 @@ mod tests {
         let (second_page, next) = idx.mail_inbox_page(next.unwrap(), 1).unwrap();
         assert_eq!(second_page[0].id, "msg-2");
         assert_eq!(next, None);
+        assert_eq!(idx.mail_folder_unread_count("inbox/").unwrap(), 2);
+        older_email.viewed = true;
+        let older_path = vault.join("inbox").join("older.md");
+        std::fs::write(&older_path, mail::render_email_md(&older_email)).unwrap();
+        idx.refresh_path(vault, &older_path).unwrap();
+        assert_eq!(idx.mail_folder_unread_count("inbox/").unwrap(), 1);
         let (matches, next) = idx
             .mail_folder_page("inbox/", Some("launch"), 0, 10)
             .unwrap();

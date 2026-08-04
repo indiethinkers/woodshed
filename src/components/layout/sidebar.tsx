@@ -167,16 +167,24 @@ export function Sidebar({
                       data-woodshed-action={`navigate:${item.label.toLowerCase()}`}
                       className={cn(
                         railButtonClass,
-                        isActive
-                          ? "bg-muted-foreground/15 text-foreground"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent",
-                        showsUnreadMail &&
-                          "text-blue-500 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-400",
+                        isActive && "bg-muted-foreground/15",
+                        showsUnreadMail
+                          ? "text-blue-500 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-400"
+                          : isActive
+                            ? "text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent",
                       )}
                     />
                   }
                 >
                   <item.icon className={item.iconClass} />
+                  {showsUnreadMail && (
+                    <span
+                      aria-hidden="true"
+                      data-unread-indicator
+                      className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500 ring-2 ring-rail dark:bg-blue-400"
+                    />
+                  )}
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={8}>
                   <span className="inline-flex items-center gap-2">

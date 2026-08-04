@@ -1134,6 +1134,23 @@ pub fn mail_inbox_page(
 }
 
 #[tauri::command]
+pub fn mail_inbox_unread_count(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let vault = vault_root(&app)?;
+    let folder_path = vault_lib::collection_dir(&vault, MailFolder::Inbox.as_str());
+    let relative = folder_path
+        .strip_prefix(&vault)
+        .map_err(|_| "mail folder escapes the configured vault".to_string())?;
+    let path_prefix = format!("{}/", relative.to_string_lossy());
+    state
+        .ensure_index(&app)?
+        .mail_folder_unread_count(&path_prefix)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn mail_folder_page(
     app: AppHandle,
     state: State<'_, AppState>,

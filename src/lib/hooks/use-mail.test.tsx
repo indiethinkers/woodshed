@@ -71,26 +71,17 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
 }
 
 describe("useHasUnreadMail", () => {
-  it("tracks whether any inbox message still needs attention", async () => {
+  it("reads the bounded aggregate unread count", async () => {
     const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+      defaultOptions: { queries: { retry: false } },
     });
-    const unread = makeEmail();
-    qc.setQueryData(["emails"], makeMailData(unread));
+    invokeMock.mockResolvedValueOnce(2);
 
     const { result } = renderHook(() => useHasUnreadMail(), {
       wrapper: makeWrapper(qc),
     });
-    expect(result.current).toBe(true);
-
-    act(() => {
-      qc.setQueryData(
-        ["emails"],
-        makeMailData({ ...unread, viewed: true }),
-      );
-    });
-
-    await waitFor(() => expect(result.current).toBe(false));
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(invokeMock).toHaveBeenCalledWith("mail_inbox_unread_count");
   });
 });
 
@@ -160,6 +151,7 @@ describe("useMarkRead", () => {
     });
     const email = makeEmail();
     qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 1);
     qc.setQueryData(["email", email.id], email);
     qc.setQueryData(["thread", email.threadId], [email]);
     qc.setQueryData(["email-full", email.id, email.inbox], {
@@ -177,6 +169,7 @@ describe("useMarkRead", () => {
       await result.current(email.id);
     });
 
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(0);
     expect(cachedEmails(qc)?.[0]).toMatchObject({ read: true });
     expect(qc.getQueryData<EmailSummary>(["email", email.id])).toMatchObject({
       read: true,

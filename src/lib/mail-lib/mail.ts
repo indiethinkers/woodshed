@@ -53,6 +53,11 @@ export async function mailInboxPage(
   );
 }
 
+/** Read only the indexed aggregate needed by the global navigation rail. */
+export async function mailInboxUnreadCount(): Promise<number> {
+  return (await tauriInvoke<number>("mail_inbox_unread_count")) ?? 0;
+}
+
 /** Read one indexed page from a durable mail folder, optionally through FTS. */
 export async function mailFolderPage(
   folder: MailFolder,

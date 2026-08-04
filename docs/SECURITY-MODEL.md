@@ -83,7 +83,8 @@ Mail and calendar refreshes run on explicit refresh or the foreground polling
 interval selected in Settings. Five minutes is the default; Manual disables it.
 Scheduled refresh stops when Woodshed exits, catches up when the running app
 regains focus, and uses the same bounded Gmail and iCal clients as manual
-refresh. New-mail notices contain only an aggregate count.
+refresh. The navigation rail exposes only whether unread mail exists; it does
+not display sender, subject, account, or message contents.
 
 Email snooze restoration is separate from refresh polling: after the user
 chooses a deadline, Woodshed checks local archived records every minute and on

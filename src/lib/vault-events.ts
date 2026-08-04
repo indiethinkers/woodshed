@@ -8,6 +8,7 @@ export type VaultChange =
 
 export function invalidateAfterIndexRebuild(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ["emails"] });
+  queryClient.invalidateQueries({ queryKey: ["mail-unread-count"] });
   queryClient.invalidateQueries({ queryKey: ["tagTable"] });
   queryClient.invalidateQueries({ queryKey: ["tagsWithCounts"] });
   queryClient.invalidateQueries({ queryKey: ["graph"] });
@@ -181,6 +182,7 @@ export function invalidateForPath(
     case "archive":
       queryClient.invalidateQueries({ queryKey: ["email", filename] });
       queryClient.invalidateQueries({ queryKey: ["emails"] });
+      queryClient.invalidateQueries({ queryKey: ["mail-unread-count"] });
       queryClient.invalidateQueries({ queryKey: ["thread"] });
       break;
     case "drafts":

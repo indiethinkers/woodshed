@@ -561,6 +561,7 @@ pub fn run() {
             mail::mail_get_full,
             mail::mail_open_attachment,
             mail::mail_inbox_page,
+            mail::mail_inbox_unread_count,
             mail::mail_folder_page,
             mail::mail_get_local,
             mail::mail_thread,
