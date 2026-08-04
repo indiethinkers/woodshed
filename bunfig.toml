@@ -3,6 +3,7 @@
 # supply-chain attacks (e.g. TanStack Router compromise, Nov 2025) where
 # malicious versions are published and yanked within hours.
 minimumReleaseAge = 604800
-# Security exception: 5.0.8 fixes GHSA-mh99-v99m-4gvg and is pinned exactly
-# in package.json. Remove this exception once that release is seven days old.
-minimumReleaseAgeExcludes = ["brace-expansion"]
+# Security exceptions: these exact versions fix active audit findings and are
+# pinned in package.json. Remove each exception after its release is seven days
+# old.
+minimumReleaseAgeExcludes = ["brace-expansion", "fast-uri", "hono"]
