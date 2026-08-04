@@ -422,7 +422,7 @@ async function messagesToAgentMessages(
       content: (
         await messageContentForHermes(
           message,
-          message.id === submittedMessageId,
+          message.id === submittedMessageId ? "submitted" : "history",
         )
       ).trim(),
     })),
@@ -457,19 +457,18 @@ function messageContentForTranscript(message: UIMessage): string {
 
 async function messageContentForHermes(
   message: UIMessage,
-  requireLoadedFiles: boolean,
+  attachmentPolicy: "submitted" | "history",
 ): Promise<string> {
   const { files, text } = messageTextAndFiles(message);
   const loadedFiles = files.filter((file) => Boolean(file.url));
   const unloadedFiles = files.filter((file) => !file.url);
-  if (requireLoadedFiles && unloadedFiles.length > 0) {
+  if (attachmentPolicy === "submitted" && unloadedFiles.length > 0) {
     throw new Error(
       "An attachment is no longer loaded. Reattach it before sending.",
     );
   }
   const preparedContext = await prepareAttachmentContext(loadedFiles);
-  const unloadedContext = attachmentContextFromFiles(unloadedFiles);
-  return [text, preparedContext, unloadedContext].filter(Boolean).join("\n\n");
+  return [text, preparedContext].filter(Boolean).join("\n\n");
 }
 
 async function prepareAttachmentContext(files: FileUIPart[]): Promise<string> {

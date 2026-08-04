@@ -200,7 +200,7 @@ describe("createAgentChatTransport", () => {
     expect(mocks.tauriInvoke).not.toHaveBeenCalled();
   });
 
-  it("sends a follow-up when only a historical attachment is no longer loaded", async () => {
+  it("sends a follow-up without forwarding unavailable historical attachment metadata", async () => {
     mocks.tauriInvoke.mockResolvedValueOnce(run());
     const transport = createAgentChatTransport({ pollIntervalMs: 0 });
 
@@ -244,8 +244,7 @@ describe("createAgentChatTransport", () => {
         messages: [
           {
             role: "user",
-            content:
-              "Review this reference.\n\nAttachments:\n- review.pdf (application/pdf)",
+            content: "Review this reference.",
           },
           { role: "assistant", content: "I reviewed the reference." },
           { role: "user", content: "What should I focus on next?" },

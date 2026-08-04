@@ -421,7 +421,10 @@ function AgentSurfaceInner({
         messageTimesRef.current = new Map(
           chat.messages.map((message) => [message.id, message.createdAt]),
         );
-        const nextMessages = toUiMessages(chat.messages, messagesRef.current);
+        const nextMessages = toUiMessages(chat.messages, messagesRef.current, {
+          hydratedChatId: chat.id,
+          loadedChatId: activeChat?.id ?? null,
+        });
         setMessages(nextMessages);
         void resumeStream().catch((error) => {
           if (!cancelled) {
@@ -477,7 +480,12 @@ function AgentSurfaceInner({
           messageTimesRef.current = new Map(
             chat.messages.map((message) => [message.id, message.createdAt]),
           );
-          setMessages(toUiMessages(chat.messages, messagesRef.current));
+          setMessages(
+            toUiMessages(chat.messages, messagesRef.current, {
+              hydratedChatId: chat.id,
+              loadedChatId: activeChat?.id ?? null,
+            }),
+          );
         }
       })
       .catch((error) => {
@@ -488,7 +496,7 @@ function AgentSurfaceInner({
     return () => {
       cancelled = true;
     };
-  }, [activeRun, setMessages, status]);
+  }, [activeChat?.id, activeRun, setMessages, status]);
 
   async function saveActiveChat(
     chat: AgentChatRecord,
@@ -2333,9 +2341,17 @@ function AgentComposer({
 export function toUiMessages(
   messages: AgentVaultMessage[],
   loadedMessages: UIMessage[] = [],
+  conversationIds?: {
+    hydratedChatId: string;
+    loadedChatId: string | null;
+  },
 ): UIMessage[] {
+  const canRestoreLoadedAttachments =
+    conversationIds?.hydratedChatId === conversationIds?.loadedChatId;
   const loadedMessagesById = new Map(
-    loadedMessages.map((message) => [message.id, message]),
+    canRestoreLoadedAttachments
+      ? loadedMessages.map((message) => [message.id, message])
+      : [],
   );
   return messages.map((message) => {
     if (message.role !== "user") {
