@@ -1,6 +1,6 @@
 import type { DynamicToolUIPart } from "ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const chatMock = vi.hoisted(() => ({
@@ -193,6 +193,33 @@ describe("AgentMessage activity state", () => {
     expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
   });
 
+  it("promotes a prolonged silent wait into an honest Hermes activity log", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <AgentMessage
+          displayName="Hermes"
+          isFirst
+          isLastMessage
+          isStreaming
+          message={{ id: "assistant-1", role: "assistant", parts: [] }}
+          onToolApprovalResponse={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByText("Sent context to Hermes")).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1_500));
+
+      expect(screen.getByText("Sent context to Hermes")).toBeInTheDocument();
+      expect(screen.getAllByText("Waiting for Hermes")).toHaveLength(2);
+      expect(
+        screen.getByText("No reasoning or tool activity has arrived yet."),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens an event-driven activity log when a real tool starts", () => {
     render(
       <AgentMessage
@@ -219,6 +246,34 @@ describe("AgentMessage activity state", () => {
 
     expect(screen.getAllByText("Searching your vault")).toHaveLength(2);
     expect(screen.getByText("synthetic notes")).toBeInTheDocument();
+  });
+
+  it("renders reasoning summaries that Hermes explicitly streams", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming
+        message={{
+          id: "assistant-1",
+          role: "assistant",
+          parts: [
+            {
+              type: "reasoning",
+              text: "Checking the supplied context before answering.",
+            },
+          ],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Thinking through the response")).toBeInTheDocument();
+    expect(screen.getByText("Reasoned through it")).toBeInTheDocument();
+    expect(
+      screen.getByText("Checking the supplied context before answering."),
+    ).toBeInTheDocument();
   });
 });
 

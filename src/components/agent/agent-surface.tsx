@@ -1594,6 +1594,21 @@ function useElapsedSeconds(): number {
   return elapsedSeconds;
 }
 
+function useDelayedVisibility(active: boolean, delayMs: number): boolean {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!active) {
+      setVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setVisible(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [active, delayMs]);
+
+  return active && visible;
+}
+
 function formatElapsed(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -1659,18 +1674,20 @@ export function AgentMessage({
   const lastPart = message.parts.at(-1);
   const reasoningStreaming =
     isLastMessage && isStreaming && lastPart?.type === "reasoning";
-  // The turn whose chain-of-thought is live: the last assistant message while
-  // the run is still streaming. Its activity log auto-expands and ticks a timer.
+  // The turn whose activity is live: the last assistant message while the run
+  // is still streaming. Its activity log auto-expands and ticks a timer.
   const active = !isUser && isLastMessage && isStreaming;
   const hasActivity = reasoningText.length > 0 || toolParts.length > 0;
+  const silentlyWaiting = active && !hasActivity && !responseText;
+  const showSilentActivity = useDelayedVisibility(silentlyWaiting, 1_500);
   // The activity disclosure is event-driven. Before Hermes emits reasoning or
-  // a tool event, show a compact wait state with no fake step queue or remote
-  // execution claim. A plain answer that streams directly never needs a panel.
-  const showChainOfThought = !isUser && hasActivity;
-  const waitingForActivity = active && !hasActivity && !responseText;
+  // a tool event, keep fast answers compact. A silent wait that lasts long
+  // enough to be meaningful promotes into the same honest activity panel.
+  const showActivityLog = !isUser && (hasActivity || showSilentActivity);
+  const waitingForActivity = silentlyWaiting && !showSilentActivity;
 
   // Don't render a bare avatar for an assistant turn that has nothing to show
-  // yet — unless it's the active turn, whose chain-of-thought stands in with a
+  // yet — unless it's the active turn, whose activity state stands in with a
   // live "working" header while we wait for the first token.
   if (
     !isUser &&
@@ -1724,7 +1741,7 @@ export function AgentMessage({
         ) : (
           // Assistant reply: bare full-width prose, no avatar or bubble — a
           // small px-4 inset keeps it off the hard left edge and aligns the
-          // chain-of-thought, response, and sources in one column.
+          // activity log, response, and sources in one column.
           <div
             className={cn(
               "min-w-0 max-w-none text-foreground [&_li]:pl-1 [&_ol]:marker:text-muted-foreground/70 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
@@ -1737,14 +1754,15 @@ export function AgentMessage({
             {waitingForActivity && (
               <AgentWorkingStatus displayName={displayName} />
             )}
-            {showChainOfThought && (
-              <AgentChainOfThought
+            {showActivityLog && (
+              <AgentActivityLog
                 active={active}
                 displayName={displayName}
                 onToolApprovalResponse={onToolApprovalResponse}
                 reasoningStreaming={reasoningStreaming}
                 reasoningText={reasoningText}
                 toolParts={toolParts}
+                waitingForHermes={silentlyWaiting}
               />
             )}
             {responseText && (
@@ -1872,13 +1890,14 @@ function AgentInlineCitations({ sources }: { sources: SourceUrlPart[] }) {
   );
 }
 
-function AgentChainOfThought({
+function AgentActivityLog({
   active,
   displayName,
   onToolApprovalResponse,
   reasoningStreaming,
   reasoningText,
   toolParts,
+  waitingForHermes,
 }: {
   active: boolean;
   displayName: string;
@@ -1886,6 +1905,7 @@ function AgentChainOfThought({
   reasoningStreaming: boolean;
   reasoningText: string;
   toolParts: AgentToolPart[];
+  waitingForHermes: boolean;
 }) {
   const hasReasoning = reasoningText.trim().length > 0;
   // The "Worked for Ns · K steps" tally counts the real reasoning + tool work,
@@ -1895,6 +1915,7 @@ function AgentChainOfThought({
     displayName,
     reasoningStreaming,
     toolParts,
+    waitingForHermes,
   );
 
   return (
@@ -1906,6 +1927,13 @@ function AgentChainOfThought({
       />
       <ChainOfThoughtContent>
         <ChainOfThoughtStep label="Sent context to Hermes" status="complete" />
+        {waitingForHermes && !hasReasoning && toolParts.length === 0 && (
+          <ChainOfThoughtStep
+            description="No reasoning or tool activity has arrived yet."
+            label="Waiting for Hermes"
+            status="active"
+          />
+        )}
         {hasReasoning && (
           <ChainOfThoughtStep
             label="Reasoned through it"
@@ -1932,6 +1960,7 @@ function currentAgentActivityLabel(
   displayName: string,
   reasoningStreaming: boolean,
   toolParts: AgentToolPart[],
+  waitingForHermes: boolean,
 ): string {
   const activeTool = [...toolParts]
     .reverse()
@@ -1943,6 +1972,7 @@ function currentAgentActivityLabel(
     return agentToolDescriptor(toolName, title, input).label;
   }
   if (reasoningStreaming) return "Thinking through the response";
+  if (waitingForHermes) return "Waiting for Hermes";
   return `${displayName} is working`;
 }
 
