@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   hasUnreadMail: false,
+  navigate: vi.fn(),
   pathname: "/",
 }));
 
@@ -11,7 +12,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ to, viewTransition: _viewTransition, ...props }: React.ComponentProps<"a"> & { to: string; viewTransition?: boolean }) => (
     <a href={to} {...props} />
   ),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
   useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => string }) =>
     select({ location: { pathname: mocks.pathname } }),
 }));
@@ -46,7 +47,14 @@ import { Sidebar } from "./sidebar";
 describe("Sidebar unread mail state", () => {
   beforeEach(() => {
     mocks.hasUnreadMail = false;
+    mocks.navigate.mockReset();
     mocks.pathname = "/";
+  });
+
+  it("moves Graph out of the main navigation rail", () => {
+    render(<Sidebar mailReady />);
+
+    expect(screen.queryByRole("link", { name: "Graph" })).not.toBeInTheDocument();
   });
 
   it("renders the Mail navigation icon blue while unread mail exists", () => {

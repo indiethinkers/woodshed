@@ -531,6 +531,7 @@ pub fn agent_chat_stream(app: AppHandle, input: AgentChatStreamInput) -> Result<
                             error_text: None,
                             title: None,
                             dynamic: None,
+                            usage: None,
                         },
                     },
                 );
@@ -615,6 +616,23 @@ pub fn agent_runs_for_conversation(
     for run in runs::list_for_conversation(&app_data, &conversation_id, 20)? {
         let run = reconcile_run(&app, &state, &app_data, run)?;
         output.push(AgentRunDto::from(&run));
+    }
+    Ok(output)
+}
+
+#[tauri::command]
+pub fn agent_runs_active(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<AgentRunDto>, String> {
+    let app_data = app_data_dir(&app)?;
+    let _mutation = state.agent_run_mutations.lock_recover();
+    let mut output = Vec::new();
+    for run in runs::list_active(&app_data)? {
+        let run = reconcile_run(&app, &state, &app_data, run)?;
+        if runs::is_active(run.status) {
+            output.push(AgentRunDto::from(&run));
+        }
     }
     Ok(output)
 }

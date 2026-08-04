@@ -481,6 +481,7 @@ pub fn run() {
             agent_cmd::agent_run_create,
             agent_cmd::agent_run_get,
             agent_cmd::agent_runs_for_conversation,
+            agent_cmd::agent_runs_active,
             agent_cmd::agent_run_cancel,
             agent_cmd::agent_chats_all,
             agent_cmd::agent_chat_get,

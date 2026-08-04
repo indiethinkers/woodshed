@@ -9,7 +9,12 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: mocks.tauriInvoke,
 }));
 
-import { type AgentRun, createAgentChatTransport } from "./transport";
+import {
+  type AgentRun,
+  cancelAgentRun,
+  createAgentChatTransport,
+  subscribeToActiveAgentRuns,
+} from "./transport";
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -439,5 +444,27 @@ describe("createAgentChatTransport", () => {
         }),
       },
     );
+  });
+
+  it("owns background-run polling outside the React surface", async () => {
+    const active = run({ status: "running" });
+    mocks.tauriInvoke.mockResolvedValueOnce([active]);
+    const onRuns = vi.fn();
+
+    const unsubscribe = subscribeToActiveAgentRuns({ onRuns });
+    await vi.waitFor(() => expect(onRuns).toHaveBeenCalledWith([active]));
+    unsubscribe();
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_runs_active");
+  });
+
+  it("owns explicit durable-run cancellation", async () => {
+    const cancelled = run({ status: "cancelled" });
+    mocks.tauriInvoke.mockResolvedValueOnce(cancelled);
+
+    await expect(cancelAgentRun("agent-run-1")).resolves.toEqual(cancelled);
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_cancel", {
+      runId: "agent-run-1",
+    });
   });
 });

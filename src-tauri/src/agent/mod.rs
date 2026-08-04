@@ -130,6 +130,21 @@ pub struct AgentChatStreamEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentTokenUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentStreamEvent {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,6 +167,8 @@ pub struct AgentStreamEvent {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentTokenUsage>,
 }
 
 impl AgentStreamEvent {
@@ -168,6 +185,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -184,6 +202,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -204,6 +223,7 @@ impl AgentStreamEvent {
             error_text: None,
             title,
             dynamic: Some(true),
+            usage: None,
         }
     }
 
@@ -220,6 +240,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -241,6 +262,24 @@ impl AgentStreamEvent {
             error_text: None,
             title,
             dynamic: Some(true),
+            usage: None,
+        }
+    }
+
+    pub fn usage(usage: AgentTokenUsage) -> Self {
+        Self {
+            kind: "usage".to_string(),
+            delta: None,
+            error: None,
+            tool_call_id: None,
+            tool_name: None,
+            input_text_delta: None,
+            input: None,
+            output: None,
+            error_text: None,
+            title: None,
+            dynamic: None,
+            usage: Some(usage),
         }
     }
 
@@ -257,6 +296,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 }
@@ -1147,7 +1187,77 @@ where
     if let Some(tool_calls) = parsed.pointer("/choices/0/message/tool_calls") {
         produced |= parse_tool_calls(tool_calls, state, on_event)?;
     }
+    if let Some(usage) = token_usage_from_payload(&parsed) {
+        on_event(AgentStreamEvent::usage(usage))?;
+    }
     Ok(produced)
+}
+
+fn token_usage_from_payload(payload: &Value) -> Option<AgentTokenUsage> {
+    let usage = payload.get("usage")?;
+    let input_tokens = first_u64(
+        usage,
+        &[
+            "/input_tokens",
+            "/inputTokens",
+            "/prompt_tokens",
+            "/promptTokens",
+        ],
+    );
+    let output_tokens = first_u64(
+        usage,
+        &[
+            "/output_tokens",
+            "/outputTokens",
+            "/completion_tokens",
+            "/completionTokens",
+        ],
+    );
+    let total_tokens = first_u64(usage, &["/total_tokens", "/totalTokens"])
+        .or_else(|| input_tokens?.checked_add(output_tokens?));
+    let reasoning_tokens = first_u64(
+        usage,
+        &[
+            "/reasoning_tokens",
+            "/reasoningTokens",
+            "/completion_tokens_details/reasoning_tokens",
+            "/completionTokensDetails/reasoningTokens",
+            "/output_tokens_details/reasoning_tokens",
+            "/outputTokensDetails/reasoningTokens",
+        ],
+    );
+    let cached_input_tokens = first_u64(
+        usage,
+        &[
+            "/cached_input_tokens",
+            "/cachedInputTokens",
+            "/prompt_tokens_details/cached_tokens",
+            "/promptTokensDetails/cachedTokens",
+            "/input_tokens_details/cached_tokens",
+            "/inputTokensDetails/cachedTokens",
+        ],
+    );
+    if input_tokens.is_none()
+        && output_tokens.is_none()
+        && total_tokens.is_none()
+        && reasoning_tokens.is_none()
+        && cached_input_tokens.is_none()
+    {
+        return None;
+    }
+    Some(AgentTokenUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        reasoning_tokens,
+        cached_input_tokens,
+    })
+}
+
+fn first_u64(value: &Value, pointers: &[&str]) -> Option<u64> {
+    pointers
+        .iter()
+        .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
 }
 
 fn parse_tool_calls<Event>(
@@ -1761,6 +1871,35 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, "reasoning-delta");
         assert_eq!(events[0].delta.as_deref(), Some("checking files"));
+    }
+
+    #[test]
+    fn parse_sse_event_normalizes_token_usage() {
+        let mut events = Vec::new();
+        let mut state = StreamParseState::default();
+        let mut on_event = |event: AgentStreamEvent| {
+            events.push(event);
+            Ok(())
+        };
+
+        let produced = parse_sse_event(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":345,\"total_tokens\":1545,\"prompt_tokens_details\":{\"cached_tokens\":200},\"completion_tokens_details\":{\"reasoning_tokens\":45}}}",
+            &mut state,
+            &mut on_event,
+        )
+        .unwrap();
+
+        assert!(!produced, "usage alone is not visible assistant content");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "usage");
+        assert_eq!(events[0].usage.as_ref().unwrap().input_tokens, Some(1200));
+        assert_eq!(events[0].usage.as_ref().unwrap().output_tokens, Some(345));
+        assert_eq!(events[0].usage.as_ref().unwrap().total_tokens, Some(1545));
+        assert_eq!(
+            events[0].usage.as_ref().unwrap().cached_input_tokens,
+            Some(200)
+        );
+        assert_eq!(events[0].usage.as_ref().unwrap().reasoning_tokens, Some(45));
     }
 
     #[test]

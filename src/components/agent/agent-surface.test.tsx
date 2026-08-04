@@ -82,6 +82,8 @@ vi.mock("@/lib/tauri", () => ({
 }));
 
 import {
+  AgentBackgroundQueue,
+  AgentContextUsage,
   AgentSurface,
   AgentMessage,
   AgentRunBanner,
@@ -92,6 +94,31 @@ import {
 } from "./agent-surface";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import type { AgentRun } from "@/lib/agent/transport";
+
+function syntheticRun(overrides: Partial<AgentRun> = {}): AgentRun {
+  return {
+    id: "agent-run-synthetic",
+    conversationId: "agent-conversation-1",
+    sessionId: "agent-conversation-1",
+    assistantMessageId: "agent-response-synthetic",
+    status: "running",
+    createdAt: "2031-02-03T12:00:00Z",
+    updatedAt: "2031-02-03T12:00:01Z",
+    startedAt: "2031-02-03T12:00:01Z",
+    finishedAt: null,
+    inputMessage: {
+      id: "message-1",
+      role: "user",
+      createdAt: "2031-02-03T12:00:00Z",
+      content: "Review the synthetic reference.",
+    },
+    events: [],
+    finalResponse: null,
+    error: null,
+    retryOf: null,
+    ...overrides,
+  };
+}
 
 describe("Agent conversation ordering", () => {
   it("sorts chats by creation time descending even when an older chat was updated later", () => {
@@ -233,6 +260,26 @@ describe("AgentWorkIndicator", () => {
 });
 
 describe("AgentMessage activity state", () => {
+  it("repairs incomplete Markdown while an assistant response is streaming", () => {
+    const { container } = render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming
+        message={{
+          id: "assistant-streaming",
+          role: "assistant",
+          parts: [{ type: "text", text: "**Streaming response" }],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Streaming response")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("**");
+  });
+
   it("does not reparse an unchanged prior message when its parent rerenders", () => {
     const parts: UIMessage["parts"] = [
       { type: "text", text: "A stable synthetic response." },
@@ -362,10 +409,74 @@ describe("AgentMessage activity state", () => {
     );
 
     expect(screen.getByText("Thinking through the response")).toBeInTheDocument();
-    expect(screen.getByText("Reasoned through it")).toBeInTheDocument();
+    expect(screen.queryByText("Reasoned through it")).not.toBeInTheDocument();
     expect(
       screen.getByText("Checking the supplied context before answering."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("Agent background work", () => {
+  it("shows durable runs from other conversations and opens the selected chat", () => {
+    const onSelect = vi.fn();
+    render(
+      <AgentBackgroundQueue
+        chats={[
+          {
+            id: "agent-conversation-2",
+            path: "agent/agent-conversation-2.md",
+            title: "Background research",
+            agent: "Hermes",
+            model: "synthetic-model",
+            created: "2031-02-03T12:00:00Z",
+            updated: "2031-02-03T12:00:01Z",
+            lastMessageCreated: null,
+            pinned: false,
+            messageCount: 1,
+            preview: "Synthetic preview.",
+          },
+        ]}
+        onSelect={onSelect}
+        runs={[
+          syntheticRun({
+            id: "agent-run-background",
+            conversationId: "agent-conversation-2",
+            sessionId: "agent-conversation-2",
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("1 background run")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /1 background run/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Background research" }));
+    expect(onSelect).toHaveBeenCalledWith("agent-conversation-2");
+  });
+
+  it("shows token usage only when Hermes provides it", () => {
+    const run = syntheticRun({
+      status: "completed",
+      events: [
+        {
+          kind: "usage",
+          usage: {
+            inputTokens: 1200,
+            outputTokens: 345,
+            reasoningTokens: 45,
+            cachedInputTokens: 200,
+            totalTokens: 1545,
+          },
+        },
+      ],
+    });
+
+    const { rerender } = render(<AgentContextUsage run={run} />);
+    expect(screen.getByRole("button", { name: "1.5K tokens used" })).toBeInTheDocument();
+
+    rerender(<AgentContextUsage run={syntheticRun()} />);
+    expect(screen.queryByRole("button", { name: /tokens used/ })).not.toBeInTheDocument();
   });
 });
 
@@ -554,6 +665,27 @@ describe("persisted agent attachments", () => {
 });
 
 describe("AgentThoughtTool", () => {
+  it("renders a structured update-plan tool as a plan", () => {
+    const part: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "update_plan",
+      toolCallId: "call_plan",
+      state: "input-available",
+      input: {
+        plan: [
+          { step: "Inspect the synthetic input", status: "completed" },
+          { step: "Draft the response", status: "in_progress" },
+        ],
+      },
+    };
+
+    render(<AgentThoughtTool part={part} />);
+
+    expect(screen.getByText("Implementation plan")).toBeInTheDocument();
+    expect(screen.getByText("Inspect the synthetic input")).toBeInTheDocument();
+    expect(screen.getByText("Draft the response")).toBeInTheDocument();
+  });
+
   it("renders a friendly activity line and reveals parameters on expand", () => {
     const part: DynamicToolUIPart = {
       type: "dynamic-tool",

@@ -194,6 +194,16 @@ pub fn list_for_conversation(
     Ok(runs)
 }
 
+pub fn list_active(app_data_dir: &Path) -> Result<Vec<AgentRunRecord>, String> {
+    let mut runs = read_all(app_data_dir)?
+        .into_iter()
+        .filter(|run| is_active(run.status))
+        .collect::<Vec<_>>();
+    runs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    runs.truncate(20);
+    Ok(runs)
+}
+
 pub fn mark_running(
     app_data_dir: &Path,
     run_id: &str,
@@ -489,6 +499,32 @@ mod tests {
         assert_eq!(runs[0].id, run.id);
         assert_eq!(runs[0].status, AgentRunStatus::Running);
         assert_eq!(runs[0].events.len(), 1);
+    }
+
+    #[test]
+    fn active_queue_lists_runs_across_conversations_newest_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let (older, _) = create_or_get(temp.path(), input(), "2031-02-03T12:00:00Z").unwrap();
+        mark_running(temp.path(), &older.id, "2031-02-03T12:00:01Z").unwrap();
+
+        let mut newer_input = input();
+        newer_input.conversation_id = "agent-conversation-2".to_string();
+        newer_input.idempotency_key = "user-message-2".to_string();
+        newer_input.input_message.id = "user-message-2".to_string();
+        let (newer, _) = create_or_get(temp.path(), newer_input, "2031-02-03T12:01:00Z").unwrap();
+
+        complete(
+            temp.path(),
+            &older.id,
+            "Finished response.",
+            "2031-02-03T12:02:00Z",
+        )
+        .unwrap();
+
+        let active = list_active(temp.path()).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, newer.id);
+        assert_eq!(active[0].conversation_id, "agent-conversation-2");
     }
 
     #[test]

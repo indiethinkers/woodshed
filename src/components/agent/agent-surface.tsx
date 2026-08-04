@@ -72,10 +72,42 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
 import {
+  Context,
+  ContextContent,
+  ContextTrigger,
+  ContextUsageBreakdown,
+  formatTokens,
+  totalFromUsage,
+} from "@/components/ai-elements/context";
+import {
   Conversation,
   ConversationContent,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import {
+  Plan,
+  PlanContent,
+  PlanDescription,
+  PlanHeader,
+  PlanTitle,
+  PlanTrigger,
+} from "@/components/ai-elements/plan";
+import {
+  Queue,
+  QueueItem,
+  QueueItemContent,
+  QueueItemIndicator,
+  QueueList,
+  QueueSection,
+  QueueSectionContent,
+  QueueSectionLabel,
+  QueueSectionTrigger,
+} from "@/components/ai-elements/queue";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning";
 import {
   InlineCitation,
   InlineCitationCard,
@@ -145,7 +177,10 @@ import {
 } from "@/lib/agent/attachment-context";
 import {
   type AgentRun,
+  cancelAgentRun,
   createAgentChatTransport,
+  latestAgentUsage,
+  subscribeToActiveAgentRuns,
 } from "@/lib/agent/transport";
 import {
   captureAgentPageContext,
@@ -273,6 +308,7 @@ function AgentSurfaceInner({
   const [activeChat, setActiveChat] = useState<AgentChatRecord | null>(null);
   const [activeId, setActiveId] = useState<string | null>(urlChatId);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
+  const [activeRuns, setActiveRuns] = useState<AgentRun[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
@@ -308,6 +344,9 @@ function AgentSurfaceInner({
           );
         },
         onRunChange: (run) => {
+          if (run) {
+            setActiveRuns((current) => updateActiveRunQueue(current, run));
+          }
           if (!run || run.conversationId === activeIdRef.current) {
             setActiveRun(run);
           }
@@ -352,6 +391,10 @@ function AgentSurfaceInner({
   const busy =
     effectiveStatus === "submitted" || effectiveStatus === "streaming";
   const canSubmit = configured && !busy;
+  const backgroundRuns = useMemo(
+    () => activeRuns.filter((run) => run.conversationId !== activeId),
+    [activeId, activeRuns],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -388,6 +431,20 @@ function AgentSurfaceInner({
       cancelled = true;
     };
   }, [navigate, pageMode, urlChatId]);
+
+  useEffect(() => {
+    if (!pageMode) return;
+    return subscribeToActiveAgentRuns({
+      onError: (error) => {
+        setLastError(error instanceof Error ? error.message : String(error));
+      },
+      onRuns: (runs) => {
+        setActiveRuns((current) =>
+          sameActiveRuns(current, runs) ? current : runs,
+        );
+      },
+    });
+  }, [pageMode]);
 
   useEffect(() => {
     if (pageMode && urlChatId && urlChatId !== activeId) {
@@ -687,7 +744,7 @@ function AgentSurfaceInner({
   function cancelRun() {
     const run = activeRun;
     if (run && (run.status === "queued" || run.status === "running")) {
-      void tauriInvoke<AgentRun>("agent_run_cancel", { runId: run.id })
+      void cancelAgentRun(run.id)
         .then((cancelled) => {
           if (cancelled && cancelled.conversationId === activeIdRef.current) {
             setActiveRun(cancelled);
@@ -791,6 +848,7 @@ function AgentSurfaceInner({
             configured={configured}
             context={activeChat?.context}
             displayName={displayName}
+            run={activeRun}
             status={effectiveStatus}
           />
         ) : (
@@ -801,6 +859,13 @@ function AgentSurfaceInner({
             onNewChat={startNewChat}
             onSelectChat={selectChat}
             pageChats={sidebarPageChats}
+          />
+        )}
+        {pageMode && backgroundRuns.length > 0 && (
+          <AgentBackgroundQueue
+            chats={chats}
+            onSelect={selectChat}
+            runs={backgroundRuns}
           />
         )}
         {activeRun && (
@@ -1107,12 +1172,14 @@ function AgentHeader({
   configured,
   context,
   displayName,
+  run,
   status,
 }: {
   configResolved: boolean;
   configured: boolean;
   context?: AgentChatContext | null;
   displayName: string;
+  run: AgentRun | null;
   status: ChatStatus;
 }) {
   const busy = status === "submitted" || status === "streaming";
@@ -1136,6 +1203,7 @@ function AgentHeader({
         )}
       </div>
       <div className="flex items-center gap-2">
+        <AgentContextUsage run={run} />
         {/* Hold the status pill until config resolves so it doesn't flash
             "Setup needed" → "Ready" on every navigation to the page. */}
         {configResolved && (
@@ -1167,6 +1235,76 @@ function AgentHeader({
         </Button>
       </div>
     </header>
+  );
+}
+
+export function AgentContextUsage({ run }: { run: AgentRun | null }) {
+  const usage = latestAgentUsage(run);
+  if (!usage) return null;
+  const total = usage.totalTokens ?? totalFromUsage(usage);
+  if (total <= 0) return null;
+  const compactTotal = formatTokens(total);
+
+  return (
+    <Context usage={usage}>
+      <ContextTrigger aria-label={`${compactTotal} tokens used`}>
+        {compactTotal} tokens
+      </ContextTrigger>
+      <ContextContent>
+        <ContextUsageBreakdown />
+      </ContextContent>
+    </Context>
+  );
+}
+
+export function AgentBackgroundQueue({
+  chats,
+  onSelect,
+  runs,
+}: {
+  chats: AgentChatSummary[];
+  onSelect: (id: string) => void;
+  runs: AgentRun[];
+}) {
+  if (runs.length === 0) return null;
+  const chatTitles = new Map(chats.map((chat) => [chat.id, chat.title]));
+  const label = runs.length === 1 ? "background run" : "background runs";
+
+  return (
+    <div className="shrink-0 border-b border-border/50 px-6 py-2">
+      <Queue className="mx-auto w-full max-w-[720px]">
+        <QueueSection>
+          <QueueSectionTrigger>
+            <QueueSectionLabel count={runs.length} label={label} />
+            <span className="text-[11px] text-muted-foreground/65">
+              Continues if you navigate
+            </span>
+          </QueueSectionTrigger>
+          <QueueSectionContent>
+            <QueueList>
+              {runs.map((run) => {
+                const title =
+                  chatTitles.get(run.conversationId) ?? "Agent conversation";
+                return (
+                  <QueueItem key={run.id}>
+                    <QueueItemIndicator />
+                    <QueueItemContent>{title}</QueueItemContent>
+                    <button
+                      aria-label={`Open ${title}`}
+                      className="shrink-0 rounded-md px-2 py-1 font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      onClick={() => onSelect(run.conversationId)}
+                      type="button"
+                    >
+                      Open
+                    </button>
+                  </QueueItem>
+                );
+              })}
+            </QueueList>
+          </QueueSectionContent>
+        </QueueSection>
+      </Queue>
+    </div>
   );
 }
 
@@ -1694,7 +1832,8 @@ function AgentMessageInner({
   // The activity disclosure is event-driven. Before Hermes emits reasoning or
   // a tool event, keep fast answers compact. A silent wait that lasts long
   // enough to be meaningful promotes into the same honest activity panel.
-  const showActivityLog = !isUser && (hasActivity || showSilentActivity);
+  const showActivityLog =
+    !isUser && (toolParts.length > 0 || showSilentActivity);
   const waitingForActivity = silentlyWaiting && !showSilentActivity;
 
   // Don't render a bare avatar for an assistant turn that has nothing to show
@@ -1765,19 +1904,32 @@ function AgentMessageInner({
             {waitingForActivity && (
               <AgentWorkingStatus displayName={displayName} />
             )}
+            {reasoningText && (
+              <Reasoning
+                className="mb-5"
+                isStreaming={reasoningStreaming}
+              >
+                <ReasoningTrigger />
+                <ReasoningContent>{reasoningText}</ReasoningContent>
+              </Reasoning>
+            )}
             {showActivityLog && (
               <AgentActivityLog
                 active={active}
                 displayName={displayName}
                 onToolApprovalResponse={onToolApprovalResponse}
-                reasoningStreaming={reasoningStreaming}
-                reasoningText={reasoningText}
                 toolParts={toolParts}
                 waitingForHermes={silentlyWaiting}
               />
             )}
             {responseText && (
-              <Markdown preserveSoftBreaks text={responseText} />
+              <MessageResponse
+                isAnimating={active}
+                mode={active ? "streaming" : "static"}
+                parseIncompleteMarkdown={active}
+              >
+                {responseText}
+              </MessageResponse>
             )}
             {responseArtifact && (
               <AgentResponseArtifact artifact={responseArtifact} />
@@ -1918,32 +2070,31 @@ function AgentActivityLog({
   active,
   displayName,
   onToolApprovalResponse,
-  reasoningStreaming,
-  reasoningText,
   toolParts,
   waitingForHermes,
 }: {
   active: boolean;
   displayName: string;
   onToolApprovalResponse?: ChatAddToolApproveResponseFunction;
-  reasoningStreaming: boolean;
-  reasoningText: string;
   toolParts: AgentToolPart[];
   waitingForHermes: boolean;
 }) {
-  const hasReasoning = reasoningText.trim().length > 0;
-  // The "Worked for Ns · K steps" tally counts the real reasoning + tool work,
-  // not the always-on "sent context" baseline step.
-  const stepCount = toolParts.length + (hasReasoning ? 1 : 0);
+  // The "Worked for Ns · K steps" tally counts real tool work, not the
+  // always-on "sent context" baseline step. Continuous model reasoning has
+  // its own dedicated disclosure above this activity log.
+  const stepCount = toolParts.length;
   const activeLabel = currentAgentActivityLabel(
     displayName,
-    reasoningStreaming,
     toolParts,
     waitingForHermes,
   );
+  const toolActive = toolParts.some(
+    (part) => toolStatusFromPart(part) === "active",
+  );
+  const activityActive = active && (waitingForHermes || toolActive);
 
   return (
-    <ChainOfThought active={active} className="mb-5">
+    <ChainOfThought active={activityActive} className="mb-5">
       <ChainOfThoughtHeader
         activeLabel={activeLabel}
         displayName={displayName}
@@ -1951,22 +2102,12 @@ function AgentActivityLog({
       />
       <ChainOfThoughtContent>
         <ChainOfThoughtStep label="Sent context to Hermes" status="complete" />
-        {waitingForHermes && !hasReasoning && toolParts.length === 0 && (
+        {waitingForHermes && toolParts.length === 0 && (
           <ChainOfThoughtStep
             description="No reasoning or tool activity has arrived yet."
             label="Waiting for Hermes"
             status="active"
           />
-        )}
-        {hasReasoning && (
-          <ChainOfThoughtStep
-            label="Reasoned through it"
-            status={reasoningStreaming ? "active" : "complete"}
-          >
-            <div className="max-h-44 overflow-y-auto pr-1 text-[12.5px] leading-5 text-muted-foreground [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0 [&_p]:!my-2">
-              <Markdown text={reasoningText} />
-            </div>
-          </ChainOfThoughtStep>
         )}
         {toolParts.map((part) => (
           <AgentThoughtTool
@@ -1982,7 +2123,6 @@ function AgentActivityLog({
 
 function currentAgentActivityLabel(
   displayName: string,
-  reasoningStreaming: boolean,
   toolParts: AgentToolPart[],
   waitingForHermes: boolean,
 ): string {
@@ -1995,12 +2135,30 @@ function currentAgentActivityLabel(
     const input = "input" in activeTool ? activeTool.input : undefined;
     return agentToolDescriptor(toolName, title, input).label;
   }
-  if (reasoningStreaming) return "Thinking through the response";
   if (waitingForHermes) return "Waiting for Hermes";
   return `${displayName} is working`;
 }
 
 export function AgentThoughtTool({
+  onToolApprovalResponse,
+  part,
+}: {
+  onToolApprovalResponse?: ChatAddToolApproveResponseFunction;
+  part: AgentToolPart;
+}) {
+  const plan = structuredPlanFromToolPart(part);
+  if (plan) {
+    return <AgentStructuredPlan part={part} plan={plan} />;
+  }
+  return (
+    <AgentThoughtToolDetail
+      onToolApprovalResponse={onToolApprovalResponse}
+      part={part}
+    />
+  );
+}
+
+function AgentThoughtToolDetail({
   onToolApprovalResponse,
   part,
 }: {
@@ -2115,6 +2273,121 @@ export function AgentThoughtTool({
       )}
     </ChainOfThoughtStep>
   );
+}
+
+type StructuredPlanStatus = "pending" | "in_progress" | "completed";
+
+interface StructuredPlanStep {
+  status: StructuredPlanStatus;
+  step: string;
+}
+
+interface StructuredPlanData {
+  explanation?: string;
+  steps: StructuredPlanStep[];
+}
+
+function AgentStructuredPlan({
+  part,
+  plan,
+}: {
+  part: AgentToolPart;
+  plan: StructuredPlanData;
+}) {
+  const status = toolStatusFromPart(part);
+  const completed = plan.steps.filter(
+    (step) => step.status === "completed",
+  ).length;
+  return (
+    <ChainOfThoughtStep label="Updated plan" status={status}>
+      <Plan
+        className="mt-2"
+        defaultOpen
+        isStreaming={status === "active"}
+      >
+        <PlanHeader>
+          <div className="min-w-0">
+            <PlanTitle>Implementation plan</PlanTitle>
+            <PlanDescription>
+              {plan.explanation ?? `${completed} of ${plan.steps.length} complete`}
+            </PlanDescription>
+          </div>
+          <PlanTrigger />
+        </PlanHeader>
+        <PlanContent>
+          <ol className="space-y-1.5">
+            {plan.steps.map((item, index) => (
+              <li
+                className="flex items-start gap-2 text-[12px] leading-5 text-foreground/80"
+                key={`${item.step}-${index}`}
+              >
+                {item.status === "completed" ? (
+                  <CheckCircle2 className="mt-1 size-3 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Circle
+                    className={cn(
+                      "mt-1 size-3 shrink-0 text-muted-foreground",
+                      item.status === "in_progress" && "animate-pulse",
+                    )}
+                    fill={item.status === "in_progress" ? "currentColor" : "none"}
+                  />
+                )}
+                <span>{item.step}</span>
+              </li>
+            ))}
+          </ol>
+        </PlanContent>
+      </Plan>
+    </ChainOfThoughtStep>
+  );
+}
+
+function structuredPlanFromToolPart(
+  part: AgentToolPart,
+): StructuredPlanData | null {
+  const toolName = toolNameFromPart(part)
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
+  if (toolName !== "update_plan" && toolName !== "plan") return null;
+  if (!("input" in part) || !isRecord(part.input)) return null;
+  const rawSteps = Array.isArray(part.input.plan)
+    ? part.input.plan
+    : Array.isArray(part.input.steps)
+      ? part.input.steps
+      : null;
+  if (!rawSteps) return null;
+
+  const steps = rawSteps.flatMap((item): StructuredPlanStep[] => {
+    if (!isRecord(item)) return [];
+    const step =
+      typeof item.step === "string"
+        ? item.step.trim()
+        : typeof item.title === "string"
+          ? item.title.trim()
+          : "";
+    if (!step) return [];
+    const status = normalizePlanStatus(item.status);
+    return [{ status, step }];
+  });
+  if (steps.length === 0) return null;
+  const explanation =
+    typeof part.input.explanation === "string"
+      ? part.input.explanation.trim() || undefined
+      : undefined;
+  return { explanation, steps };
+}
+
+function normalizePlanStatus(value: unknown): StructuredPlanStatus {
+  if (value === "completed" || value === "complete") return "completed";
+  if (value === "in_progress" || value === "in-progress" || value === "active") {
+    return "in_progress";
+  }
+  return "pending";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 type AgentToolApproval = NonNullable<
@@ -2578,6 +2851,32 @@ function upsertSummary(
 ): AgentChatSummary[] {
   const filtered = chats.filter((chat) => chat.id !== next.id);
   return sortChatsByCreatedAt([next, ...filtered]);
+}
+
+function updateActiveRunQueue(
+  runs: AgentRun[],
+  next: AgentRun,
+): AgentRun[] {
+  const remaining = runs.filter((run) => run.id !== next.id);
+  if (next.status !== "queued" && next.status !== "running") {
+    return remaining;
+  }
+  return [next, ...remaining].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
+}
+
+function sameActiveRuns(left: AgentRun[], right: AgentRun[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((run, index) => {
+    const next = right[index];
+    return (
+      next !== undefined &&
+      run.id === next.id &&
+      run.status === next.status &&
+      run.updatedAt === next.updatedAt
+    );
+  });
 }
 
 // Today's Cadence renders at `/`, but the same day is also reachable at the

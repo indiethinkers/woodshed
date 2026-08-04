@@ -43,7 +43,15 @@ export interface AgentRun {
   retryOf?: string | null;
 }
 
-interface AgentRunEvent {
+export interface AgentTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+}
+
+export interface AgentRunEvent {
   kind:
     | "delta"
     | "reasoning-delta"
@@ -54,6 +62,7 @@ interface AgentRunEvent {
     | "tool-output-available"
     | "tool-output-error"
     | "tool-output-denied"
+    | "usage"
     | "done"
     | "error";
   delta?: string | null;
@@ -66,6 +75,7 @@ interface AgentRunEvent {
   errorText?: string | null;
   title?: string | null;
   dynamic?: boolean | null;
+  usage?: AgentTokenUsage | null;
 }
 
 interface StreamPartIds {
@@ -78,6 +88,12 @@ interface StreamPartIds {
 interface AgentTransportOptions {
   getSystemContext?: () => string | null;
   onRunChange?: (run: AgentRun | null) => void;
+  pollIntervalMs?: number;
+}
+
+interface ActiveAgentRunSubscriptionOptions {
+  onError?: (error: unknown) => void;
+  onRuns: (runs: AgentRun[]) => void;
   pollIntervalMs?: number;
 }
 
@@ -140,6 +156,43 @@ export function createAgentChatTransport(
       return streamAgentRun(active, undefined, options);
     },
   };
+}
+
+/**
+ * Observe durable work across conversations. Keeping this lifecycle beside the
+ * chat transport prevents React surfaces from inventing their own run polling
+ * and detach semantics.
+ */
+export function subscribeToActiveAgentRuns({
+  onError,
+  onRuns,
+  pollIntervalMs = 1_500,
+}: ActiveAgentRunSubscriptionOptions): () => void {
+  let stopped = false;
+  let timer: number | undefined;
+
+  async function refresh() {
+    try {
+      const runs = (await tauriInvoke<AgentRun[]>("agent_runs_active")) ?? [];
+      if (!stopped) onRuns(runs);
+    } catch (error) {
+      if (!stopped) onError?.(error);
+    } finally {
+      if (!stopped) timer = window.setTimeout(refresh, pollIntervalMs);
+    }
+  }
+
+  void refresh();
+  return () => {
+    stopped = true;
+    if (timer !== undefined) window.clearTimeout(timer);
+  };
+}
+
+export async function cancelAgentRun(runId: string): Promise<AgentRun> {
+  const run = await tauriInvoke<AgentRun>("agent_run_cancel", { runId });
+  if (!run) throw new Error("Woodshed did not cancel the agent run.");
+  return run;
 }
 
 function streamAgentRun(
@@ -292,6 +345,15 @@ async function listRuns(chatId: string): Promise<AgentRun[]> {
       conversationId: chatId,
     })) ?? []
   );
+}
+
+export function latestAgentUsage(run: AgentRun | null): AgentTokenUsage | null {
+  if (!run) return null;
+  for (let index = run.events.length - 1; index >= 0; index -= 1) {
+    const usage = run.events[index].usage;
+    if (usage) return usage;
+  }
+  return null;
 }
 
 function latestUserMessage(messages: UIMessage[]): AgentRunInputMessage | null {

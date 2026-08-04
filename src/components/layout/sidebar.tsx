@@ -9,7 +9,6 @@ import {
   Database,
   Library,
   Layers,
-  Waypoints,
   Settings,
 } from "lucide-react";
 import { BrandMark } from "@/components/shared/brand-mark";
@@ -40,7 +39,6 @@ const navItems = [
   { label: "People", href: "/people", icon: Users, iconClass: "size-[17px]" },
   { label: "Databases", href: "/databases", icon: Database, iconClass: "size-[15px]" },
   { label: "Areas", href: "/areas", icon: Layers, iconClass: "size-[17px]" },
-  { label: "Graph", href: "/graph", icon: Waypoints, iconClass: "size-4" },
 ] as const;
 
 const railButtonClass =

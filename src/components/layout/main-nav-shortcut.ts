@@ -1,4 +1,4 @@
-const DIGIT_CODE_RE = /^Digit([1-9])$/;
+const DIGIT_CODE_RE = /^Digit([1-8])$/;
 
 export function mainNavShortcutIndex(event: KeyboardEvent): number | null {
   if (!(event.metaKey || event.ctrlKey)) return null;
@@ -7,7 +7,7 @@ export function mainNavShortcutIndex(event: KeyboardEvent): number | null {
   const codeMatch = event.code.match(DIGIT_CODE_RE);
   if (codeMatch) return Number(codeMatch[1]) - 1;
 
-  if (/^[1-9]$/.test(event.key)) return Number(event.key) - 1;
+  if (/^[1-8]$/.test(event.key)) return Number(event.key) - 1;
 
   return null;
 }
