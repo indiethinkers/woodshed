@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  Lock,
-  LockKeyhole,
+  Bot,
   PlugZap,
   Save,
   Trash2,
@@ -38,18 +37,6 @@ const DEFAULT_CONFIG: AgentConfig = {
 };
 const MASKED_KEY_VALUE = "configured-password";
 
-function ReadOnlyChip() {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-flex items-center gap-1 rounded-full bg-foreground/[0.055] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground/80"
-    >
-      <Lock className="size-2.5" strokeWidth={1.8} />
-      Read-only
-    </span>
-  );
-}
-
 export function AgentSettingsSection() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [displayName, setDisplayName] = useState(DEFAULT_CONFIG.displayName);
@@ -63,6 +50,7 @@ export function AgentSettingsSection() {
     "idle",
   );
   const [error, setError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [testResult, setTestResult] =
     useState<AgentConnectionTestResult | null>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
@@ -93,6 +81,7 @@ export function AgentSettingsSection() {
     setApiKey("");
     setIsReplacingKey(false);
     setEditingCustomEndpoint(false);
+    setConnectionError(null);
   }
 
   async function saveDraft() {
@@ -140,6 +129,22 @@ export function AgentSettingsSection() {
     }
   }
 
+  async function handleTestConnection() {
+    setBusy("testing");
+    setConnectionError(null);
+    setTestResult(null);
+    try {
+      const result = await tauriInvoke<AgentConnectionTestResult>(
+        "agent_connection_test",
+      );
+      setTestResult(result);
+    } catch (e) {
+      setConnectionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("idle");
+    }
+  }
+
   async function handleClear() {
     setBusy("clearing");
     setError(null);
@@ -175,6 +180,62 @@ export function AgentSettingsSection() {
       : showingStoredKey
         ? "Test"
         : "Save & test";
+  const managedStatus =
+    busy === "testing"
+      ? {
+          label: "Checking",
+          message: "Contacting the local Hermes gateway…",
+          tone: "checking" as const,
+        }
+      : connectionError
+        ? {
+            label: "Unavailable",
+            message: connectionError,
+            tone: "unavailable" as const,
+          }
+        : testResult?.ok
+          ? {
+              label: "Connected",
+              message:
+                "Hermes is running locally and responding with the configured gateway model.",
+              tone: "connected" as const,
+            }
+          : testResult
+            ? {
+                label: "Needs attention",
+                message: testResult.message,
+                tone: "attention" as const,
+              }
+            : credentialSource === "missing"
+              ? {
+                  label: "Setup needed",
+                  message:
+                    "Woodshed could not find API_SERVER_KEY in the default Hermes profile. Configure it in Hermes, then test again.",
+                  tone: "attention" as const,
+                }
+              : {
+                  label: "Not checked",
+                  message:
+                    "The default profile is configured. Test the connection to confirm Hermes is running locally.",
+                  tone: "neutral" as const,
+                };
+  const managedCardClass =
+    managedStatus.tone === "connected"
+      ? "border-emerald-600/25 bg-emerald-600/[0.035]"
+      : managedStatus.tone === "unavailable"
+        ? "border-red-500/30 bg-red-500/[0.035]"
+        : managedStatus.tone === "attention"
+          ? "border-amber-500/30 bg-amber-500/[0.035]"
+          : "border-border bg-foreground/[0.02]";
+  const managedStatusClass =
+    managedStatus.tone === "connected"
+      ? "bg-emerald-500/10 text-emerald-500"
+      : managedStatus.tone === "unavailable"
+        ? "bg-red-500/10 text-red-500"
+        : managedStatus.tone === "attention" ||
+            managedStatus.tone === "checking"
+          ? "bg-amber-500/10 text-amber-500"
+          : "bg-foreground/[0.055] text-muted-foreground";
 
   function beginReplacingKey(nextValue = "") {
     setIsReplacingKey(true);
@@ -194,48 +255,77 @@ export function AgentSettingsSection() {
       }
     >
       <form onSubmit={handleSave} className="flex max-w-[680px] flex-col gap-4">
-        <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2.5">
-          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+        {managedByHermes ? (
+          <div className={`rounded-sm border px-3.5 py-3 ${managedCardClass}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-sm ring-1 ring-border/70">
+                  <Bot aria-hidden="true" className="size-4" strokeWidth={1.8} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[13px] font-medium text-foreground">
+                      Hermes default profile
+                    </p>
+                    <span
+                      aria-live="polite"
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${managedStatusClass}`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`size-1.5 rounded-full bg-current ${
+                          managedStatus.tone === "checking"
+                            ? "animate-pulse"
+                            : ""
+                        }`}
+                      />
+                      {managedStatus.label}
+                    </span>
+                  </div>
+                  <p className="mt-1 max-w-[460px] text-[11px] leading-4 text-muted-foreground">
+                    {managedStatus.message}
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={disabled}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
+                >
+                  <PlugZap className="size-3.5" strokeWidth={1.75} />
+                  {busy === "testing" ? "Testing…" : "Test connection"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingCustomEndpoint(true)}
+                  disabled={disabled}
+                  className="inline-flex items-center justify-center rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
+                >
+                  Use a custom endpoint
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2.5">
             <div className="flex min-w-0 items-start gap-2.5">
-              {managedByHermes && (
-                <LockKeyhole
-                  aria-hidden="true"
-                  className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                  strokeWidth={1.75}
-                />
-              )}
               <div className="min-w-0">
                 <p className="text-[12px] font-medium text-foreground">
-                  {managedByHermes
-                    ? "Default Hermes profile · Read only"
-                    : connectionMode === "local"
-                      ? "Existing local HTTP"
-                      : "Remote HTTP"}
+                  {connectionMode === "local"
+                    ? "Existing local HTTP"
+                    : "Remote HTTP"}
                 </p>
-                <p
-                  id={managedByHermes ? "agent-managed-fields-help" : undefined}
-                  className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
-                >
-                  {managedByHermes
-                    ? "Woodshed follows the default Hermes profile. Change its model or provider in Hermes, or use a custom endpoint to edit these fields here."
-                    : connectionMode === "local"
-                      ? "Authentication comes from the Hermes profile that owns this local API port."
-                      : "Remote endpoints require a bearer key stored privately by Woodshed."}
+                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                  {connectionMode === "local"
+                    ? "Authentication comes from the Hermes profile that owns this local API port."
+                    : "Remote endpoints require a bearer key stored privately by Woodshed."}
                 </p>
               </div>
             </div>
-            {managedByHermes && (
-              <button
-                type="button"
-                onClick={() => setEditingCustomEndpoint(true)}
-                disabled={disabled}
-                className="inline-flex shrink-0 items-center justify-center rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
-              >
-                Use a custom endpoint
-              </button>
-            )}
           </div>
-        </div>
+        )}
 
         <label className="text-[12px] text-muted-foreground">
           Display name
@@ -248,159 +338,135 @@ export function AgentSettingsSection() {
           />
         </label>
 
-        <div className="grid gap-3 md:grid-cols-[1fr_180px]">
-          <label className="text-[12px] text-muted-foreground">
-            <span className="flex items-center justify-between gap-2">
-              Base URL
-              {managedByHermes && <ReadOnlyChip />}
-            </span>
-            <input
-              aria-label="Base URL"
-              aria-describedby={
-                managedByHermes ? "agent-managed-fields-help" : undefined
-              }
-              type="url"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              readOnly={managedByHermes}
-              required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
-            />
-          </label>
-          <label className="text-[12px] text-muted-foreground">
-            <span className="flex items-center justify-between gap-2">
-              {managedByHermes ? "Gateway model" : "Model"}
-              {managedByHermes && <ReadOnlyChip />}
-            </span>
-            <input
-              aria-label={managedByHermes ? "Gateway model" : "Model"}
-              aria-describedby={
-                managedByHermes ? "agent-managed-fields-help" : undefined
-              }
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              readOnly={managedByHermes}
-              required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
-            />
-          </label>
-        </div>
-
-        {isLocalHermes && !isReplacingKey ? (
-          <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2 text-[13px] text-foreground">
-            <p>Local authentication</p>
-            <p className="mt-1 leading-5 text-muted-foreground">
-              {credentialSource === "hermes"
-                ? managedByHermes
-                  ? "Using API_SERVER_KEY from the default Hermes profile. Nothing to paste into Woodshed."
-                  : "Using API_SERVER_KEY from the matching local Hermes profile. Nothing to paste into Woodshed."
-                : credentialSource === "environment"
-                  ? "Using the key from Woodshed's development environment."
-                  : credentialSource === "stored"
-                    ? "Using the key already stored by Woodshed."
-                    : "No matching local Hermes key was found. Configure API_SERVER_KEY in the Hermes profile for this port."}
-            </p>
-            {managedByHermes && credentialSource === "missing" && (
-              <p className="mt-2 leading-5 text-muted-foreground">
-                Configure the default profile in Hermes and start its API
-                server; Woodshed does not manage local Hermes credentials.
-              </p>
-            )}
-            {!managedByHermes &&
-              (credentialSource === "stored" ||
-                credentialSource === "missing") && (
-                <button
-                  type="button"
-                  onClick={() => beginReplacingKey("")}
-                  disabled={disabled}
-                  className="mt-2 text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
-                >
-                  {credentialSource === "stored"
-                    ? "Replace custom key"
-                    : "Enter a custom key"}
-                </button>
-              )}
-          </div>
-        ) : (
-          <div className="text-[13px] text-foreground">
-            <label htmlFor="hermes-token" className="block">
-              {isLocalHermes ? "Custom bearer token" : "Bearer token"}
-            </label>
-            <div className="relative mt-1">
-              <input
-                id="hermes-token"
-                aria-describedby="hermes-token-help"
-                ref={keyInputRef}
-                type="password"
-                value={keyInputValue}
-                onFocus={() => {
-                  if (showingStoredKey) {
-                    requestAnimationFrame(() => keyInputRef.current?.select());
-                  }
-                }}
-                onChange={(e) => {
-                  if (showingStoredKey) {
-                    beginReplacingKey("");
-                    return;
-                  }
-                  setApiKey(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (!showingStoredKey) return;
-                  if (e.metaKey || e.ctrlKey || e.altKey) return;
-                  if (e.key === "Backspace" || e.key === "Delete") {
-                    e.preventDefault();
-                    beginReplacingKey("");
-                    return;
-                  }
-                  if (e.key.length === 1) {
-                    e.preventDefault();
-                    beginReplacingKey(e.key);
-                  }
-                }}
-                onPaste={(e) => {
-                  if (!showingStoredKey) return;
-                  e.preventDefault();
-                  beginReplacingKey(e.clipboardData.getData("text"));
-                }}
-                placeholder={
-                  hasKey ? "Paste replacement token" : "Paste Hermes token"
-                }
-                className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
-              />
+        {!managedByHermes && (
+          <>
+            <div className="grid gap-3 md:grid-cols-[1fr_180px]">
+              <label className="text-[12px] text-muted-foreground">
+                Base URL
+                <input
+                  aria-label="Base URL"
+                  type="url"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  required
+                  className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+                />
+              </label>
+              <label className="text-[12px] text-muted-foreground">
+                Model
+                <input
+                  aria-label="Model"
+                  type="text"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  required
+                  className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+                />
+              </label>
             </div>
-            <p
-              id="hermes-token-help"
-              className="mt-2 text-[13px] leading-5 text-muted-foreground"
-            >
-              This is the value you set as <code>API_SERVER_KEY</code> when
-              configuring the Hermes API server; Woodshed does not issue it.
-              Paste only the value—without “Bearer” or “Authorization:”—and
-              Woodshed stores it in an owner-only file inside its
-              application-data directory, then adds the authorization header
-              when connecting.
-            </p>
-          </div>
-        )}
 
-        <label className="text-[12px] text-muted-foreground">
-          <span className="flex items-center justify-between gap-2">
-            Session key
-            {managedByHermes && <ReadOnlyChip />}
-          </span>
-          <input
-            aria-label="Session key"
-            aria-describedby={
-              managedByHermes ? "agent-managed-fields-help" : undefined
-            }
-            type="text"
-            value={sessionKey}
-            onChange={(e) => setSessionKey(e.target.value)}
-            readOnly={managedByHermes}
-            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
-          />
-        </label>
+            {isLocalHermes && !isReplacingKey ? (
+              <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2 text-[13px] text-foreground">
+                <p>Local authentication</p>
+                <p className="mt-1 leading-5 text-muted-foreground">
+                  {credentialSource === "hermes"
+                    ? "Using API_SERVER_KEY from the matching local Hermes profile. Nothing to paste into Woodshed."
+                    : credentialSource === "environment"
+                      ? "Using the key from Woodshed's development environment."
+                      : credentialSource === "stored"
+                        ? "Using the key already stored by Woodshed."
+                        : "No matching local Hermes key was found. Configure API_SERVER_KEY in the Hermes profile for this port."}
+                </p>
+                {(credentialSource === "stored" ||
+                  credentialSource === "missing") && (
+                  <button
+                    type="button"
+                    onClick={() => beginReplacingKey("")}
+                    disabled={disabled}
+                    className="mt-2 text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+                  >
+                    {credentialSource === "stored"
+                      ? "Replace custom key"
+                      : "Enter a custom key"}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="text-[13px] text-foreground">
+                <label htmlFor="hermes-token" className="block">
+                  {isLocalHermes ? "Custom bearer token" : "Bearer token"}
+                </label>
+                <div className="relative mt-1">
+                  <input
+                    id="hermes-token"
+                    aria-describedby="hermes-token-help"
+                    ref={keyInputRef}
+                    type="password"
+                    value={keyInputValue}
+                    onFocus={() => {
+                      if (showingStoredKey) {
+                        requestAnimationFrame(() =>
+                          keyInputRef.current?.select(),
+                        );
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (showingStoredKey) {
+                        beginReplacingKey("");
+                        return;
+                      }
+                      setApiKey(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!showingStoredKey) return;
+                      if (e.metaKey || e.ctrlKey || e.altKey) return;
+                      if (e.key === "Backspace" || e.key === "Delete") {
+                        e.preventDefault();
+                        beginReplacingKey("");
+                        return;
+                      }
+                      if (e.key.length === 1) {
+                        e.preventDefault();
+                        beginReplacingKey(e.key);
+                      }
+                    }}
+                    onPaste={(e) => {
+                      if (!showingStoredKey) return;
+                      e.preventDefault();
+                      beginReplacingKey(e.clipboardData.getData("text"));
+                    }}
+                    placeholder={
+                      hasKey ? "Paste replacement token" : "Paste Hermes token"
+                    }
+                    className="w-full rounded-sm border border-border bg-background px-2.5 py-2 font-mono text-[13px] text-foreground"
+                  />
+                </div>
+                <p
+                  id="hermes-token-help"
+                  className="mt-2 text-[13px] leading-5 text-muted-foreground"
+                >
+                  This is the value you set as <code>API_SERVER_KEY</code> when
+                  configuring the Hermes API server; Woodshed does not issue it.
+                  Paste only the value—without “Bearer” or “Authorization:”—and
+                  Woodshed stores it in an owner-only file inside its
+                  application-data directory, then adds the authorization header
+                  when connecting.
+                </p>
+              </div>
+            )}
+
+            <label className="text-[12px] text-muted-foreground">
+              Session key
+              <input
+                aria-label="Session key"
+                type="text"
+                value={sessionKey}
+                onChange={(e) => setSessionKey(e.target.value)}
+                className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+              />
+            </label>
+          </>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <button
@@ -411,27 +477,31 @@ export function AgentSettingsSection() {
             <Save className="h-3.5 w-3.5" strokeWidth={1.75} />
             {busy === "saving" ? "Saving..." : "Save"}
           </button>
-          <button
-            type="button"
-            onClick={handleSaveAndTest}
-            disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-border px-3 py-1.5 text-[12px] font-medium text-foreground hover:bg-foreground/[0.04] disabled:opacity-50"
-          >
-            <PlugZap className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {testButtonLabel}
-          </button>
-          <button
-            type="button"
-            onClick={handleClear}
-            disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-border px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground disabled:opacity-50"
-          >
-            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-            {busy === "clearing" ? "Clearing..." : "Clear"}
-          </button>
+          {!managedByHermes && (
+            <>
+              <button
+                type="button"
+                onClick={handleSaveAndTest}
+                disabled={disabled}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border px-3 py-1.5 text-[12px] font-medium text-foreground hover:bg-foreground/[0.04] disabled:opacity-50"
+              >
+                <PlugZap className="h-3.5 w-3.5" strokeWidth={1.75} />
+                {testButtonLabel}
+              </button>
+              <button
+                type="button"
+                onClick={handleClear}
+                disabled={disabled}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                {busy === "clearing" ? "Clearing..." : "Clear"}
+              </button>
+            </>
+          )}
         </div>
 
-        {testResult && (
+        {!managedByHermes && testResult && (
           <div
             className={`rounded-sm border px-3 py-2 ${
               testResult.ok
