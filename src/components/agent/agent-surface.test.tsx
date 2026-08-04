@@ -381,7 +381,7 @@ describe("AgentSurface voice controls", () => {
     expect(composer).not.toHaveClass("rounded-full");
   });
 
-  it("rejects an unsupported image before it can strand an Agent turn", async () => {
+  it("accepts a supported image attachment", async () => {
     const originalCreateObjectUrl = URL.createObjectURL;
     const originalRevokeObjectUrl = URL.revokeObjectURL;
     Object.defineProperty(URL, "createObjectURL", {
@@ -415,12 +415,12 @@ describe("AgentSurface voice controls", () => {
         },
       });
 
+      expect(await screen.findByText("reference.png")).toBeInTheDocument();
       expect(
-        await screen.findByText(
-          "Agent attachments currently support PDF and text files.",
+        screen.queryByText(
+          "Agent attachments support images, PDF, and text files.",
         ),
-      ).toBeInTheDocument();
-      expect(screen.queryByText("reference.png")).not.toBeInTheDocument();
+      ).not.toBeInTheDocument();
     } finally {
       Object.defineProperty(URL, "createObjectURL", {
         configurable: true,
@@ -1156,6 +1156,23 @@ describe("AgentRunBanner", () => {
     expect(
       screen.getByText("The local agent was unavailable."),
     ).toBeInTheDocument();
+  });
+
+  it("asks for reattachment instead of offering a broken retry", () => {
+    const failedRun: AgentRun = {
+      ...syntheticRun(),
+      status: "failed",
+      finishedAt: "2031-02-03T12:00:02Z",
+      finalResponse: null,
+      error: "The local agent was unavailable.",
+    };
+
+    render(<AgentRunBanner retryNeedsReattachment run={failedRun} />);
+
+    expect(screen.getByText("Reattach files to retry")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
   });
 });
 

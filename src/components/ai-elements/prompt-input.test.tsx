@@ -97,6 +97,36 @@ describe("PromptInput attachments", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes an image MIME type from its extension before submit", async () => {
+    stubAttachmentObjectUrls();
+    const onSubmit = vi.fn();
+
+    render(
+      <PromptInputProvider>
+        <PromptInput accept=".png" onSubmit={onSubmit}>
+          <button type="submit">Send</button>
+        </PromptInput>
+      </PromptInputProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Upload files"), {
+      target: {
+        files: [new File(["synthetic image"], "diagram.png")],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0].files).toEqual([
+      {
+        filename: "diagram.png",
+        mediaType: "image/png",
+        type: "file",
+        url: expect.stringMatching(/^data:image\/png;base64,/),
+      },
+    ]);
+  });
+
   it("rejects a selected file above the configured Agent attachment limit", () => {
     stubAttachmentObjectUrls();
     const onError = vi.fn();

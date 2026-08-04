@@ -27,8 +27,11 @@ cache.
   SQLite search index, a rebuildable iCal event cache, durable Agent run records,
   and rotating local logs. Agent run records include submitted message context,
   progress events, final responses, and errors so a request can survive page
-  navigation or reload. When the configured provider reports token usage,
-  Woodshed stores it as a progress event in the corresponding run record.
+  navigation or reload. A selected image is temporarily included in its queued
+  run as a base64 data URL, then removed from that record when the worker copies
+  it for dispatch or the run otherwise becomes terminal. When the configured
+  provider reports token usage, Woodshed stores it as a progress event in the
+  corresponding run record.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. The standard local
@@ -88,8 +91,9 @@ other exceptions described below.
   email content directly to that endpoint, or to an explicitly configured
   custom endpoint. Proposed record creation and mail archive actions require
   confirmation. User-selected PDF and text attachments are converted to bounded
-  text locally; the endpoint receives that text and a sanitized filename, not
-  the original file path.
+  text locally. Selected PNG, JPEG, GIF, and WebP images are sent as bounded
+  multimodal image data after local validation. The endpoint receives that text
+  or those image pixels, not the original file path.
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 
@@ -104,7 +108,9 @@ sharing them publicly.
 ## Retention and deletion
 
 Vault records persist until you remove them. Agent run records currently persist
-in the application-data directory until that directory is removed. Retired
+in the application-data directory until that directory is removed, except raw
+image payloads, which are released when dispatch begins or the run otherwise
+becomes terminal. Retired
 Sweep-card Markdown created by older builds remains in the vault's `sweep/`
 directory until you inspect, move, or delete it; current builds do not use or
 remove those files. In-app record deletion moves files to `.woodshed/trash/`

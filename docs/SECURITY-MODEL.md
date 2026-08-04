@@ -102,9 +102,14 @@ Agent PDF and text attachments are decoded from the user-selected in-memory data
 URL and converted to bounded text inside the Tauri command boundary. PDF bytes
 cross only stdin into a short-lived Woodshed PDFKit helper process; stdout is
 bounded, and the parent kills and reaps the helper on timeout or protocol error.
-The request sent to Hermes contains the extracted text and a sanitized label,
-not the original filesystem path. Unsupported, malformed, image-only, and
-oversized attachments fail before an agent run is created.
+PNG, JPEG, GIF, and WebP attachments are sent to Hermes as OpenAI-compatible
+multimodal data-URL parts only after Rust revalidates their base64, signature,
+dimensions, count, and byte budget; remote image URLs are rejected. Hermes
+receives extracted document text or selected image pixels, never the original
+filesystem path. Image bytes are removed from the durable run record after the
+worker copies them for dispatch or the run otherwise becomes terminal.
+Unsupported, malformed, and oversized attachments fail before an agent run is
+created.
 
 Public resource, calendar, oEmbed, and remote-image fetches:
 
@@ -130,7 +135,8 @@ Network activity inside the frame is controlled by YouTube.
 
 Resource budgets are enforced at ingress: text records and rendered email
 bodies are capped at 16 MiB, raw IMAP messages and calendar feed downloads at
-25 MiB, image uploads at 20 MiB with signature and dimension validation, and
+25 MiB, Agent images at 2 MiB each and four per turn, image uploads at 20 MiB
+with signature and dimension validation, and
 remote email images at 10 MiB each with a 256 MiB cache quota. Calendar caches
 are capped at 100,000 retained events and 128 MiB per account. Both uploaded
 and remote raster images enforce decoded-dimension and total-pixel limits.

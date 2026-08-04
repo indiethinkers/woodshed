@@ -186,6 +186,11 @@ import {
   messagePartsFromAgentRun,
 } from "@/lib/agent/transport";
 import {
+  AGENT_ATTACHMENT_ACCEPT,
+  AGENT_ATTACHMENT_SUPPORT_MESSAGE,
+  isSupportedAgentAttachment,
+} from "@/lib/agent/attachments";
+import {
   captureAgentPageContext,
   formatAgentPageContext,
   formatAgentVaultContext,
@@ -209,24 +214,6 @@ import {
 
 const LAST_AGENT_CHAT_STORAGE_KEY = "woodshed:agent:last-chat-id";
 const RECENT_AGENT_CHAT_WINDOW_MS = 5 * 60 * 1000;
-const AGENT_ATTACHMENT_ACCEPT =
-  "application/pdf,text/plain,text/markdown,.pdf,.txt,.md,.markdown";
-const AGENT_ATTACHMENT_SUPPORT_MESSAGE =
-  "Agent attachments currently support PDF and text files.";
-
-function isSupportedAgentAttachment(
-  file: Pick<FileUIPart, "filename" | "mediaType">,
-): boolean {
-  const mediaType = file.mediaType.toLowerCase();
-  if (
-    mediaType === "application/pdf" ||
-    mediaType === "text/plain" ||
-    mediaType === "text/markdown"
-  ) {
-    return true;
-  }
-  return /\.(?:pdf|txt|md|markdown)$/i.test(file.filename ?? "");
-}
 const AGENT_AREA_REFERENCE_LABELS: Record<string, string> = {
   woodshed: "Woodshed",
   "indie-thinkers": "Indie Thinkers",
@@ -468,6 +455,12 @@ function AgentSurfaceInner({
     effectiveStatus === "submitted" ||
     effectiveStatus === "streaming";
   const canSubmit = configured && !busy;
+  const retryNeedsReattachment = runNeedsAttachmentReattachment(
+    activeRun,
+    messages,
+  );
+  const onRetry =
+    configured && !retryNeedsReattachment ? retryRun : undefined;
   const backgroundRuns = useMemo(
     () => activeRuns.filter((run) => run.conversationId !== activeId),
     [activeId, activeRuns],
@@ -1055,7 +1048,8 @@ function AgentSurfaceInner({
             configured={configured}
             context={activeChat?.context}
             displayName={displayName}
-            onRetry={configured ? retryRun : undefined}
+            onRetry={onRetry}
+            retryNeedsReattachment={retryNeedsReattachment}
             run={activeRun}
             status={effectiveStatus}
             transportConnection={transportConnection}
@@ -1079,7 +1073,8 @@ function AgentSurfaceInner({
         )}
         {!pageMode && activeRun && activeRun.status !== "completed" && (
           <AgentRunBanner
-            onRetry={configured ? retryRun : undefined}
+            onRetry={onRetry}
+            retryNeedsReattachment={retryNeedsReattachment}
             run={activeRun}
             transportConnection={transportConnection}
           />
@@ -1387,6 +1382,7 @@ export function AgentHeader({
   context,
   displayName,
   onRetry,
+  retryNeedsReattachment = false,
   run,
   status,
   transportConnection = { status: "connected", error: null },
@@ -1396,6 +1392,7 @@ export function AgentHeader({
   context?: AgentChatContext | null;
   displayName: string;
   onRetry?: () => void;
+  retryNeedsReattachment?: boolean;
   run: AgentRun | null;
   status: ChatStatus;
   transportConnection?: AgentTransportConnection;
@@ -1411,6 +1408,7 @@ export function AgentHeader({
         {visibleRun && (
           <AgentRunTopbarStatus
             onRetry={onRetry}
+            retryNeedsReattachment={retryNeedsReattachment}
             run={visibleRun}
             transportConnection={transportConnection}
           />
@@ -1482,10 +1480,12 @@ function agentRunStatusLabel(status: AgentRun["status"]): string {
 
 function AgentRunTopbarStatus({
   onRetry,
+  retryNeedsReattachment,
   run,
   transportConnection,
 }: {
   onRetry?: () => void;
+  retryNeedsReattachment: boolean;
   run: AgentRun;
   transportConnection: AgentTransportConnection;
 }) {
@@ -1526,6 +1526,9 @@ function AgentRunTopbarStatus({
         >
           Retry
         </button>
+      )}
+      {run.status === "failed" && retryNeedsReattachment && (
+        <span className="shrink-0">Reattach files to retry</span>
       )}
     </div>
   );
@@ -1719,10 +1722,12 @@ function AgentSidebarHeader({
 
 export function AgentRunBanner({
   onRetry,
+  retryNeedsReattachment = false,
   run,
   transportConnection = { status: "connected", error: null },
 }: {
   onRetry?: () => void;
+  retryNeedsReattachment?: boolean;
   run: AgentRun;
   transportConnection?: AgentTransportConnection;
 }) {
@@ -1766,6 +1771,9 @@ export function AgentRunBanner({
         >
           Retry
         </button>
+      )}
+      {run.status === "failed" && retryNeedsReattachment && (
+        <span className="ml-auto shrink-0">Reattach files to retry</span>
       )}
     </div>
   );
@@ -3144,6 +3152,20 @@ function filePartsFromMessage(
         ? part.id
         : `${message.id}-file-${index}`,
   }));
+}
+
+function runNeedsAttachmentReattachment(
+  run: AgentRun | null,
+  messages: UIMessage[],
+): boolean {
+  if (run?.status !== "failed") return false;
+  const inputMessage = messages.find(
+    (message) => message.id === run.inputMessage.id,
+  );
+  return Boolean(
+    inputMessage &&
+      filePartsFromMessage(inputMessage).some((file) => !file.url),
+  );
 }
 
 function isFilePart(

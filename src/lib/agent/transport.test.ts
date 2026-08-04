@@ -230,6 +230,55 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("sends loaded images as multimodal content without text extraction", async () => {
+    const image = {
+      type: "file" as const,
+      filename: "diagram.png",
+      mediaType: "image/png",
+      url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    };
+    mocks.tauriInvoke.mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await transport.prepareAttachments([image]);
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "What is shown here?" }, image],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledOnce();
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_create", {
+      input: expect.objectContaining({
+        inputMessage: expect.objectContaining({
+          content:
+            "What is shown here?\n\nAttachments:\n- diagram.png (image/png)",
+        }),
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is shown here?" },
+              {
+                type: "image_url",
+                image_url: { url: image.url, detail: "auto" },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  });
+
   it("rejects an unloaded attachment instead of sending a filename hint", async () => {
     const transport = createAgentChatTransport({ pollIntervalMs: 0 });
 

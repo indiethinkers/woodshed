@@ -6,13 +6,24 @@ import type {
   UIMessageChunk,
 } from "ai";
 import { nanoid } from "nanoid";
+import { isAgentImageAttachment } from "@/lib/agent/attachments";
 import { attachmentContextFromFiles } from "@/lib/agent/attachment-context";
 import { tauriInvoke } from "@/lib/tauri";
 
 interface AgentChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: AgentChatContent;
 }
+
+type AgentChatContent =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | {
+          type: "image_url";
+          image_url: { url: string; detail: "auto" };
+        }
+    >;
 
 interface PreparedAgentAttachment {
   context: string;
@@ -118,8 +129,11 @@ export function createAgentChatTransport(
   const preparedAttachmentContexts = new Map<string, string[]>();
   return {
     async prepareAttachments(files) {
+      const extractableFiles = files.filter(
+        (file) => !isAgentImageAttachment(file),
+      );
       const prepared = await Promise.all(
-        files.map(async (file) => [
+        extractableFiles.map(async (file) => [
           attachmentPreparationKey(file),
           await prepareAgentAttachment(file),
         ] as const),
@@ -739,27 +753,32 @@ async function messagesToAgentMessages(
   preparedAttachmentContexts?: Map<string, string[]>,
 ): Promise<AgentChatMessage[]> {
   const prepared = await Promise.all(
-    messages.map(async (message) => ({
-      role: message.role,
-      content: (
-        await messageContentForHermes(
+    messages.map(async (message) => {
+      const submitted = message.id === submittedMessageId;
+      return {
+        role: message.role,
+        content: await messageContentForHermes(
           message,
-          message.id === submittedMessageId ? "submitted" : "history",
-          message.id === submittedMessageId
-            ? preparedAttachmentContexts
-            : undefined,
-        )
-      ).trim(),
-    })),
+          submitted ? "submitted" : "history",
+          submitted ? preparedAttachmentContexts : undefined,
+        ),
+      };
+    }),
   );
   return prepared.filter((message): message is AgentChatMessage => {
     return (
       (message.role === "system" ||
         message.role === "user" ||
         message.role === "assistant") &&
-      message.content.length > 0
+      hasAgentChatContent(message.content)
     );
   });
+}
+
+function hasAgentChatContent(content: AgentChatContent): boolean {
+  return typeof content === "string"
+    ? content.trim().length > 0
+    : content.length > 0;
 }
 
 function messageTextAndFiles(message: UIMessage): {
@@ -784,7 +803,7 @@ async function messageContentForHermes(
   message: UIMessage,
   attachmentPolicy: "submitted" | "history",
   preparedAttachmentContexts?: Map<string, string[]>,
-): Promise<string> {
+): Promise<AgentChatContent> {
   const { files, text } = messageTextAndFiles(message);
   const loadedFiles = files.filter((file) => Boolean(file.url));
   const unloadedFiles = files.filter((file) => !file.url);
@@ -793,11 +812,26 @@ async function messageContentForHermes(
       "An attachment is no longer loaded. Reattach it before sending.",
     );
   }
+  const imageFiles =
+    attachmentPolicy === "submitted"
+      ? loadedFiles.filter(isAgentImageAttachment)
+      : [];
+  const extractableFiles = loadedFiles.filter(
+    (file) => !isAgentImageAttachment(file),
+  );
   const preparedContext = await prepareAttachmentContext(
-    loadedFiles,
+    extractableFiles,
     preparedAttachmentContexts,
   );
-  return [text, preparedContext].filter(Boolean).join("\n\n");
+  const textContent = [text, preparedContext].filter(Boolean).join("\n\n");
+  if (imageFiles.length === 0) return textContent;
+  return [
+    ...(textContent ? [{ type: "text" as const, text: textContent }] : []),
+    ...imageFiles.map((file) => ({
+      type: "image_url" as const,
+      image_url: { url: file.url, detail: "auto" as const },
+    })),
+  ];
 }
 
 async function prepareAttachmentContext(

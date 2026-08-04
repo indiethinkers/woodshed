@@ -479,12 +479,17 @@ Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.
 
 User-selected PDF and text chat attachments are decoded and converted to bounded
-text inside Woodshed before a run is created. Hermes receives that text and a
-sanitized label, never the attachment's original filesystem path. Unsupported or
-unreadable attachments fail before the request rather than prompting the agent to
-search the machine by filename. PDFKit parsing runs in a short-lived Woodshed
-helper process that receives bytes over stdin; the parent kills and reaps it on
-timeout or any protocol-boundary failure.
+text inside Woodshed before a run is created. Selected PNG, JPEG, GIF, and WebP
+attachments are forwarded as bounded OpenAI-compatible multimodal data-URL parts
+after Rust validates their base64, signatures, dimensions, count, and byte
+budget. Remote image URLs are rejected, and queued image bytes are released from
+the durable run record when dispatch begins or the run otherwise becomes
+terminal. Hermes receives extracted text or selected image pixels, never the
+attachment's original filesystem path.
+Unsupported or unreadable attachments fail before the request rather than
+prompting the agent to search the machine by filename. PDFKit parsing runs in a
+short-lived Woodshed helper process that receives bytes over stdin; the parent
+kills and reaps it on timeout or any protocol-boundary failure.
 
 ## Privacy and diagnostics
 

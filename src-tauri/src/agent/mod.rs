@@ -2,6 +2,7 @@ pub mod key;
 pub mod runs;
 
 use anyhow::{anyhow, Context};
+use base64::Engine as _;
 use gray_matter::{engine::YAML, Matter};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,6 +28,9 @@ const MAX_AGENT_STREAM_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGENT_STREAM_BUFFER: usize = 1024 * 1024;
 const MAX_AGENT_MESSAGES: usize = 512;
 const MAX_AGENT_INPUT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AGENT_WIRE_INPUT_BYTES: usize = 12 * 1024 * 1024;
+const MAX_AGENT_IMAGES: usize = 4;
+const MAX_AGENT_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -350,7 +354,42 @@ impl AgentStreamEvent {
 #[serde(rename_all = "camelCase")]
 pub struct AgentChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: AgentChatContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentChatContent {
+    Text(String),
+    Parts(Vec<AgentChatContentPart>),
+}
+
+impl From<String> for AgentChatContent {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for AgentChatContent {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AgentChatContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: AgentImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentImageUrl {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1075,38 +1114,147 @@ pub fn parse_model_ids(value: &Value) -> Vec<String> {
     ids
 }
 
-fn normalize_chat_messages(messages: Vec<AgentChatMessage>) -> Result<Vec<Value>, String> {
+pub(super) fn normalize_chat_messages(
+    messages: Vec<AgentChatMessage>,
+) -> Result<Vec<Value>, String> {
     if messages.len() > MAX_AGENT_MESSAGES {
         return Err(format!(
             "chat contains more than {MAX_AGENT_MESSAGES} messages"
         ));
     }
     let mut out = Vec::new();
-    let mut total_bytes = 0usize;
+    let mut text_bytes = 0usize;
+    let mut wire_bytes = 0usize;
+    let mut image_count = 0usize;
     for message in messages {
         let role = message.role.trim().to_ascii_lowercase();
         if !matches!(role.as_str(), "system" | "user" | "assistant") {
             return Err(format!("unsupported chat role '{role}'"));
         }
-        let content = message.content.trim();
-        if content.is_empty() {
-            continue;
+        match message.content {
+            AgentChatContent::Text(content) => {
+                let content = content.trim();
+                if content.is_empty() {
+                    continue;
+                }
+                add_agent_text_bytes(&mut text_bytes, content.len())?;
+                add_agent_wire_bytes(&mut wire_bytes, content.len())?;
+                out.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
+            AgentChatContent::Parts(parts) => {
+                if role != "user" {
+                    return Err("image content is only supported in user messages".to_string());
+                }
+                let content = normalize_chat_content_parts(
+                    parts,
+                    &mut text_bytes,
+                    &mut wire_bytes,
+                    &mut image_count,
+                )?;
+                if content.is_empty() {
+                    continue;
+                }
+                out.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
         }
-        total_bytes = total_bytes.saturating_add(content.len());
-        if total_bytes > MAX_AGENT_INPUT_BYTES {
-            return Err(format!(
-                "chat input exceeds {MAX_AGENT_INPUT_BYTES} byte limit"
-            ));
-        }
-        out.push(json!({
-            "role": role,
-            "content": content,
-        }));
     }
     if out.is_empty() {
         return Err("message is required".to_string());
     }
     Ok(out)
+}
+
+fn normalize_chat_content_parts(
+    parts: Vec<AgentChatContentPart>,
+    text_bytes: &mut usize,
+    wire_bytes: &mut usize,
+    image_count: &mut usize,
+) -> Result<Vec<Value>, String> {
+    let mut normalized = Vec::new();
+    for part in parts {
+        match part {
+            AgentChatContentPart::Text { text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                add_agent_text_bytes(text_bytes, text.len())?;
+                add_agent_wire_bytes(wire_bytes, text.len())?;
+                normalized.push(json!({ "type": "text", "text": text }));
+            }
+            AgentChatContentPart::ImageUrl { image_url } => {
+                *image_count += 1;
+                if *image_count > MAX_AGENT_IMAGES {
+                    return Err(format!("chat contains more than {MAX_AGENT_IMAGES} images"));
+                }
+                add_agent_wire_bytes(wire_bytes, image_url.url.len())?;
+                validate_agent_image_data_url(&image_url.url)?;
+                let detail = image_url.detail.as_deref().unwrap_or("auto");
+                if !matches!(detail, "auto" | "low" | "high") {
+                    return Err("image detail must be auto, low, or high".to_string());
+                }
+                normalized.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": image_url.url, "detail": detail },
+                }));
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn add_agent_text_bytes(total: &mut usize, bytes: usize) -> Result<(), String> {
+    *total = total.saturating_add(bytes);
+    if *total > MAX_AGENT_INPUT_BYTES {
+        return Err(format!(
+            "chat input exceeds {MAX_AGENT_INPUT_BYTES} byte limit"
+        ));
+    }
+    Ok(())
+}
+
+fn add_agent_wire_bytes(total: &mut usize, bytes: usize) -> Result<(), String> {
+    *total = total.saturating_add(bytes);
+    if *total > MAX_AGENT_WIRE_INPUT_BYTES {
+        return Err(format!(
+            "chat wire input exceeds {MAX_AGENT_WIRE_INPUT_BYTES} byte limit"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_agent_image_data_url(url: &str) -> Result<(), String> {
+    let (prefix, encoded) = url
+        .split_once(',')
+        .ok_or_else(|| "image must be a base64 data URL".to_string())?;
+    let extension = match prefix {
+        "data:image/png;base64" => "png",
+        "data:image/jpeg;base64" => "jpg",
+        "data:image/gif;base64" => "gif",
+        "data:image/webp;base64" => "webp",
+        _ => return Err("images must be PNG, JPEG, GIF, or WebP base64 data URLs".to_string()),
+    };
+    if encoded.is_empty() || encoded.len() > MAX_AGENT_IMAGE_BYTES.saturating_mul(4) / 3 + 4 {
+        return Err(format!(
+            "image exceeds the {MAX_AGENT_IMAGE_BYTES} byte limit"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "image contains invalid base64 data".to_string())?;
+    if bytes.len() > MAX_AGENT_IMAGE_BYTES {
+        return Err(format!(
+            "image exceeds the {MAX_AGENT_IMAGE_BYTES} byte limit"
+        ));
+    }
+    crate::commands::attachments::validate_image_upload(&bytes, extension)?;
+    Ok(())
 }
 
 fn message_content_text(value: &Value) -> Option<String> {
@@ -1743,9 +1891,121 @@ mod tests {
     fn normalize_chat_messages_enforces_request_budget() {
         let oversized = AgentChatMessage {
             role: "user".to_string(),
-            content: "x".repeat(MAX_AGENT_INPUT_BYTES + 1),
+            content: "x".repeat(MAX_AGENT_INPUT_BYTES + 1).into(),
         };
         assert!(normalize_chat_messages(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_accepts_bounded_image_data_urls() {
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe this image." },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                        "detail": "auto"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        let normalized = normalize_chat_messages(vec![message]).unwrap();
+        assert_eq!(normalized[0]["content"][0]["text"], "Describe this image.");
+        assert_eq!(normalized[0]["content"][1]["type"], "image_url");
+    }
+
+    #[test]
+    fn normalize_chat_messages_rejects_remote_image_urls() {
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "https://example.test/private.png" }
+            }]
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![message]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_rejects_invalid_and_oversized_images() {
+        let invalid_signature: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,AA==" }
+            }]
+        }))
+        .unwrap();
+        assert!(normalize_chat_messages(vec![invalid_signature]).is_err());
+
+        let oversized_data =
+            base64::engine::general_purpose::STANDARD.encode(vec![0_u8; MAX_AGENT_IMAGE_BYTES + 1]);
+        let oversized: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:image/png;base64,{oversized_data}")
+                }
+            }]
+        }))
+        .unwrap();
+        assert!(normalize_chat_messages(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_allows_four_images_at_the_per_file_limit() {
+        let mut image = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap();
+        image.resize(MAX_AGENT_IMAGE_BYTES, 0);
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(image)
+        );
+        let parts = (0..MAX_AGENT_IMAGES)
+            .map(|_| {
+                json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url }
+                })
+            })
+            .collect::<Vec<_>>();
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": parts
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![message]).is_ok());
+    }
+
+    #[test]
+    fn normalize_chat_messages_limits_images_across_the_complete_request() {
+        let image = json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            }
+        });
+        let first: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [image.clone(), image.clone(), image.clone()]
+        }))
+        .unwrap();
+        let second: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [image.clone(), image]
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![first, second]).is_err());
     }
 
     #[test]
@@ -1793,7 +2053,7 @@ mod tests {
             conversation_id: "synthetic-stream".to_string(),
             messages: vec![AgentChatMessage {
                 role: "user".to_string(),
-                content: "Keep streaming synthetic output.".to_string(),
+                content: "Keep streaming synthetic output.".into(),
             }],
         };
         let mut started = false;
@@ -1908,7 +2168,7 @@ mod tests {
             conversation_id: "synthetic-stream".to_string(),
             messages: vec![AgentChatMessage {
                 role: "user".to_string(),
-                content: "Keep streaming synthetic output.".to_string(),
+                content: "Keep streaming synthetic output.".into(),
             }],
         }
     }

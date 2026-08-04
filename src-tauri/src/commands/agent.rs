@@ -928,6 +928,10 @@ async fn run_agent_job_inner(
         conversation_id: run.session_id.clone(),
         messages: run.request_messages.clone(),
     };
+    {
+        let _mutation = state.agent_run_mutations.lock_recover();
+        runs::release_image_payloads(&app_data, run_id)?;
+    }
     let progress = Arc::new(Mutex::new(AgentRunProgress {
         response: String::new(),
         pending_events: Vec::new(),
@@ -1247,7 +1251,7 @@ mod tests {
             },
             request_messages: vec![agent::AgentChatMessage {
                 role: "user".to_string(),
-                content: "Summarize the attached notes.".to_string(),
+                content: "Summarize the attached notes.".into(),
             }],
             retry_of: None,
         }

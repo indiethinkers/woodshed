@@ -1,4 +1,6 @@
-use super::{AgentChatMessage, AgentStreamEvent, AgentVaultMessage};
+use super::{
+    AgentChatContent, AgentChatContentPart, AgentChatMessage, AgentStreamEvent, AgentVaultMessage,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use ulid::Ulid;
@@ -277,6 +279,39 @@ pub fn set_resolved_model(
     })
 }
 
+pub fn release_image_payloads(app_data_dir: &Path, run_id: &str) -> Result<AgentRunRecord, String> {
+    update(app_data_dir, run_id, |run| {
+        release_image_payloads_in_place(run);
+    })
+}
+
+fn release_image_payloads_in_place(run: &mut AgentRunRecord) {
+    for message in &mut run.request_messages {
+        let AgentChatContent::Parts(parts) = &message.content else {
+            continue;
+        };
+        if !parts
+            .iter()
+            .any(|part| matches!(part, AgentChatContentPart::ImageUrl { .. }))
+        {
+            continue;
+        }
+        let mut text = parts
+            .iter()
+            .filter_map(|part| match part {
+                AgentChatContentPart::Text { text } => Some(text.trim()),
+                AgentChatContentPart::ImageUrl { .. } => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if text.is_empty() {
+            text = "[Image attachment payload removed from durable run state.]".to_string();
+        }
+        message.content = AgentChatContent::Text(text);
+    }
+}
+
 pub fn complete(
     app_data_dir: &Path,
     run_id: &str,
@@ -285,6 +320,7 @@ pub fn complete(
 ) -> Result<AgentRunRecord, String> {
     update(app_data_dir, run_id, |run| {
         if is_active(run.status) {
+            release_image_payloads_in_place(run);
             run.status = AgentRunStatus::Completed;
             run.final_response = Some(final_response.to_string());
             run.error = None;
@@ -302,6 +338,7 @@ pub fn fail(
 ) -> Result<AgentRunRecord, String> {
     update(app_data_dir, run_id, |run| {
         if is_active(run.status) {
+            release_image_payloads_in_place(run);
             run.status = AgentRunStatus::Failed;
             run.error = Some(error.to_string());
             run.updated_at = now.to_string();
@@ -313,6 +350,7 @@ pub fn fail(
 pub fn cancel(app_data_dir: &Path, run_id: &str, now: &str) -> Result<AgentRunRecord, String> {
     update(app_data_dir, run_id, |run| {
         if is_active(run.status) {
+            release_image_payloads_in_place(run);
             run.status = AgentRunStatus::Cancelled;
             run.error = None;
             run.updated_at = now.to_string();
@@ -435,6 +473,7 @@ fn validate_new_run(input: &NewAgentRun) -> Result<(), String> {
     if input.request_messages.is_empty() {
         return Err("agent run request messages cannot be empty".to_string());
     }
+    super::normalize_chat_messages(input.request_messages.clone())?;
     if let Some(retry_of) = input.retry_of.as_deref() {
         crate::vault::validate_record_id(retry_of)?;
     }
@@ -510,10 +549,31 @@ mod tests {
             },
             request_messages: vec![AgentChatMessage {
                 role: "user".to_string(),
-                content: "Review the reference.".to_string(),
+                content: "Review the reference.".into(),
             }],
             retry_of: None,
         }
+    }
+
+    fn image_input(message_id: &str) -> NewAgentRun {
+        let mut input = input();
+        input.idempotency_key = message_id.to_string();
+        input.input_message.id = message_id.to_string();
+        input.input_message.content = "Describe the attached diagram.".to_string();
+        input.request_messages = vec![serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe the attached diagram." },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                    }
+                }
+            ]
+        }))
+        .unwrap()];
+        input
     }
 
     #[test]
@@ -657,6 +717,52 @@ mod tests {
     }
 
     #[test]
+    fn terminal_transitions_release_persisted_image_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let (failed, _) = create_or_get(
+            temp.path(),
+            image_input("user-message-failed"),
+            "2031-02-03T12:00:00Z",
+        )
+        .unwrap();
+        let failed = fail(
+            temp.path(),
+            &failed.id,
+            "The local agent was unavailable.",
+            "2031-02-03T12:00:01Z",
+        )
+        .unwrap();
+
+        let (cancelled, _) = create_or_get(
+            temp.path(),
+            image_input("user-message-cancelled"),
+            "2031-02-03T12:01:00Z",
+        )
+        .unwrap();
+        let cancelled = cancel(temp.path(), &cancelled.id, "2031-02-03T12:01:01Z").unwrap();
+
+        let (completed, _) = create_or_get(
+            temp.path(),
+            image_input("user-message-completed"),
+            "2031-02-03T12:02:00Z",
+        )
+        .unwrap();
+        let completed = complete(
+            temp.path(),
+            &completed.id,
+            "The diagram contains one node.",
+            "2031-02-03T12:02:01Z",
+        )
+        .unwrap();
+
+        for run in [failed, cancelled, completed] {
+            let stored = serde_json::to_string(&run).unwrap();
+            assert!(!stored.contains("iVBORw0KGgo"));
+        }
+    }
+
+    #[test]
     fn cancellation_is_terminal_for_queued_and_running_runs() {
         let temp = tempfile::tempdir().unwrap();
         let (queued, _) = create_or_get(temp.path(), input(), "2031-02-03T12:00:00Z").unwrap();
@@ -740,8 +846,51 @@ mod tests {
         assert!(create_or_get(temp.path(), empty_request, "2031-02-03T12:00:00Z").is_err());
 
         let mut oversized = input();
-        oversized.request_messages[0].content = "x".repeat(MAX_RUN_BYTES);
+        oversized.request_messages[0].content = "x".repeat(MAX_RUN_BYTES).into();
         assert!(create_or_get(temp.path(), oversized, "2031-02-03T12:00:00Z").is_err());
+    }
+
+    #[test]
+    fn create_rejects_remote_image_payloads_before_writing_a_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut invalid_image = input();
+        invalid_image.request_messages = vec![serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "https://example.test/private.png" }
+            }]
+        }))
+        .unwrap()];
+
+        assert!(create_or_get(temp.path(), invalid_image, "2031-02-03T12:00:00Z").is_err());
+        assert!(read_all(temp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn running_jobs_release_persisted_image_payloads_after_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut image_input = input();
+        image_input.request_messages = vec![serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe this image." },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                    }
+                }
+            ]
+        }))
+        .unwrap()];
+        let (run, _) = create_or_get(temp.path(), image_input, "2031-02-03T12:00:00Z").unwrap();
+
+        release_image_payloads(temp.path(), &run.id).unwrap();
+
+        let stored = std::fs::read_to_string(run_path(temp.path(), &run.id)).unwrap();
+        assert!(stored.contains("Describe this image."));
+        assert!(!stored.contains("iVBORw0KGgo"));
     }
 
     #[test]

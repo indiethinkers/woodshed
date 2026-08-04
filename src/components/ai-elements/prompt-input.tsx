@@ -48,7 +48,36 @@ import {
 // Helpers
 // ============================================================================
 
-const convertFileToDataUrl = (file: File): Promise<string | null> => {
+const MEDIA_TYPE_BY_EXTENSION: Record<string, string> = {
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  markdown: "text/markdown",
+  md: "text/markdown",
+  pdf: "application/pdf",
+  png: "image/png",
+  txt: "text/plain",
+  webp: "image/webp",
+};
+
+function selectedFileMediaType(file: Pick<File, "name" | "type">): string {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return MEDIA_TYPE_BY_EXTENSION[extension] ?? file.type;
+}
+
+function normalizeDataUrlMediaType(dataUrl: string, mediaType: string): string {
+  if (!mediaType || !dataUrl.startsWith("data:")) return dataUrl;
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex < 0 || !dataUrl.slice(0, commaIndex).endsWith(";base64")) {
+    return dataUrl;
+  }
+  return `data:${mediaType};base64,${dataUrl.slice(commaIndex + 1)}`;
+}
+
+const convertFileToDataUrl = (
+  file: File,
+  mediaType: string,
+): Promise<string | null> => {
   // FileReader uses callback-based API, wrapping in Promise is necessary.
   // Reading the selected File directly avoids release-webview restrictions on
   // fetching the temporary blob URL used for attachment previews.
@@ -56,8 +85,13 @@ const convertFileToDataUrl = (file: File): Promise<string | null> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
     // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
-    reader.onloadend = () =>
-      resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onloadend = () => {
+      resolve(
+        typeof reader.result === "string"
+          ? normalizeDataUrlMediaType(reader.result, mediaType)
+          : null,
+      );
+    };
     // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
     reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
@@ -72,7 +106,7 @@ type PromptInputAttachment = FileUIPart & {
 const createPromptInputAttachment = (file: File): PromptInputAttachment => ({
   filename: file.name,
   id: nanoid(),
-  mediaType: file.type,
+  mediaType: selectedFileMediaType(file),
   sourceFile: file,
   type: "file",
   url: URL.createObjectURL(file),
@@ -621,7 +655,10 @@ export const PromptInput = ({
         // URL only for local preview rendering; it is not a durable payload.
         const convertedFiles: FileUIPart[] = await Promise.all(
           files.map(async ({ id: _id, sourceFile, ...item }) => {
-            const dataUrl = await convertFileToDataUrl(sourceFile);
+            const dataUrl = await convertFileToDataUrl(
+              sourceFile,
+              item.mediaType,
+            );
             if (!dataUrl) {
               throw new Error("Woodshed could not read the attachment.");
             }
