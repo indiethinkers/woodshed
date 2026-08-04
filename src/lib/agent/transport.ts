@@ -96,7 +96,10 @@ interface AgentTransportOptions {
   getSystemContext?: () => string | null;
   onRunChange?: (run: AgentRun | null) => void;
   pollIntervalMs?: number;
+  reconnectTimeoutMs?: number;
 }
+
+const DEFAULT_AGENT_RECONNECT_TIMEOUT_MS = 30_000;
 
 export function createAgentChatTransport(
   options: AgentTransportOptions = {},
@@ -180,7 +183,8 @@ function streamAgentRun(
       const ids = startMessage(controller, initialRun.assistantMessageId);
       let eventIndex = 0;
       let emittedText = "";
-      let pollFailures = 0;
+      let pollFailureStartedAt: number | null = null;
+      let latestRun = initialRun;
 
       const close = () => {
         if (stopped) return;
@@ -197,6 +201,7 @@ function streamAgentRun(
         close();
       };
       const accept = (run: AgentRun): boolean => {
+        latestRun = run;
         options.onRunChange?.(run);
         for (const event of coalesceAgentEvents(run.events.slice(eventIndex))) {
           enqueueAgentEvent(controller, ids, event);
@@ -250,14 +255,27 @@ function streamAgentRun(
             fail("Agent run could not be found.");
             return;
           }
-          pollFailures = 0;
+          pollFailureStartedAt = null;
           if (accept(run)) return;
         } catch (error) {
-          pollFailures += 1;
-          if (pollFailures >= 3) {
-            fail(error instanceof Error ? error.message : String(error));
-            return;
-          }
+          const now = Date.now();
+          pollFailureStartedAt ??= now;
+          const reconnectTimeoutMs =
+            options.reconnectTimeoutMs ?? DEFAULT_AGENT_RECONNECT_TIMEOUT_MS;
+          if (now - pollFailureStartedAt < reconnectTimeoutMs) continue;
+
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const failedRun: AgentRun = {
+            ...latestRun,
+            status: "failed",
+            error: message,
+            updatedAt: new Date(now).toISOString(),
+            finishedAt: new Date(now).toISOString(),
+          };
+          options.onRunChange?.(failedRun);
+          fail(message);
+          return;
         }
       }
     },

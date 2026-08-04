@@ -22,8 +22,31 @@ const chatMock = vi.hoisted(() => ({
 const navigateMock = vi.hoisted(() => vi.fn());
 const routerMock = vi.hoisted(() => ({ href: "/agent" }));
 const invokeMock = vi.hoisted(() => ({
+  agentConfig: {
+    baseUrl: "http://127.0.0.1:9000/v1",
+    credentialSource: "hermes",
+    displayName: "Hermes",
+    hasApiKey: true,
+    managedProfile: null as null | {
+      available: boolean;
+      model: string;
+      name: string;
+      port: number;
+    },
+    model: "synthetic-model",
+    sessionKey: "",
+  },
+  chatMessages: [] as Array<{
+    agentRunId?: string | null;
+    content: string;
+    createdAt: string;
+    id: string;
+    role: "system" | "user" | "assistant";
+  }>,
+  chatModel: "synthetic-model",
   chatListPromise: null as Promise<unknown[]> | null,
 }));
+const tauriInvokeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@ai-sdk/react", () => ({
   useChat: () => chatMock,
@@ -50,62 +73,20 @@ vi.mock("@/lib/runtime", () => ({
 }));
 
 vi.mock("@/lib/tauri", () => ({
-  tauriInvoke: vi.fn(async (command: string) => {
-    if (command === "agent_config_get") {
-      return {
-        baseUrl: "http://127.0.0.1:9000/v1",
-        displayName: "Hermes",
-        hasApiKey: true,
-        model: "synthetic-model",
-        sessionKey: "",
-      };
-    }
-    if (command === "agent_chats_all") {
-      return (
-        invokeMock.chatListPromise ?? [
-        {
-          id: "agent-conversation-1",
-          path: "agent/agent-conversation-1.md",
-          title: "Reference review",
-          agent: "Hermes",
-          model: "synthetic-model",
-          created: "2031-02-03T12:00:00Z",
-          updated: "2031-02-03T12:00:00Z",
-          lastMessageCreated: null,
-          pinned: false,
-          messageCount: 0,
-          preview: "",
-        },
-      ]
-      );
-    }
-    if (command === "agent_chat_get") {
-      return {
-        id: "agent-conversation-1",
-        path: "agent/agent-conversation-1.md",
-        title: "Reference review",
-        agent: "Hermes",
-        model: "synthetic-model",
-        created: "2031-02-03T12:00:00Z",
-        updated: "2031-02-03T12:00:00Z",
-        pinned: false,
-        tags: ["agent"],
-        messages: [],
-      };
-    }
-    return null;
-  }),
+  tauriInvoke: tauriInvokeMock,
 }));
 
 import {
   AgentBackgroundQueue,
   AgentContextUsage,
+  AgentHeader,
   AgentSurface,
   AgentMessage,
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
   mergeHydratedConversationMessages,
+  modelForAgentChatUpdate,
   sortChatsByCreatedAt,
   toUiMessages,
 } from "./agent-surface";
@@ -114,7 +95,69 @@ import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import type { AgentRun } from "@/lib/agent/transport";
 
 beforeEach(() => {
+  chatMock.error = undefined;
+  chatMock.messages = [];
+  chatMock.status = "ready";
+  chatMock.sendMessage.mockReset();
+  chatMock.setMessages.mockReset();
+  chatMock.setMessages.mockImplementation((next) => {
+    chatMock.messages =
+      typeof next === "function" ? next(chatMock.messages) : next;
+  });
+  chatMock.resumeStream.mockReset();
+  chatMock.resumeStream.mockResolvedValue(undefined);
+  invokeMock.agentConfig = {
+    baseUrl: "http://127.0.0.1:9000/v1",
+    credentialSource: "hermes",
+    displayName: "Hermes",
+    hasApiKey: true,
+    managedProfile: null,
+    model: "synthetic-model",
+    sessionKey: "",
+  };
+  invokeMock.chatMessages = [];
+  invokeMock.chatModel = "synthetic-model";
   invokeMock.chatListPromise = null;
+  tauriInvokeMock.mockReset();
+  tauriInvokeMock.mockImplementation(async (command: string) => {
+    if (command === "agent_config_get") {
+      return invokeMock.agentConfig;
+    }
+    if (command === "agent_chats_all") {
+      return (
+        invokeMock.chatListPromise ?? [
+          {
+            id: "agent-conversation-1",
+            path: "agent/agent-conversation-1.md",
+            title: "Reference review",
+            agent: "Hermes",
+            model: invokeMock.chatModel,
+            created: "2031-02-03T12:00:00Z",
+            updated: "2031-02-03T12:00:00Z",
+            lastMessageCreated: null,
+            pinned: false,
+            messageCount: 0,
+            preview: "",
+          },
+        ]
+      );
+    }
+    if (command === "agent_chat_get") {
+      return {
+        id: "agent-conversation-1",
+        path: "agent/agent-conversation-1.md",
+        title: "Reference review",
+        agent: "Hermes",
+        model: invokeMock.chatModel,
+        created: "2031-02-03T12:00:00Z",
+        updated: "2031-02-03T12:00:00Z",
+        pinned: false,
+        tags: ["agent"],
+        messages: invokeMock.chatMessages,
+      };
+    }
+    return null;
+  });
   routerMock.href = "/agent";
   navigateMock.mockClear();
 });
@@ -345,6 +388,52 @@ describe("AgentSurface voice controls", () => {
     });
     window.localStorage.removeItem("woodshed:agent:last-chat-id");
   });
+
+  it("disables sending for an unreadable profile and refreshes after focus", async () => {
+    invokeMock.agentConfig = {
+      ...invokeMock.agentConfig,
+      hasApiKey: true,
+      managedProfile: {
+        available: false,
+        model: "focus-gateway",
+        name: "focus",
+        port: 8651,
+      },
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByPlaceholderText("Connect Hermes in settings"),
+    ).toBeDisabled();
+
+    invokeMock.agentConfig = {
+      ...invokeMock.agentConfig,
+      managedProfile: {
+        ...invokeMock.agentConfig.managedProfile!,
+        available: true,
+      },
+    };
+    fireEvent(window, new Event("focus"));
+
+    expect(
+      await screen.findByPlaceholderText("How can I help you today?"),
+    ).toBeEnabled();
+  });
+
+  it("preserves the resolved gateway model in checkpoint updates", () => {
+    expect(modelForAgentChatUpdate({ model: "resolved-gateway" })).toBe(
+      "resolved-gateway",
+    );
+  });
 });
 
 describe("AgentWorkIndicator", () => {
@@ -356,6 +445,27 @@ describe("AgentWorkIndicator", () => {
     expect(screen.queryByText("3 steps")).not.toBeInTheDocument();
     expect(screen.queryByText("Remote agent work")).not.toBeInTheDocument();
     expect(screen.queryByText("Response stream")).not.toBeInTheDocument();
+  });
+});
+
+describe("Agent header run status", () => {
+  it("keeps the durable run status in the same topbar as the agent name", () => {
+    render(
+      <AgentHeader
+        configResolved
+        configured
+        context={null}
+        displayName="Hermes"
+        run={syntheticRun()}
+        status="submitted"
+      />,
+    );
+
+    const topbar = screen.getByRole("banner");
+    expect(topbar).toContainElement(screen.getByText("Hermes"));
+    expect(topbar).toContainElement(
+      screen.getByText("Running in the background"),
+    );
   });
 });
 

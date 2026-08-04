@@ -249,12 +249,14 @@ fn read_managed_profile(root: &Path, name: &str) -> Option<ManagedProfileSelecti
         .ok()?
         .flatten()
         .unwrap_or_default();
-    let port = env
+    let env_port = match env
         .as_deref()
         .and_then(|content| parse_env_content(content, "API_SERVER_PORT"))
-        .and_then(|value| value.parse::<u16>().ok())
-        .or(yaml_settings.port)
-        .unwrap_or(8642);
+    {
+        Some(value) => Some(parse_profile_port(&value)?),
+        None => None,
+    };
+    let port = env_port.or(yaml_settings.port).unwrap_or(8642);
     let model = env
         .as_deref()
         .and_then(|content| parse_env_content(content, "API_SERVER_MODEL_NAME"))
@@ -315,13 +317,15 @@ struct ApiServerSettings {
 
 fn parse_yaml_api_server_settings(content: &str) -> Result<Option<ApiServerSettings>, ()> {
     let value: serde_yaml::Value = serde_yaml::from_str(content).map_err(|_| ())?;
-    let port = yaml_api_server_value(&value, "port").and_then(|value| match value {
-        serde_yaml::Value::Number(number) => {
-            number.as_u64().and_then(|port| u16::try_from(port).ok())
+    let port = match yaml_api_server_value(&value, "port") {
+        None => None,
+        Some(serde_yaml::Value::Number(number)) => {
+            let value = number.as_u64().ok_or(())?;
+            Some(parse_profile_port(&value.to_string()).ok_or(())?)
         }
-        serde_yaml::Value::String(port) => port.parse::<u16>().ok(),
-        _ => None,
-    });
+        Some(serde_yaml::Value::String(value)) => Some(parse_profile_port(value).ok_or(())?),
+        Some(_) => return Err(()),
+    };
     let model = yaml_api_server_value(&value, "model_name")
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
@@ -335,6 +339,10 @@ fn parse_yaml_api_server_settings(content: &str) -> Result<Option<ApiServerSetti
         model,
         api_key,
     }))
+}
+
+fn parse_profile_port(value: &str) -> Option<u16> {
+    value.parse::<u16>().ok().filter(|port| *port > 0)
 }
 
 fn yaml_api_server_value<'a>(
@@ -700,6 +708,36 @@ mod tests {
         assert_eq!(selection.profile.port, 8651);
         assert_eq!(selection.profile.model, "env-gateway");
         assert_eq!(selection.api_key.as_deref(), Some("env-secret"));
+    }
+
+    #[test]
+    fn managed_connection_rejects_malformed_or_out_of_range_ports() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let env_profile = temp.path().join("profiles/focus");
+        fs::create_dir_all(&env_profile).unwrap();
+        fs::write(temp.path().join("active_profile"), "focus\n").unwrap();
+        fs::write(
+            env_profile.join(".env"),
+            "API_SERVER_PORT=not-a-port\nAPI_SERVER_KEY=env-secret\n",
+        )
+        .unwrap();
+
+        let selection = managed_profile_for_home(temp.path());
+        assert!(!selection.profile.available);
+        assert!(selection.api_key.is_none());
+
+        let yaml_profile = temp.path().join("profiles/review");
+        fs::create_dir_all(&yaml_profile).unwrap();
+        fs::write(temp.path().join("active_profile"), "review\n").unwrap();
+        fs::write(
+            yaml_profile.join("config.yaml"),
+            "platforms:\n  api_server:\n    extra:\n      port: 70000\n      key: yaml-secret\n",
+        )
+        .unwrap();
+
+        let selection = managed_profile_for_home(temp.path());
+        assert!(!selection.profile.available);
+        assert!(selection.api_key.is_none());
     }
 
     #[test]

@@ -7,23 +7,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { SettingsGroup } from "@/components/settings/settings-page";
+import type { AgentConfig } from "@/lib/agent/config";
 import { isLoopbackAgentUrl } from "@/lib/agent/connection";
 import { tauriInvoke } from "@/lib/tauri";
-
-interface AgentConfig {
-  displayName: string;
-  baseUrl: string;
-  model: string;
-  sessionKey: string;
-  hasApiKey: boolean;
-  credentialSource: "environment" | "hermes" | "stored" | "missing";
-  managedProfile: {
-    name: string;
-    port: number;
-    model: string;
-    available: boolean;
-  } | null;
-}
 
 interface AgentConnectionTestResult {
   ok: boolean;
@@ -294,7 +280,10 @@ export function AgentSettingsSection() {
     >
       <form onSubmit={handleSave} className="flex max-w-[680px] flex-col gap-4">
         {managedByHermes ? (
-          <div className={`rounded-sm border px-3.5 py-3 ${managedCardClass}`}>
+          <div
+            className={`rounded-sm border px-3.5 py-3 sm:min-h-[80px] ${managedCardClass}`}
+            data-testid="managed-hermes-connection"
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-start gap-3">
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-sm ring-1 ring-border/70">
@@ -320,7 +309,10 @@ export function AgentSettingsSection() {
                       {managedStatus.label}
                     </span>
                   </div>
-                  <p className="mt-1 max-w-[460px] text-[11px] leading-4 text-muted-foreground">
+                  <p
+                    className="mt-1 min-h-8 max-w-[460px] text-[11px] leading-4 text-muted-foreground"
+                    data-testid="managed-hermes-status-message"
+                  >
                     {managedStatus.message}
                   </p>
                 </div>
@@ -330,7 +322,7 @@ export function AgentSettingsSection() {
                   type="button"
                   onClick={handleTestConnection}
                   disabled={disabled}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
+                  className="inline-flex min-w-[128px] items-center justify-center gap-1.5 rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
                 >
                   <PlugZap className="size-3.5" strokeWidth={1.75} />
                   {busy === "testing" ? "Testing…" : "Test connection"}

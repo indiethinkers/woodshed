@@ -288,6 +288,91 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("survives a temporary Tauri restart and reconciles the durable run", async () => {
+    const recovered = run({
+      status: "failed",
+      finalResponse: null,
+      events: [],
+      error:
+        "Woodshed restarted before this agent run finished. Send the message again to retry.",
+    });
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockResolvedValueOnce(recovered);
+    const onRunChange = vi.fn();
+    const transport = createAgentChatTransport({
+      onRunChange,
+      pollIntervalMs: 0,
+    });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Keep this run recoverable." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledTimes(5);
+    expect(onRunChange).toHaveBeenLastCalledWith(recovered);
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: recovered.error,
+    });
+  });
+
+  it("turns a terminal backend disconnect into a visible failed run", async () => {
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockRejectedValueOnce(new Error("backend unavailable"));
+    const onRunChange = vi.fn();
+    const transport = createAgentChatTransport({
+      onRunChange,
+      pollIntervalMs: 0,
+      reconnectTimeoutMs: 0,
+    });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Keep the failure recoverable." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+
+    expect(onRunChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "backend unavailable",
+      }),
+    );
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: "backend unavailable",
+    });
+  });
+
   it("polls active runs every 100ms by default for responsive streaming", async () => {
     vi.useFakeTimers();
     let stream: ReadableStream<UIMessageChunk> | undefined;

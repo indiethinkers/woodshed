@@ -18,6 +18,7 @@ const config = vi.hoisted(() => ({
 }));
 const connection = vi.hoisted(() => ({
   error: null as Error | null,
+  pending: null as Promise<unknown> | null,
   result: {
     ok: true,
     status: 200,
@@ -47,6 +48,7 @@ describe("AgentSettingsSection", () => {
     config.model = "synthetic-model";
     config.managedProfile = null;
     connection.error = null;
+    connection.pending = null;
     connection.result = {
       ok: true,
       status: 200,
@@ -70,6 +72,7 @@ describe("AgentSettingsSection", () => {
       }
       if (command === "agent_connection_test") {
         if (connection.error) throw connection.error;
+        if (connection.pending) return connection.pending;
         return connection.result;
       }
       return null;
@@ -217,6 +220,43 @@ describe("AgentSettingsSection", () => {
       "agent_config_set",
       expect.anything(),
     );
+  });
+
+  it("reserves stable card geometry while a connection test is running", async () => {
+    config.baseUrl = "http://127.0.0.1:8642/v1";
+    config.credentialSource = "hermes";
+    config.model = "hermes-agent";
+    config.managedProfile = {
+      name: "focus",
+      port: 8651,
+      model: "focus-gateway",
+      available: true,
+    };
+    let finishTest: ((value: typeof connection.result) => void) | undefined;
+    connection.pending = new Promise((resolve) => {
+      finishTest = resolve;
+    });
+
+    render(<AgentSettingsSection />);
+
+    const testButton = await screen.findByRole("button", {
+      name: "Test connection",
+    });
+    const card = screen.getByTestId("managed-hermes-connection");
+    const message = screen.getByTestId("managed-hermes-status-message");
+    expect(card).toHaveClass("sm:min-h-[80px]");
+    expect(message).toHaveClass("min-h-8");
+    expect(testButton).toHaveClass("min-w-[128px]");
+
+    fireEvent.click(testButton);
+    expect(await screen.findByRole("button", { name: "Testing…" })).toBe(
+      testButton,
+    );
+    expect(screen.getByTestId("managed-hermes-connection")).toBe(card);
+
+    finishTest?.(connection.result);
+    expect(await screen.findByText("Connected")).toBeVisible();
+    expect(screen.getByTestId("managed-hermes-connection")).toBe(card);
   });
 
   it("reports when the local Hermes gateway is unavailable", async () => {

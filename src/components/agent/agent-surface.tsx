@@ -176,6 +176,7 @@ import {
   attachmentLabel,
   parsePersistedAttachmentContext,
 } from "@/lib/agent/attachment-context";
+import { canUseAgentConfig, type AgentConfig } from "@/lib/agent/config";
 import {
   type AgentRun,
   cancelAgentRun,
@@ -204,14 +205,6 @@ import {
   AgentWeatherResponse,
   weatherPreviewFromResponse,
 } from "./agent-weather-response";
-
-interface AgentConfig {
-  displayName: string;
-  baseUrl: string;
-  model: string;
-  sessionKey: string;
-  hasApiKey: boolean;
-}
 
 const LAST_AGENT_CHAT_STORAGE_KEY = "woodshed:agent:last-chat-id";
 const RECENT_AGENT_CHAT_WINDOW_MS = 5 * 60 * 1000;
@@ -285,6 +278,12 @@ interface AgentChatSummary {
 interface PendingAgentSend {
   text: string;
   files: FileUIPart[];
+}
+
+export function modelForAgentChatUpdate(
+  chat: Pick<AgentChatRecord, "model">,
+): string {
+  return chat.model;
 }
 
 interface AgentSurfaceProps {
@@ -431,7 +430,7 @@ function AgentSurfaceInner({
   // button) must not render — otherwise it flashes the not-configured state
   // and the input visibly shifts when the real config lands.
   const configResolved = config !== null;
-  const configured = Boolean(config?.hasApiKey);
+  const configured = canUseAgentConfig(config);
   const runActive =
     activeRun?.status === "queued" || activeRun?.status === "running";
   const effectiveStatus: ChatStatus =
@@ -484,6 +483,28 @@ function AgentSurfaceInner({
       cancelled = true;
     };
   }, [navigate, pageMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    function refreshConfig() {
+      void tauriInvoke<AgentConfig>("agent_config_get")
+        .then((next) => {
+          if (!cancelled && next) setConfig(next);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setLastError(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        });
+    }
+    window.addEventListener("focus", refreshConfig);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshConfig);
+    };
+  }, []);
 
   useEffect(() => {
     if (activeRunsError) {
@@ -678,7 +699,7 @@ function AgentSurfaceInner({
           id: chat.id,
           title: chat.title,
           agent: displayName,
-          model: config?.model ?? chat.model,
+          model: modelForAgentChatUpdate(chat),
           pinned: chat.pinned,
           messages: vaultMessages,
         },
@@ -852,11 +873,31 @@ function AgentSurfaceInner({
   }
 
   function handleSubmit(message: PromptInputMessage) {
+    void submitWithFreshConfig(message);
+  }
+
+  async function submitWithFreshConfig(message: PromptInputMessage) {
     const text = message.text.trim();
-    if ((!text && message.files.length === 0) || !canSubmit) return;
+    if ((!text && message.files.length === 0) || busy) return;
     setLastError(null);
+    let nextConfig: AgentConfig;
+    try {
+      const refreshed = await tauriInvoke<AgentConfig>("agent_config_get");
+      if (!refreshed) throw new Error("Woodshed could not read Agent settings.");
+      nextConfig = refreshed;
+      setConfig(nextConfig);
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!canUseAgentConfig(nextConfig)) {
+      setLastError(
+        "The active Hermes profile is unavailable. Check it in Hermes, then try again.",
+      );
+      return;
+    }
     if (!activeId) {
-      void createChatAndSend(text, message.files, message.text.trim());
+      await createChatAndSend(text, message.files, message.text.trim());
       return;
     }
     rememberRecentAgentChatId(activeId);
@@ -972,6 +1013,7 @@ function AgentSurfaceInner({
             configured={configured}
             context={activeChat?.context}
             displayName={displayName}
+            onRetry={configured ? retryRun : undefined}
             run={activeRun}
             status={effectiveStatus}
           />
@@ -992,7 +1034,7 @@ function AgentSurfaceInner({
             runs={backgroundRuns}
           />
         )}
-        {activeRun && activeRun.status !== "completed" && (
+        {!pageMode && activeRun && activeRun.status !== "completed" && (
           <AgentRunBanner
             onRetry={configured ? retryRun : undefined}
             run={activeRun}
@@ -1293,11 +1335,12 @@ function AgentConversationRow({
   );
 }
 
-function AgentHeader({
+export function AgentHeader({
   configResolved,
   configured,
   context,
   displayName,
+  onRetry,
   run,
   status,
 }: {
@@ -1305,16 +1348,21 @@ function AgentHeader({
   configured: boolean;
   context?: AgentChatContext | null;
   displayName: string;
+  onRetry?: () => void;
   run: AgentRun | null;
   status: ChatStatus;
 }) {
   const busy = status === "submitted" || status === "streaming";
+  const visibleRun = run && run.status !== "completed" ? run : null;
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-6">
       <div className="flex min-w-0 items-center gap-2.5">
         <div className="shrink-0 text-[15px] font-semibold leading-none tracking-tight">
           {displayName}
         </div>
+        {visibleRun && (
+          <AgentRunTopbarStatus onRetry={onRetry} run={visibleRun} />
+        )}
         {context?.title && (
           // The page this chat was started from (sidebar mode). A link back to
           // it — clicking returns to the source page.
@@ -1332,7 +1380,7 @@ function AgentHeader({
         <AgentContextUsage run={run} />
         {/* Hold the status pill until config resolves so it doesn't flash
             "Setup needed" → "Ready" on every navigation to the page. */}
-        {configResolved && (
+        {configResolved && !visibleRun && (
           <div
             className={cn(
               "hidden items-center gap-1.5 rounded-full border px-2 py-1 text-xs sm:flex",
@@ -1365,6 +1413,60 @@ function AgentHeader({
         </Button>
       </div>
     </header>
+  );
+}
+
+function agentRunStatusLabel(status: AgentRun["status"]): string {
+  return status === "queued"
+    ? "Queued"
+    : status === "running"
+      ? "Running in the background"
+      : status === "completed"
+        ? "Completed"
+        : status === "cancelled"
+          ? "Cancelled"
+          : "Failed";
+}
+
+function AgentRunTopbarStatus({
+  onRetry,
+  run,
+}: {
+  onRetry?: () => void;
+  run: AgentRun;
+}) {
+  const active = run.status === "queued" || run.status === "running";
+  return (
+    <div
+      aria-live="polite"
+      className={cn(
+        "flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground",
+        run.status === "failed" && "text-destructive",
+      )}
+      data-agent-topbar-status
+      title={run.error ?? undefined}
+    >
+      {run.status === "failed" || run.status === "cancelled" ? (
+        <X className="size-3 shrink-0" />
+      ) : (
+        <Circle
+          className={cn("size-2 shrink-0", active && "animate-pulse")}
+          fill="currentColor"
+        />
+      )}
+      <span className="truncate font-medium">
+        {agentRunStatusLabel(run.status)}
+      </span>
+      {run.status === "failed" && onRetry && (
+        <button
+          className="shrink-0 rounded px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-muted"
+          onClick={onRetry}
+          type="button"
+        >
+          Retry
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1562,16 +1664,7 @@ export function AgentRunBanner({
   run: AgentRun;
 }) {
   const active = run.status === "queued" || run.status === "running";
-  const label =
-    run.status === "queued"
-      ? "Queued"
-      : run.status === "running"
-        ? "Running in the background"
-        : run.status === "completed"
-          ? "Completed"
-          : run.status === "cancelled"
-            ? "Cancelled"
-            : "Failed";
+  const label = agentRunStatusLabel(run.status);
   return (
     <div
       aria-live="polite"
