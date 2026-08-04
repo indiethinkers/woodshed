@@ -385,8 +385,10 @@ read time.
 
 ## Surfaces and routes
 
-The sidebar order is the current product taxonomy and drives `⌘1` through `⌘9`.
-Confirm it in `src/components/layout/sidebar.tsx` before changing navigation.
+The sidebar order is the current product taxonomy and drives `⌘1` through `⌘8`.
+Graph lives in the title bar and command palette without a number shortcut.
+Confirm both in `src/components/layout/sidebar.tsx` and
+`src/components/layout/title-bar-actions.tsx` before changing navigation.
 
 | Surface | Primary route | Backing data |
 |---|---|---|

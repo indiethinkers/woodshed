@@ -91,12 +91,6 @@ interface AgentTransportOptions {
   pollIntervalMs?: number;
 }
 
-interface ActiveAgentRunSubscriptionOptions {
-  onError?: (error: unknown) => void;
-  onRuns: (runs: AgentRun[]) => void;
-  pollIntervalMs?: number;
-}
-
 export function createAgentChatTransport(
   options: AgentTransportOptions = {},
 ): ChatTransport<UIMessage> {
@@ -158,35 +152,8 @@ export function createAgentChatTransport(
   };
 }
 
-/**
- * Observe durable work across conversations. Keeping this lifecycle beside the
- * chat transport prevents React surfaces from inventing their own run polling
- * and detach semantics.
- */
-export function subscribeToActiveAgentRuns({
-  onError,
-  onRuns,
-  pollIntervalMs = 1_500,
-}: ActiveAgentRunSubscriptionOptions): () => void {
-  let stopped = false;
-  let timer: number | undefined;
-
-  async function refresh() {
-    try {
-      const runs = (await tauriInvoke<AgentRun[]>("agent_runs_active")) ?? [];
-      if (!stopped) onRuns(runs);
-    } catch (error) {
-      if (!stopped) onError?.(error);
-    } finally {
-      if (!stopped) timer = window.setTimeout(refresh, pollIntervalMs);
-    }
-  }
-
-  void refresh();
-  return () => {
-    stopped = true;
-    if (timer !== undefined) window.clearTimeout(timer);
-  };
+export async function listActiveAgentRuns(): Promise<AgentRun[]> {
+  return (await tauriInvoke<AgentRun[]>("agent_runs_active")) ?? [];
 }
 
 export async function cancelAgentRun(runId: string): Promise<AgentRun> {
@@ -392,9 +359,7 @@ function finishMessage(
   controller: ReadableStreamDefaultController<UIMessageChunk>,
   ids: StreamPartIds,
 ) {
-  if (ids.reasoningStarted) {
-    enqueue(controller, { type: "reasoning-end", id: ids.reasoningId });
-  }
+  endReasoning(controller, ids);
   enqueue(controller, { type: "text-end", id: ids.textId });
   enqueue(controller, { type: "finish-step" });
   enqueue(controller, { type: "finish", finishReason: "stop" });
@@ -405,6 +370,9 @@ function enqueueAgentEvent(
   ids: StreamPartIds,
   payload: AgentRunEvent,
 ) {
+  if (payload.kind !== "reasoning-delta") {
+    endReasoning(controller, ids);
+  }
   if (payload.kind === "delta" && payload.delta) {
     enqueue(controller, {
       type: "text-delta",
@@ -504,6 +472,16 @@ function enqueueAgentEvent(
       toolCallId: payload.toolCallId,
     });
   }
+}
+
+function endReasoning(
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+  ids: StreamPartIds,
+) {
+  if (!ids.reasoningStarted) return;
+  enqueue(controller, { type: "reasoning-end", id: ids.reasoningId });
+  ids.reasoningStarted = false;
+  ids.reasoningId = nanoid();
 }
 
 function enqueue(

@@ -626,9 +626,15 @@ pub fn agent_runs_active(
     state: State<AppState>,
 ) -> Result<Vec<AgentRunDto>, String> {
     let app_data = app_data_dir(&app)?;
+    let run_ids = state
+        .agent_run_cancellations
+        .lock_recover()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
     let _mutation = state.agent_run_mutations.lock_recover();
     let mut output = Vec::new();
-    for run in runs::list_active(&app_data)? {
+    for run in runs::list_active_by_ids(&app_data, &run_ids)? {
         let run = reconcile_run(&app, &state, &app_data, run)?;
         if runs::is_active(run.status) {
             output.push(AgentRunDto::from(&run));

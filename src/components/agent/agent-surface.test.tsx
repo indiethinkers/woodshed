@@ -401,6 +401,7 @@ describe("AgentMessage activity state", () => {
             {
               type: "reasoning",
               text: "Checking the supplied context before answering.",
+              state: "streaming",
             },
           ],
         }}
@@ -413,6 +414,33 @@ describe("AgentMessage activity state", () => {
     expect(
       screen.getByText("Checking the supplied context before answering."),
     ).toBeInTheDocument();
+  });
+
+  it("stops labeling completed reasoning as live while response text streams", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming
+        message={{
+          id: "assistant-1",
+          role: "assistant",
+          parts: [
+            {
+              type: "reasoning",
+              text: "Checked the supplied context.",
+              state: "done",
+            },
+            { type: "text", text: "Streaming the answer.", state: "streaming" },
+          ],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reasoning")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking through the response")).not.toBeInTheDocument();
   });
 });
 
@@ -684,6 +712,48 @@ describe("AgentThoughtTool", () => {
     expect(screen.getByText("Implementation plan")).toBeInTheDocument();
     expect(screen.getByText("Inspect the synthetic input")).toBeInTheDocument();
     expect(screen.getByText("Draft the response")).toBeInTheDocument();
+  });
+
+  it("preserves approval controls for structured plans", () => {
+    const onApproval = vi.fn();
+    const part = {
+      type: "dynamic-tool",
+      toolName: "update_plan",
+      toolCallId: "call_plan",
+      state: "approval-requested",
+      approval: { id: "approval_plan" },
+      input: {
+        plan: [{ step: "Inspect the synthetic input", status: "pending" }],
+      },
+    } as DynamicToolUIPart;
+
+    render(<AgentThoughtTool onToolApprovalResponse={onApproval} part={part} />);
+
+    expect(screen.getByText("Implementation plan")).toBeInTheDocument();
+    expect(screen.getByText("Tool approval")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onApproval).toHaveBeenCalledWith({
+      approved: true,
+      id: "approval_plan",
+    });
+  });
+
+  it("preserves errors for structured plans", () => {
+    const part: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "update_plan",
+      toolCallId: "call_plan",
+      state: "output-error",
+      input: {
+        plan: [{ step: "Inspect the synthetic input", status: "pending" }],
+      },
+      errorText: "Synthetic plan error.",
+    };
+
+    render(<AgentThoughtTool part={part} />);
+
+    expect(screen.getByText("Implementation plan")).toBeInTheDocument();
+    expect(screen.getByText("Synthetic plan error.")).toBeInTheDocument();
   });
 
   it("renders a friendly activity line and reveals parameters on expand", () => {

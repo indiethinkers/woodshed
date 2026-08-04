@@ -13,7 +13,7 @@ import {
   type AgentRun,
   cancelAgentRun,
   createAgentChatTransport,
-  subscribeToActiveAgentRuns,
+  listActiveAgentRuns,
 } from "./transport";
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
@@ -357,6 +357,39 @@ describe("createAgentChatTransport", () => {
     ]);
   });
 
+  it("ends reasoning before response text begins", async () => {
+    mocks.tauriInvoke.mockResolvedValueOnce(
+      run({
+        events: [
+          { kind: "reasoning-delta", delta: "Checking context." },
+          { kind: "delta", delta: "The answer." },
+        ],
+        finalResponse: "The answer.",
+      }),
+    );
+    const transport = createAgentChatTransport();
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "What should I know?" }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+    const reasoningEnd = chunks.findIndex((chunk) => chunk.type === "reasoning-end");
+    const textDelta = chunks.findIndex((chunk) => chunk.type === "text-delta");
+
+    expect(reasoningEnd).toBeGreaterThan(-1);
+    expect(reasoningEnd).toBeLessThan(textDelta);
+  });
+
   it("surfaces a durable failed status and its stored error", async () => {
     mocks.tauriInvoke.mockResolvedValueOnce(
       run({
@@ -446,14 +479,11 @@ describe("createAgentChatTransport", () => {
     );
   });
 
-  it("owns background-run polling outside the React surface", async () => {
+  it("lists active runs through the transport boundary", async () => {
     const active = run({ status: "running" });
     mocks.tauriInvoke.mockResolvedValueOnce([active]);
-    const onRuns = vi.fn();
 
-    const unsubscribe = subscribeToActiveAgentRuns({ onRuns });
-    await vi.waitFor(() => expect(onRuns).toHaveBeenCalledWith([active]));
-    unsubscribe();
+    await expect(listActiveAgentRuns()).resolves.toEqual([active]);
 
     expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_runs_active");
   });

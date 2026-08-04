@@ -1,5 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useChat } from "@ai-sdk/react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   ChatAddToolApproveResponseFunction,
   ChatStatus,
@@ -180,7 +181,6 @@ import {
   cancelAgentRun,
   createAgentChatTransport,
   latestAgentUsage,
-  subscribeToActiveAgentRuns,
 } from "@/lib/agent/transport";
 import {
   captureAgentPageContext,
@@ -190,6 +190,10 @@ import {
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { useToday } from "@/lib/hooks/use-today";
 import { useVaultPath } from "@/lib/hooks/use-vault-path";
+import {
+  ACTIVE_AGENT_RUNS_QUERY_KEY,
+  useActiveAgentRuns,
+} from "@/lib/hooks/use-agent-runs";
 import { cn } from "@/lib/utils";
 import { tauriInvoke } from "@/lib/tauri";
 
@@ -291,8 +295,11 @@ function AgentSurfaceInner({
 }: AgentSurfaceProps) {
   const pageMode = variant === "page";
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const today = useToday();
   const { data: vaultRoot } = useVaultPath();
+  const { data: activeRuns = [], error: activeRunsError } =
+    useActiveAgentRuns(pageMode);
   const href = useRouterState({ select: (s) => s.location.href });
   const urlChatId = useMemo(() => {
     if (!pageMode) return null;
@@ -308,7 +315,6 @@ function AgentSurfaceInner({
   const [activeChat, setActiveChat] = useState<AgentChatRecord | null>(null);
   const [activeId, setActiveId] = useState<string | null>(urlChatId);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
-  const [activeRuns, setActiveRuns] = useState<AgentRun[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
@@ -345,14 +351,17 @@ function AgentSurfaceInner({
         },
         onRunChange: (run) => {
           if (run) {
-            setActiveRuns((current) => updateActiveRunQueue(current, run));
+            queryClient.setQueryData<AgentRun[]>(
+              ACTIVE_AGENT_RUNS_QUERY_KEY,
+              (current = []) => updateActiveRunQueue(current, run),
+            );
           }
           if (!run || run.conversationId === activeIdRef.current) {
             setActiveRun(run);
           }
         },
       }),
-    [pageMode],
+    [pageMode, queryClient],
   );
   const { textInput } = usePromptInputController();
   const {
@@ -433,18 +442,14 @@ function AgentSurfaceInner({
   }, [navigate, pageMode, urlChatId]);
 
   useEffect(() => {
-    if (!pageMode) return;
-    return subscribeToActiveAgentRuns({
-      onError: (error) => {
-        setLastError(error instanceof Error ? error.message : String(error));
-      },
-      onRuns: (runs) => {
-        setActiveRuns((current) =>
-          sameActiveRuns(current, runs) ? current : runs,
-        );
-      },
-    });
-  }, [pageMode]);
+    if (activeRunsError) {
+      setLastError(
+        activeRunsError instanceof Error
+          ? activeRunsError.message
+          : String(activeRunsError),
+      );
+    }
+  }, [activeRunsError]);
 
   useEffect(() => {
     if (pageMode && urlChatId && urlChatId !== activeId) {
@@ -1820,9 +1825,11 @@ function AgentMessageInner({
   const sourceParts = isUser ? [] : sourcePartsFromMessage(message);
   const toolParts = isUser ? [] : toolPartsFromMessage(message);
   const responseArtifact = isUser ? null : agentArtifactFromResponse(responseText);
-  const lastPart = message.parts.at(-1);
+  const lastReasoningPart = message.parts
+    .filter((part) => part.type === "reasoning")
+    .at(-1);
   const reasoningStreaming =
-    isLastMessage && isStreaming && lastPart?.type === "reasoning";
+    isLastMessage && isStreaming && lastReasoningPart?.state === "streaming";
   // The turn whose activity is live: the last assistant message while the run
   // is still streaming. Its activity log auto-expands and ticks a timer.
   const active = !isUser && isLastMessage && isStreaming;
@@ -2147,13 +2154,11 @@ export function AgentThoughtTool({
   part: AgentToolPart;
 }) {
   const plan = structuredPlanFromToolPart(part);
-  if (plan) {
-    return <AgentStructuredPlan part={part} plan={plan} />;
-  }
   return (
     <AgentThoughtToolDetail
       onToolApprovalResponse={onToolApprovalResponse}
       part={part}
+      plan={plan}
     />
   );
 }
@@ -2161,9 +2166,11 @@ export function AgentThoughtTool({
 function AgentThoughtToolDetail({
   onToolApprovalResponse,
   part,
+  plan,
 }: {
   onToolApprovalResponse?: ChatAddToolApproveResponseFunction;
   part: AgentToolPart;
+  plan?: StructuredPlanData | null;
 }) {
   const toolName = toolNameFromPart(part);
   const title = "title" in part ? part.title ?? undefined : undefined;
@@ -2175,14 +2182,16 @@ function AgentThoughtToolDetail({
   const hasOutput = "output" in part && part.output !== undefined;
   const errorText = "errorText" in part ? part.errorText : undefined;
   const needsAttention = part.state === "approval-requested" || status === "error";
-  const hasDetail = hasInput || hasOutput || Boolean(errorText) || Boolean(approval);
-  const [open, setOpen] = useState(needsAttention);
+  const hasPlan = Boolean(plan);
+  const hasDetail =
+    hasPlan || hasInput || hasOutput || Boolean(errorText) || Boolean(approval);
+  const [open, setOpen] = useState(needsAttention || hasPlan);
 
   // Pop the detail open the moment an approval prompt or error arrives so it
   // isn't buried inside a collapsed step.
   useEffect(() => {
-    if (needsAttention) setOpen(true);
-  }, [needsAttention]);
+    if (needsAttention || hasPlan) setOpen(true);
+  }, [hasPlan, needsAttention]);
 
   return (
     <ChainOfThoughtStep
@@ -2264,7 +2273,8 @@ function AgentThoughtToolDetail({
               </ConfirmationActions>
             </Confirmation>
           )}
-          {hasInput && <ToolInput input={input} />}
+          {plan && <AgentStructuredPlan part={part} plan={plan} />}
+          {hasInput && !plan && <ToolInput input={input} />}
           <ToolOutput
             errorText={errorText}
             output={hasOutput ? part.output : undefined}
@@ -2299,46 +2309,40 @@ function AgentStructuredPlan({
     (step) => step.status === "completed",
   ).length;
   return (
-    <ChainOfThoughtStep label="Updated plan" status={status}>
-      <Plan
-        className="mt-2"
-        defaultOpen
-        isStreaming={status === "active"}
-      >
-        <PlanHeader>
-          <div className="min-w-0">
-            <PlanTitle>Implementation plan</PlanTitle>
-            <PlanDescription>
-              {plan.explanation ?? `${completed} of ${plan.steps.length} complete`}
-            </PlanDescription>
-          </div>
-          <PlanTrigger />
-        </PlanHeader>
-        <PlanContent>
-          <ol className="space-y-1.5">
-            {plan.steps.map((item, index) => (
-              <li
-                className="flex items-start gap-2 text-[12px] leading-5 text-foreground/80"
-                key={`${item.step}-${index}`}
-              >
-                {item.status === "completed" ? (
-                  <CheckCircle2 className="mt-1 size-3 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Circle
-                    className={cn(
-                      "mt-1 size-3 shrink-0 text-muted-foreground",
-                      item.status === "in_progress" && "animate-pulse",
-                    )}
-                    fill={item.status === "in_progress" ? "currentColor" : "none"}
-                  />
-                )}
-                <span>{item.step}</span>
-              </li>
-            ))}
-          </ol>
-        </PlanContent>
-      </Plan>
-    </ChainOfThoughtStep>
+    <Plan defaultOpen isStreaming={status === "active"}>
+      <PlanHeader>
+        <div className="min-w-0">
+          <PlanTitle>Implementation plan</PlanTitle>
+          <PlanDescription>
+            {plan.explanation ?? `${completed} of ${plan.steps.length} complete`}
+          </PlanDescription>
+        </div>
+        <PlanTrigger />
+      </PlanHeader>
+      <PlanContent>
+        <ol className="space-y-1.5">
+          {plan.steps.map((item, index) => (
+            <li
+              className="flex items-start gap-2 text-[12px] leading-5 text-foreground/80"
+              key={`${item.step}-${index}`}
+            >
+              {item.status === "completed" ? (
+                <CheckCircle2 className="mt-1 size-3 shrink-0 text-muted-foreground" />
+              ) : (
+                <Circle
+                  className={cn(
+                    "mt-1 size-3 shrink-0 text-muted-foreground",
+                    item.status === "in_progress" && "animate-pulse",
+                  )}
+                  fill={item.status === "in_progress" ? "currentColor" : "none"}
+                />
+              )}
+              <span>{item.step}</span>
+            </li>
+          ))}
+        </ol>
+      </PlanContent>
+    </Plan>
   );
 }
 
@@ -2864,19 +2868,6 @@ function updateActiveRunQueue(
   return [next, ...remaining].sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt),
   );
-}
-
-function sameActiveRuns(left: AgentRun[], right: AgentRun[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((run, index) => {
-    const next = right[index];
-    return (
-      next !== undefined &&
-      run.id === next.id &&
-      run.status === next.status &&
-      run.updatedAt === next.updatedAt
-    );
-  });
 }
 
 // Today's Cadence renders at `/`, but the same day is also reachable at the

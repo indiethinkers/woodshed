@@ -194,13 +194,24 @@ pub fn list_for_conversation(
     Ok(runs)
 }
 
-pub fn list_active(app_data_dir: &Path) -> Result<Vec<AgentRunRecord>, String> {
-    let mut runs = read_all(app_data_dir)?
-        .into_iter()
-        .filter(|run| is_active(run.status))
-        .collect::<Vec<_>>();
+pub fn list_active_by_ids(
+    app_data_dir: &Path,
+    run_ids: &[String],
+) -> Result<Vec<AgentRunRecord>, String> {
+    let mut ids = run_ids.to_vec();
+    ids.sort_unstable_by(|left, right| right.cmp(left));
+    ids.dedup();
+    ids.truncate(20);
+
+    let mut runs = Vec::with_capacity(ids.len());
+    for run_id in ids {
+        if let Some(run) = read(app_data_dir, &run_id)? {
+            if is_active(run.status) {
+                runs.push(run);
+            }
+        }
+    }
     runs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    runs.truncate(20);
     Ok(runs)
 }
 
@@ -502,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn active_queue_lists_runs_across_conversations_newest_first() {
+    fn active_queue_reads_only_supplied_live_run_ids() {
         let temp = tempfile::tempdir().unwrap();
         let (older, _) = create_or_get(temp.path(), input(), "2031-02-03T12:00:00Z").unwrap();
         mark_running(temp.path(), &older.id, "2031-02-03T12:00:01Z").unwrap();
@@ -521,7 +532,13 @@ mod tests {
         )
         .unwrap();
 
-        let active = list_active(temp.path()).unwrap();
+        std::fs::write(
+            temp.path().join(RUNS_DIR).join("agent-run-corrupt.json"),
+            b"not json",
+        )
+        .unwrap();
+
+        let active = list_active_by_ids(temp.path(), std::slice::from_ref(&newer.id)).unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, newer.id);
         assert_eq!(active[0].conversation_id, "agent-conversation-2");
