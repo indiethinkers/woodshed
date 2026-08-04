@@ -815,10 +815,14 @@ fn read_meta(app: &AppHandle) -> Result<HermesConfigMeta, String> {
         Some(value) => serde_json::from_value(value).map_err(|e| e.to_string()),
         None => Ok(HermesConfigMeta::default()),
     }?;
+    let mut changed = agent::migrate_legacy_default_profile(&mut meta);
     if let Some(legacy_key) = meta.api_key.as_deref().and_then(agent::normalize_api_key) {
         agent::key::store(app, &legacy_key)?;
         meta.api_key = None;
         meta.api_key_configured = true;
+        changed = true;
+    }
+    if changed {
         write_meta(app, &meta)?;
     }
     Ok(meta)

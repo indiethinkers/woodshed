@@ -464,11 +464,13 @@ whose `retryOf` field points to the failed run. Requests go
 directly to the configured Hermes-compatible endpoint only after explicit user
 action.
 
-A loopback endpoint authenticates without a pasted token: Woodshed resolves the
-key from the local Hermes profile that owns the configured API port, reading
-bounded, regular, non-symlink profile files only. That key is used in place, not
-copied into Woodshed. Custom and remote endpoints still require an explicit
-bearer key, stored through `CredentialBroker`.
+The standard loopback endpoint uses Hermes's default profile and authenticates
+without a pasted token. Woodshed reads its key from a bounded, regular,
+non-symlink profile file and uses it in place without copying it. Explicit
+custom loopback endpoints resolve the profile owning their configured API port;
+custom remote endpoints require a bearer key stored through `CredentialBroker`.
+The standard profile's model and provider are changed in Hermes, while Woodshed
+shows those connection fields as read-only.
 
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.

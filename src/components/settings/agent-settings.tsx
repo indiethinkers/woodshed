@@ -23,8 +23,8 @@ interface AgentConnectionTestResult {
 
 const DEFAULT_CONFIG: AgentConfig = {
   displayName: "Hermes",
-  baseUrl: "http://127.0.0.1:8644/v1",
-  model: "cadence",
+  baseUrl: "http://127.0.0.1:8642/v1",
+  model: "hermes-agent",
   sessionKey: "woodshed",
   hasApiKey: false,
   credentialSource: "missing",
@@ -39,6 +39,7 @@ export function AgentSettingsSection() {
   const [sessionKey, setSessionKey] = useState(DEFAULT_CONFIG.sessionKey);
   const [apiKey, setApiKey] = useState("");
   const [isReplacingKey, setIsReplacingKey] = useState(false);
+  const [editingCustomEndpoint, setEditingCustomEndpoint] = useState(false);
   const [busy, setBusy] = useState<"idle" | "saving" | "testing" | "clearing">(
     "idle",
   );
@@ -72,6 +73,7 @@ export function AgentSettingsSection() {
     setSessionKey(next.sessionKey || DEFAULT_CONFIG.sessionKey);
     setApiKey("");
     setIsReplacingKey(false);
+    setEditingCustomEndpoint(false);
   }
 
   async function saveDraft() {
@@ -136,6 +138,15 @@ export function AgentSettingsSection() {
   const hasKey = config?.hasApiKey ?? false;
   const credentialSource = config?.credentialSource ?? "missing";
   const isLocalHermes = isLoopbackAgentUrl(baseUrl);
+  const isDefaultHermes =
+    baseUrl === DEFAULT_CONFIG.baseUrl && model === DEFAULT_CONFIG.model;
+  const connectionMode: "default" | "local" | "remote" =
+    isDefaultHermes && !editingCustomEndpoint
+      ? "default"
+      : isLocalHermes
+        ? "local"
+        : "remote";
+  const managedByHermes = connectionMode === "default";
   const disabled = busy !== "idle" || config === null;
   const showingStoredKey = hasKey && !isReplacingKey;
   const keyInputValue = showingStoredKey ? MASKED_KEY_VALUE : apiKey;
@@ -156,22 +167,39 @@ export function AgentSettingsSection() {
     <SettingsGroup
       label="Hermes"
       description={
-        isLocalHermes
-          ? "Use an existing Hermes HTTP endpoint on this machine. Woodshed discovers its local profile key."
-          : "Connect to a remote Hermes-compatible HTTP endpoint with an explicit bearer key."
+        managedByHermes
+          ? "Woodshed uses the default Hermes profile on this machine. Change its model and provider in Hermes."
+          : connectionMode === "local"
+            ? "Use an existing Hermes HTTP endpoint on this machine. Woodshed discovers its local profile key."
+            : "Connect to a remote Hermes-compatible HTTP endpoint with an explicit bearer key."
       }
     >
       <form onSubmit={handleSave} className="flex max-w-[680px] flex-col gap-4">
         <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2">
           <p className="text-[12px] text-foreground">
-            Connection mode:{" "}
-            {isLocalHermes ? "Existing local HTTP" : "Remote HTTP"}
+            {managedByHermes
+              ? "Default profile"
+              : connectionMode === "local"
+                ? "Existing local HTTP"
+                : "Remote HTTP"}
           </p>
           <p className="mt-0.5 text-[10px] text-muted-foreground/70">
-            {isLocalHermes
-              ? "Authentication comes from the Hermes profile that owns this local API port."
-              : "Remote endpoints require a bearer key stored privately by Woodshed."}
+            {managedByHermes
+              ? "Change its model and provider in Hermes, then restart the Hermes API server."
+              : connectionMode === "local"
+                ? "Authentication comes from the Hermes profile that owns this local API port."
+                : "Remote endpoints require a bearer key stored privately by Woodshed."}
           </p>
+          {managedByHermes && (
+            <button
+              type="button"
+              onClick={() => setEditingCustomEndpoint(true)}
+              disabled={disabled}
+              className="mt-2 text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+            >
+              Use a custom endpoint
+            </button>
+          )}
         </div>
 
         <label className="text-[12px] text-muted-foreground">
@@ -192,18 +220,20 @@ export function AgentSettingsSection() {
               type="url"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
+              readOnly={managedByHermes}
               required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
             />
           </label>
           <label className="text-[12px] text-muted-foreground">
-            Model
+            {managedByHermes ? "Gateway model" : "Model"}
             <input
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
+              readOnly={managedByHermes}
               required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
             />
           </label>
         </div>
@@ -213,26 +243,35 @@ export function AgentSettingsSection() {
             <p>Local authentication</p>
             <p className="mt-1 leading-5 text-muted-foreground">
               {credentialSource === "hermes"
-                ? "Using API_SERVER_KEY from the matching local Hermes profile. Nothing to paste into Woodshed."
+                ? managedByHermes
+                  ? "Using API_SERVER_KEY from the default Hermes profile. Nothing to paste into Woodshed."
+                  : "Using API_SERVER_KEY from the matching local Hermes profile. Nothing to paste into Woodshed."
                 : credentialSource === "environment"
                   ? "Using the key from Woodshed's development environment."
                   : credentialSource === "stored"
                     ? "Using the key already stored by Woodshed."
                     : "No matching local Hermes key was found. Configure API_SERVER_KEY in the Hermes profile for this port."}
             </p>
-            {(credentialSource === "stored" ||
-              credentialSource === "missing") && (
-              <button
-                type="button"
-                onClick={() => beginReplacingKey("")}
-                disabled={disabled}
-                className="mt-2 text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
-              >
-                {credentialSource === "stored"
-                  ? "Replace custom key"
-                  : "Enter a custom key"}
-              </button>
+            {managedByHermes && credentialSource === "missing" && (
+              <p className="mt-2 leading-5 text-muted-foreground">
+                Configure the default profile in Hermes and start its API
+                server; Woodshed does not manage local Hermes credentials.
+              </p>
             )}
+            {!managedByHermes &&
+              (credentialSource === "stored" ||
+                credentialSource === "missing") && (
+                <button
+                  type="button"
+                  onClick={() => beginReplacingKey("")}
+                  disabled={disabled}
+                  className="mt-2 text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+                >
+                  {credentialSource === "stored"
+                    ? "Replace custom key"
+                    : "Enter a custom key"}
+                </button>
+              )}
           </div>
         ) : (
           <div className="text-[13px] text-foreground">
@@ -302,7 +341,8 @@ export function AgentSettingsSection() {
             type="text"
             value={sessionKey}
             onChange={(e) => setSessionKey(e.target.value)}
-            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground"
+            readOnly={managedByHermes}
+            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
           />
         </label>
 

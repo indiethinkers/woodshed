@@ -32,7 +32,8 @@ cache.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
   operating-system account isolation and disk encryption. Local Hermes keys are
-  read from the matching Hermes profile without being copied into Woodshed.
+  read from the default profile—or, for an explicit custom loopback endpoint,
+  the profile owning that port—without being copied into Woodshed.
   Google Calendar secret iCal URLs are stored in the operating-system credential
   store. Legacy plaintext configuration values are migrated and scrubbed on
   first use.
@@ -78,12 +79,15 @@ other exceptions described below.
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and
   time of access to the image host.
-- **Hermes-compatible agent endpoint:** an explicit agent command sends the
-  selected instruction and relevant vault or email content directly to the
-  endpoint you configured. Proposed record creation and mail archive actions
-  require confirmation. User-selected PDF and text attachments are converted
-  to bounded text locally; the endpoint receives that text and a sanitized
-  filename, not the original file path.
+- **Hermes-compatible agent endpoint:** Woodshed's standard local connection
+  uses the default Hermes profile. Change that profile's model or provider in
+  Hermes; Woodshed displays the connection details without managing them. An
+  explicit agent command sends the selected instruction and relevant vault or
+  email content directly to that endpoint, or to an explicitly configured
+  custom endpoint. Proposed record creation and mail archive actions require
+  confirmation. User-selected PDF and text attachments are converted to bounded
+  text locally; the endpoint receives that text and a sanitized filename, not
+  the original file path.
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 

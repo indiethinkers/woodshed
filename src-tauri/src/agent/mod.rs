@@ -13,8 +13,8 @@ use ulid::Ulid;
 pub const STORE_KEY: &str = "agent_hermes_config";
 // The desktop app talks to a Hermes gateway running on the same machine. (A
 // future mobile app will point at a VPS-hosted gateway instead.)
-pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8644/v1";
-pub const DEFAULT_MODEL: &str = "cadence";
+pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8642/v1";
+pub const DEFAULT_MODEL: &str = "hermes-agent";
 pub const DEFAULT_SESSION_KEY: &str = "woodshed";
 pub const DEFAULT_DISPLAY_NAME: &str = "Hermes";
 pub const CHAT_TYPE: &str = "agent_chat";
@@ -59,6 +59,23 @@ impl Default for HermesConfigMeta {
             api_key_configured: false,
         }
     }
+}
+
+pub fn migrate_legacy_default_profile(meta: &mut HermesConfigMeta) -> bool {
+    if meta.base_url != "http://127.0.0.1:8644/v1" || meta.model != "cadence" {
+        return false;
+    }
+    meta.base_url = DEFAULT_BASE_URL.to_string();
+    meta.model = DEFAULT_MODEL.to_string();
+    true
+}
+
+pub fn is_default_profile_connection(base_url: &str, model: &str) -> bool {
+    base_url == DEFAULT_BASE_URL && model == DEFAULT_MODEL
+}
+
+pub fn uses_default_profile(meta: &HermesConfigMeta) -> bool {
+    is_default_profile_connection(&meta.base_url, &meta.model)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -506,6 +523,17 @@ pub fn normalize_meta(
 }
 
 pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource) -> AgentConfig {
+    let has_api_key = if uses_default_profile(&meta) {
+        credential_source != CredentialSource::Missing
+    } else {
+        meta.api_key_configured
+            || meta
+                .api_key
+                .as_deref()
+                .and_then(normalize_api_key)
+                .is_some()
+            || credential_source != CredentialSource::Missing
+    };
     AgentConfig {
         display_name: if meta.display_name.trim().is_empty() {
             default_display_name()
@@ -515,13 +543,7 @@ pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource
         base_url: meta.base_url,
         model: meta.model,
         session_key: meta.session_key,
-        has_api_key: meta.api_key_configured
-            || meta
-                .api_key
-                .as_deref()
-                .and_then(normalize_api_key)
-                .is_some()
-            || credential_source != CredentialSource::Missing,
+        has_api_key,
         credential_source,
     }
 }
@@ -1645,6 +1667,45 @@ mod tests {
     }
 
     #[test]
+    fn defaults_to_the_default_hermes_profile() {
+        let meta = HermesConfigMeta::default();
+
+        assert_eq!(meta.base_url, "http://127.0.0.1:8642/v1");
+        assert_eq!(meta.model, "hermes-agent");
+    }
+
+    #[test]
+    fn migrates_the_legacy_cadence_defaults() {
+        let mut meta = HermesConfigMeta {
+            display_name: "Custom agent".to_string(),
+            base_url: "http://127.0.0.1:8644/v1".to_string(),
+            model: "cadence".to_string(),
+            session_key: "woodshed".to_string(),
+            api_key: None,
+            api_key_configured: true,
+        };
+
+        assert!(migrate_legacy_default_profile(&mut meta));
+        assert_eq!(meta.display_name, "Custom agent");
+        assert_eq!(meta.base_url, DEFAULT_BASE_URL);
+        assert_eq!(meta.model, DEFAULT_MODEL);
+        assert!(meta.api_key_configured);
+    }
+
+    #[test]
+    fn preserves_explicit_custom_agent_config() {
+        let mut meta = HermesConfigMeta {
+            base_url: "http://127.0.0.1:8644/v1".to_string(),
+            model: "custom-route".to_string(),
+            ..HermesConfigMeta::default()
+        };
+
+        assert!(!migrate_legacy_default_profile(&mut meta));
+        assert_eq!(meta.base_url, "http://127.0.0.1:8644/v1");
+        assert_eq!(meta.model, "custom-route");
+    }
+
+    #[test]
     fn normalize_base_url_rejects_embedded_secrets_and_ambiguous_suffixes() {
         for url in [
             "file:///tmp/hermes.sock",
@@ -2137,7 +2198,7 @@ mod tests {
         assert!(parsed.api_key.is_none());
 
         let public = public_config(parsed, CredentialSource::Missing);
-        assert!(public.has_api_key);
+        assert!(!public.has_api_key);
         assert_eq!(public.credential_source, CredentialSource::Missing);
         let public_raw = serde_json::to_string(&public).unwrap();
         let public_serialized: serde_json::Value = serde_json::from_str(&public_raw).unwrap();

@@ -389,8 +389,10 @@ to disable automatic refresh.
   encryption.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent action.
-  Loopback endpoints authenticate from the matching local Hermes profile; custom
-  and remote endpoints use the same owner-only app-data file.
+  The standard local connection uses Hermes's default profile and reads its key
+  directly; change that profile's model or provider in Hermes, not Woodshed.
+  Custom loopback endpoints read the matching local profile; remote endpoint
+  keys use the owner-only app-data file.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 

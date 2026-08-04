@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const chatMock = vi.hoisted(() => ({
   addToolApprovalResponse: vi.fn(),
@@ -20,6 +20,10 @@ const chatMock = vi.hoisted(() => ({
   resumeStream: vi.fn().mockResolvedValue(undefined),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+const routerMock = vi.hoisted(() => ({ href: "/agent" }));
+const invokeMock = vi.hoisted(() => ({
+  chatListPromise: null as Promise<unknown[]> | null,
+}));
 
 vi.mock("@ai-sdk/react", () => ({
   useChat: () => chatMock,
@@ -33,12 +37,16 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
       <a {...props}>{children}</a>
     ),
     useNavigate: () => navigateMock,
-    useRouterState: () => "/agent",
+    useRouterState: () => routerMock.href,
   };
 });
 
 vi.mock("@/lib/hooks/use-vault-path", () => ({
   useVaultPath: () => ({ data: "/tmp/vault" }),
+}));
+
+vi.mock("@/lib/runtime", () => ({
+  isTauriRuntime: () => true,
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -53,7 +61,8 @@ vi.mock("@/lib/tauri", () => ({
       };
     }
     if (command === "agent_chats_all") {
-      return [
+      return (
+        invokeMock.chatListPromise ?? [
         {
           id: "agent-conversation-1",
           path: "agent/agent-conversation-1.md",
@@ -67,7 +76,8 @@ vi.mock("@/lib/tauri", () => ({
           messageCount: 0,
           preview: "",
         },
-      ];
+      ]
+      );
     }
     if (command === "agent_chat_get") {
       return {
@@ -102,6 +112,12 @@ import {
 import { weatherPreviewFromResponse } from "./agent-weather-response";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import type { AgentRun } from "@/lib/agent/transport";
+
+beforeEach(() => {
+  invokeMock.chatListPromise = null;
+  routerMock.href = "/agent";
+  navigateMock.mockClear();
+});
 
 function syntheticRun(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -186,6 +202,78 @@ describe("Agent conversation ordering", () => {
 });
 
 describe("AgentSurface voice controls", () => {
+  it("keeps the conversation list visible when starting a new chat", async () => {
+    routerMock.href = "/agent?chat=agent-conversation-1";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const surface = (
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(surface);
+
+    expect(await screen.findByText("Reference review")).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+      routerMock.href = "/agent";
+      rerender(surface);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Reference review")).toBeVisible();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+  });
+
+  it("does not restore an old chat when New chat wins a slow initial load", async () => {
+    let resolveChats: (value: unknown[]) => void = () => {};
+    invokeMock.chatListPromise = new Promise((resolve) => {
+      resolveChats = resolve;
+    });
+    routerMock.href = "/agent?chat=agent-conversation-1";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const surface = (
+      <QueryClientProvider client={queryClient}>
+        <PromptInputProvider>
+          <AgentSurface />
+        </PromptInputProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(surface);
+
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    routerMock.href = "/agent";
+    rerender(surface);
+
+    await act(async () => {
+      resolveChats([
+        {
+          id: "agent-conversation-1",
+          path: "agent/agent-conversation-1.md",
+          title: "Reference review",
+          agent: "Hermes",
+          model: "synthetic-model",
+          created: "2031-02-03T12:00:00Z",
+          updated: "2031-02-03T12:00:00Z",
+          lastMessageCreated: null,
+          pinned: false,
+          messageCount: 0,
+          preview: "",
+        },
+      ]);
+    });
+
+    const rowButton = await screen.findByRole("button", {
+      name: "Reference review",
+    });
+    expect(rowButton.parentElement).not.toHaveClass("bg-muted");
+  });
+
   it("does not expose dictation or voice conversation controls", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

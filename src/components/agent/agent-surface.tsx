@@ -327,6 +327,7 @@ function AgentSurfaceInner({
   const [lastError, setLastError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingSend, setPendingSend] = useState<PendingAgentSend | null>(null);
+  const requestedChatIdRef = useRef(urlChatId);
   const conversationRunIds = useMemo(
     () =>
       activeChat?.id === activeId
@@ -444,6 +445,10 @@ function AgentSurfaceInner({
   );
 
   useEffect(() => {
+    requestedChatIdRef.current = urlChatId;
+  }, [urlChatId]);
+
+  useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
@@ -456,10 +461,11 @@ function AgentSurfaceInner({
         setConfig(nextConfig);
         const nextSummaries = sortChatsByCreatedAt(summaries ?? []);
         setChats(nextSummaries);
+        const initialUrlChatId = requestedChatIdRef.current;
         const restoredChatId =
-          urlChatId ?? readRecentAgentChatId(nextSummaries);
+          initialUrlChatId ?? readRecentAgentChatId(nextSummaries);
         setActiveId(restoredChatId);
-        if (pageMode && !urlChatId && restoredChatId) {
+        if (pageMode && !initialUrlChatId && restoredChatId) {
           void navigate({
             href: `/agent?chat=${encodeURIComponent(restoredChatId)}`,
             replace: true,
@@ -477,7 +483,7 @@ function AgentSurfaceInner({
     return () => {
       cancelled = true;
     };
-  }, [navigate, pageMode, urlChatId]);
+  }, [navigate, pageMode]);
 
   useEffect(() => {
     if (activeRunsError) {
@@ -523,6 +529,7 @@ function AgentSurfaceInner({
         if (cancelled) return;
         if (!chat) {
           forgetRecentAgentChatId(activeId);
+          requestedChatIdRef.current = null;
           setActiveId(null);
           if (pageMode) {
             void navigate({ href: "/agent", replace: true });
@@ -688,6 +695,7 @@ function AgentSurfaceInner({
     setLastError(null);
     setActiveRun(null);
     forgetRecentAgentChatId();
+    requestedChatIdRef.current = null;
     setActiveId(null);
     setActiveChat(null);
     setMessages([]);
@@ -739,6 +747,7 @@ function AgentSurfaceInner({
     setLastError(null);
     setActiveRun(null);
     rememberRecentAgentChatId(id);
+    requestedChatIdRef.current = id;
     if (pageMode) {
       void navigate({ href: `/agent?chat=${id}` });
       return;
@@ -829,6 +838,7 @@ function AgentSurfaceInner({
     setChats((current) => current.filter((entry) => entry.id !== chat.id));
     forgetRecentAgentChatId(chat.id);
     if (activeId === chat.id) {
+      requestedChatIdRef.current = null;
       setActiveId(null);
       setActiveChat(null);
       setMessages([]);
@@ -901,6 +911,7 @@ function AgentSurfaceInner({
       if (!created) return;
       setChats((current) => upsertSummary(current, recordToSummary(created)));
       setActiveChat(created);
+      requestedChatIdRef.current = created.id;
       setActiveId(created.id);
       rememberRecentAgentChatId(created.id);
       setPendingSend({ files, text });

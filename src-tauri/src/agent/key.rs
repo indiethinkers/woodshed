@@ -1,4 +1,6 @@
-use super::{CredentialSource, HermesConfigMeta};
+use super::{
+    is_default_profile_connection, uses_default_profile, CredentialSource, HermesConfigMeta,
+};
 use crate::credentials::{CredentialBroker, CredentialId};
 use keyring::Entry;
 use std::fs::{self, OpenOptions};
@@ -33,6 +35,9 @@ pub fn resolve(app: &tauri::AppHandle, config: &HermesConfigMeta) -> Result<Stri
         if let Some(key) = discover_hermes_key(&home, &config.base_url, &config.model) {
             return Ok(key);
         }
+    }
+    if uses_default_profile(config) {
+        return Err(KeyError::Missing);
     }
     let broker = CredentialBroker::for_app(app).map_err(KeyError::Storage)?;
     if let Some(key) = broker
@@ -97,6 +102,9 @@ pub fn source(app: &tauri::AppHandle, config: &HermesConfigMeta) -> CredentialSo
     {
         return CredentialSource::Hermes;
     }
+    if uses_default_profile(config) {
+        return CredentialSource::Missing;
+    }
     if CredentialBroker::for_app(app)
         .and_then(|broker| broker.resolve(&CredentialId::agent()))
         .ok()
@@ -151,8 +159,11 @@ fn hermes_home(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 fn discover_hermes_key(home: &Path, base_url: &str, model: &str) -> Option<String> {
     let target_port = local_base_port(base_url)?;
-    let mut candidates = Vec::new();
+    if is_default_profile_connection(base_url, model) {
+        return hermes_key_for_port(&home.join(".env"), target_port);
+    }
 
+    let mut candidates = Vec::new();
     if let Some(active) = active_profile(home) {
         if active == "default" {
             push_candidate(&mut candidates, home.join(".env"));
@@ -181,17 +192,20 @@ fn discover_hermes_key(home: &Path, base_url: &str, model: &str) -> Option<Strin
         }
     }
 
-    candidates.into_iter().find_map(|path| {
-        let content = read_bounded_regular(&path, MAX_ENV_FILE_BYTES)?;
-        let port = parse_env_content(&content, "API_SERVER_PORT")
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(8642);
-        if port != target_port {
-            return None;
-        }
-        parse_env_content(&content, "API_SERVER_KEY")
-            .and_then(|value| super::normalize_api_key(&value))
-    })
+    candidates
+        .into_iter()
+        .find_map(|path| hermes_key_for_port(&path, target_port))
+}
+
+fn hermes_key_for_port(path: &Path, target_port: u16) -> Option<String> {
+    let content = read_bounded_regular(path, MAX_ENV_FILE_BYTES)?;
+    let port = parse_env_content(&content, "API_SERVER_PORT")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(8642);
+    if port != target_port {
+        return None;
+    }
+    parse_env_content(&content, "API_SERVER_KEY").and_then(|value| super::normalize_api_key(&value))
 }
 
 fn active_profile(home: &Path) -> Option<String> {
@@ -344,10 +358,75 @@ mod tests {
             Some("motif-secret")
         );
         assert_eq!(
+            discover_hermes_key(temp.path(), "http://127.0.0.1:8642/v1", "hermes-agent").as_deref(),
+            Some("root-secret")
+        );
+        assert_eq!(
             discover_hermes_key(temp.path(), "https://agent.example.com/v1", "cadence"),
             None
         );
         assert_eq!(local_base_port("not a URL"), None);
+    }
+
+    #[test]
+    fn default_profile_key_wins_when_an_active_profile_reuses_its_port() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let active = temp.path().join("profiles/active-custom");
+        fs::create_dir_all(&active).unwrap();
+        fs::write(temp.path().join("active_profile"), "active-custom\n").unwrap();
+        fs::write(
+            temp.path().join(".env"),
+            "API_SERVER_PORT=8642\nAPI_SERVER_KEY=default-secret\n",
+        )
+        .unwrap();
+        fs::write(
+            active.join(".env"),
+            "API_SERVER_PORT=8642\nAPI_SERVER_KEY=custom-secret\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            discover_hermes_key(temp.path(), "http://127.0.0.1:8642/v1", "hermes-agent").as_deref(),
+            Some("default-secret")
+        );
+    }
+
+    #[test]
+    fn default_profile_does_not_borrow_a_custom_profile_key() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let active = temp.path().join("profiles/active-custom");
+        fs::create_dir_all(&active).unwrap();
+        fs::write(temp.path().join("active_profile"), "active-custom\n").unwrap();
+        fs::write(
+            active.join(".env"),
+            "API_SERVER_PORT=8642\nAPI_SERVER_KEY=custom-secret\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            discover_hermes_key(
+                temp.path(),
+                crate::agent::DEFAULT_BASE_URL,
+                crate::agent::DEFAULT_MODEL,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn only_the_exact_default_connection_uses_default_profile_policy() {
+        assert!(is_default_profile_connection(
+            crate::agent::DEFAULT_BASE_URL,
+            crate::agent::DEFAULT_MODEL
+        ));
+        assert!(!is_default_profile_connection(
+            "http://127.0.0.1:8644/v1",
+            crate::agent::DEFAULT_MODEL
+        ));
+        assert!(!is_default_profile_connection(
+            crate::agent::DEFAULT_BASE_URL,
+            "custom-agent"
+        ));
     }
 
     #[cfg(unix)]
