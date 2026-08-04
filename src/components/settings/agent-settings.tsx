@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, PlugZap, Save, Trash2 } from "lucide-react";
+import { AlertCircle, LockKeyhole, PlugZap, Save, Trash2 } from "lucide-react";
 import { SettingsGroup } from "@/components/settings/settings-page";
 import { isLoopbackAgentUrl } from "@/lib/agent/connection";
 import { tauriInvoke } from "@/lib/tauri";
@@ -175,31 +175,47 @@ export function AgentSettingsSection() {
       }
     >
       <form onSubmit={handleSave} className="flex max-w-[680px] flex-col gap-4">
-        <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2">
-          <p className="text-[12px] text-foreground">
-            {managedByHermes
-              ? "Default profile"
-              : connectionMode === "local"
-                ? "Existing local HTTP"
-                : "Remote HTTP"}
-          </p>
-          <p className="mt-0.5 text-[10px] text-muted-foreground/70">
-            {managedByHermes
-              ? "Change its model and provider in Hermes, then restart the Hermes API server."
-              : connectionMode === "local"
-                ? "Authentication comes from the Hermes profile that owns this local API port."
-                : "Remote endpoints require a bearer key stored privately by Woodshed."}
-          </p>
-          {managedByHermes && (
-            <button
-              type="button"
-              onClick={() => setEditingCustomEndpoint(true)}
-              disabled={disabled}
-              className="mt-2 text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
-            >
-              Use a custom endpoint
-            </button>
-          )}
+        <div className="rounded-sm border border-border bg-foreground/[0.02] px-3 py-2.5">
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2.5">
+              {managedByHermes && (
+                <LockKeyhole
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                  strokeWidth={1.75}
+                />
+              )}
+              <div className="min-w-0">
+                <p className="text-[12px] font-medium text-foreground">
+                  {managedByHermes
+                    ? "Default Hermes profile · Read only"
+                    : connectionMode === "local"
+                      ? "Existing local HTTP"
+                      : "Remote HTTP"}
+                </p>
+                <p
+                  id={managedByHermes ? "agent-managed-fields-help" : undefined}
+                  className="mt-0.5 text-[11px] leading-4 text-muted-foreground"
+                >
+                  {managedByHermes
+                    ? "Woodshed follows the default Hermes profile. Change its model or provider in Hermes, or use a custom endpoint to edit these fields here."
+                    : connectionMode === "local"
+                      ? "Authentication comes from the Hermes profile that owns this local API port."
+                      : "Remote endpoints require a bearer key stored privately by Woodshed."}
+                </p>
+              </div>
+            </div>
+            {managedByHermes && (
+              <button
+                type="button"
+                onClick={() => setEditingCustomEndpoint(true)}
+                disabled={disabled}
+                className="inline-flex shrink-0 items-center justify-center rounded-sm border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-foreground/[0.04] disabled:opacity-50"
+              >
+                Use a custom endpoint
+              </button>
+            )}
+          </div>
         </div>
 
         <label className="text-[12px] text-muted-foreground">
@@ -215,25 +231,53 @@ export function AgentSettingsSection() {
 
         <div className="grid gap-3 md:grid-cols-[1fr_180px]">
           <label className="text-[12px] text-muted-foreground">
-            Base URL
+            <span className="flex items-center justify-between gap-2">
+              Base URL
+              {managedByHermes && (
+                <span
+                  aria-hidden="true"
+                  className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+                >
+                  Read only
+                </span>
+              )}
+            </span>
             <input
+              aria-label="Base URL"
+              aria-describedby={
+                managedByHermes ? "agent-managed-fields-help" : undefined
+              }
               type="url"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               readOnly={managedByHermes}
               required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
+              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
             />
           </label>
           <label className="text-[12px] text-muted-foreground">
-            {managedByHermes ? "Gateway model" : "Model"}
+            <span className="flex items-center justify-between gap-2">
+              {managedByHermes ? "Gateway model" : "Model"}
+              {managedByHermes && (
+                <span
+                  aria-hidden="true"
+                  className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+                >
+                  Read only
+                </span>
+              )}
+            </span>
             <input
+              aria-label={managedByHermes ? "Gateway model" : "Model"}
+              aria-describedby={
+                managedByHermes ? "agent-managed-fields-help" : undefined
+              }
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               readOnly={managedByHermes}
               required
-              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
+              className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
             />
           </label>
         </div>
@@ -336,13 +380,27 @@ export function AgentSettingsSection() {
         )}
 
         <label className="text-[12px] text-muted-foreground">
-          Session key
+          <span className="flex items-center justify-between gap-2">
+            Session key
+            {managedByHermes && (
+              <span
+                aria-hidden="true"
+                className="rounded-sm border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              >
+                Read only
+              </span>
+            )}
+          </span>
           <input
+            aria-label="Session key"
+            aria-describedby={
+              managedByHermes ? "agent-managed-fields-help" : undefined
+            }
             type="text"
             value={sessionKey}
             onChange={(e) => setSessionKey(e.target.value)}
             readOnly={managedByHermes}
-            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground"
+            className="mt-1 w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-[12px] text-foreground read-only:cursor-default read-only:border-border/60 read-only:bg-muted/50 read-only:text-muted-foreground/75 read-only:shadow-none"
           />
         </label>
 
