@@ -109,6 +109,8 @@ pub async fn gcal_account_add(
         created_at: Utc::now().to_rfc3339(),
         last_synced_at: None,
         last_error: None,
+        fetch_content_hash: None,
+        fetch_derivation_hash: None,
     };
     let mut accounts = sync::read_all_accounts(&app)?;
     accounts.insert(account_id.clone(), meta);

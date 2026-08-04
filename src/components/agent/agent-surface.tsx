@@ -200,6 +200,10 @@ import {
 } from "@/lib/hooks/use-agent-runs";
 import { cn } from "@/lib/utils";
 import { tauriInvoke } from "@/lib/tauri";
+import {
+  AgentWeatherResponse,
+  weatherPreviewFromResponse,
+} from "./agent-weather-response";
 
 interface AgentConfig {
   displayName: string;
@@ -1952,6 +1956,9 @@ function AgentMessageInner({
   // The turn whose activity is live: the last assistant message while the run
   // is still streaming. Its activity log auto-expands and ticks a timer.
   const active = !isUser && isLastMessage && isStreaming;
+  const weatherPreview = !active
+    ? weatherPreviewFromResponse(responseText)
+    : null;
   const hasActivity = reasoningText.length > 0 || toolParts.length > 0;
   const silentlyWaiting = active && !hasActivity && !responseText;
   const showSilentActivity = useDelayedVisibility(silentlyWaiting, 4_000);
@@ -2050,7 +2057,7 @@ function AgentMessageInner({
               />
             )}
             {responseText && <AgentResponseHeader displayName={displayName} />}
-            {responseText && (
+            {responseText && !weatherPreview && (
               <MessageResponse
                 isAnimating={active}
                 mode={active ? "streaming" : "static"}
@@ -2058,6 +2065,12 @@ function AgentMessageInner({
               >
                 {responseText}
               </MessageResponse>
+            )}
+            {weatherPreview && (
+              <AgentWeatherResponse
+                preview={weatherPreview}
+                rawResponse={responseText}
+              />
             )}
             {responseArtifact && (
               <AgentResponseArtifact artifact={responseArtifact} />
@@ -2233,7 +2246,11 @@ function AgentActivityLog({
   const activityActive = active && (waitingForHermes || toolActive);
 
   return (
-    <ChainOfThought active={activityActive} className="mb-5">
+    <ChainOfThought
+      active={activityActive}
+      className="mb-5"
+      keepOpenWhenComplete={toolParts.length > 0}
+    >
       <ChainOfThoughtHeader
         activeLabel={activeLabel}
         displayName={displayName}

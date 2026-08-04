@@ -99,6 +99,7 @@ import {
   sortChatsByCreatedAt,
   toUiMessages,
 } from "./agent-surface";
+import { weatherPreviewFromResponse } from "./agent-weather-response";
 import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
 import type { AgentRun } from "@/lib/agent/transport";
 
@@ -426,6 +427,40 @@ describe("AgentMessage activity state", () => {
     expect(screen.getByText("synthetic notes")).toBeInTheDocument();
   });
 
+  it("keeps completed tool work expanded so it is not hidden at completion", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming={false}
+        message={{
+          id: "assistant-complete",
+          role: "assistant",
+          parts: [
+            {
+              type: "dynamic-tool",
+              toolName: "web_search",
+              toolCallId: "call_weather",
+              state: "output-available",
+              input: {},
+              output: null,
+              title: "Search the synthetic forecast",
+            },
+            { type: "text", text: "The synthetic forecast is mild." },
+          ],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "1 step" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("Search the synthetic forecast")).toBeVisible();
+  });
+
   it("keeps streamed reasoning collapsed until the user opens it", () => {
     render(
       <AgentMessage
@@ -489,6 +524,100 @@ describe("AgentMessage activity state", () => {
     expect(
       screen.queryByText("Thinking through the response"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("rich Agent responses", () => {
+  it("extracts a typed forecast card from a natural-language multi-day response", () => {
+    const preview = weatherPreviewFromResponse(
+      "A mild week is ahead (from the National Weather Service):\n\n" +
+        "Wednesday: mostly sunny, high near 72, low around 56 " +
+        "Thursday: fog then sun, high near 70, low around 55 " +
+        "Friday: sunny, high near 74, low around 57 (warmest day)\n\n" +
+        "Evenings will stay cool.",
+    );
+
+    expect(preview).toEqual({
+      intro:
+        "A mild week is ahead (from the National Weather Service):",
+      source: "National Weather Service",
+      days: [
+        {
+          day: "Wednesday",
+          condition: "Mostly sunny",
+          high: "72",
+          low: "56",
+          note: null,
+        },
+        {
+          day: "Thursday",
+          condition: "Fog then sun",
+          high: "70",
+          low: "55",
+          note: null,
+        },
+        {
+          day: "Friday",
+          condition: "Sunny",
+          high: "74",
+          low: "57",
+          note: "warmest day",
+        },
+      ],
+      followUp: "Evenings will stay cool.",
+    });
+  });
+
+  it("falls back to the complete response when the forecast shape is incomplete", () => {
+    expect(
+      weatherPreviewFromResponse(
+        "Wednesday may be mild, but the source did not provide highs or lows.",
+      ),
+    ).toBeNull();
+    expect(
+      weatherPreviewFromResponse(
+        "Wednesday: sunny, high near 72, low around 56",
+      ),
+    ).toBeNull();
+  });
+
+  it("renders forecast data as a structured card instead of a dense paragraph", () => {
+    render(
+      <AgentMessage
+        displayName="Hermes"
+        isFirst
+        isLastMessage
+        isStreaming={false}
+        message={{
+          id: "assistant-weather",
+          role: "assistant",
+          parts: [
+            {
+              type: "text",
+              text:
+                "A mild week is ahead:\n\n" +
+                "Wednesday: mostly sunny, high near 72°F, low around 56°F, " +
+                "with gusty winds after sunset " +
+                "Thursday: fog then sun, high near 70°F, low around 55°F\n\n" +
+                "Evenings will stay cool.",
+            },
+          ],
+        }}
+        onToolApprovalResponse={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Weather forecast" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Wednesday")).toBeInTheDocument();
+    expect(screen.getByLabelText("High 72 degrees")).toBeInTheDocument();
+    expect(screen.getByLabelText("Low 56 degrees")).toBeInTheDocument();
+    expect(screen.getByText("View original response")).toBeInTheDocument();
+    expect(
+      screen.getByText(/with gusty winds after sunset/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/72°F/)).toBeInTheDocument();
   });
 });
 

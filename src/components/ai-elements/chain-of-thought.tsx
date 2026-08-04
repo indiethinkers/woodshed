@@ -45,6 +45,8 @@ export type ChainOfThoughtProps = Omit<
 > & {
   /** While true: the panel auto-opens and the header reads "…is working". */
   active: boolean;
+  /** Keep meaningful completed work visible until the user collapses it. */
+  keepOpenWhenComplete?: boolean;
 };
 
 /**
@@ -57,9 +59,10 @@ export function ChainOfThought({
   active,
   className,
   children,
+  keepOpenWhenComplete = false,
   ...props
 }: ChainOfThoughtProps) {
-  const [open, setOpen] = useState(active);
+  const [open, setOpen] = useState(active || keepOpenWhenComplete);
   const userToggledRef = useRef(false);
   const startedAtRef = useRef<number | null>(active ? Date.now() : null);
   const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
@@ -79,10 +82,14 @@ export function ChainOfThought({
       startedAtRef.current = null;
     }
     if (userToggledRef.current) return;
+    if (keepOpenWhenComplete) {
+      setOpen(true);
+      return;
+    }
     // Let the final step register before folding away.
     const timer = window.setTimeout(() => setOpen(false), 600);
     return () => window.clearTimeout(timer);
-  }, [active]);
+  }, [active, keepOpenWhenComplete]);
 
   return (
     <ChainOfThoughtContext.Provider value={{ active, durationSeconds }}>
