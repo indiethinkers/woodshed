@@ -20,7 +20,8 @@ use crate::{log_error, log_info};
 use chrono::Utc;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -91,6 +92,12 @@ pub struct GcalAccountMeta {
     /// Most recent sync error for this account, persisted across
     /// restarts. Cleared by a successful sync.
     pub last_error: Option<String>,
+    /// One-way hashes of the last downloaded feed and the local inputs used to
+    /// derive its cache. No untrusted response metadata is persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_derivation_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -227,6 +234,28 @@ async fn sync_one(app: &AppHandle, state: &AppState, account_id: &str) -> Result
     let bytes = response.bytes;
     log_info!(LOG_TARGET, "fetch ok ({account_id}, {} bytes)", bytes.len());
 
+    let sync_start_date = chrono::Local::now().date_naive();
+    let note_backed_series_ids = configured_vault_path(app)
+        .map(|vault| cache::note_backed_ical_series_ids(&vault))
+        .unwrap_or_default();
+    let has_cached_account = state.ical_cache.contains_account(account_id);
+    let fetch_content_hash = calendar_feed_hash(&bytes);
+    let fetch_derivation_hash =
+        calendar_derivation_hash(&meta.emails, sync_start_date, &note_backed_series_ids);
+    if calendar_feed_is_unchanged(
+        &meta,
+        has_cached_account,
+        &fetch_content_hash,
+        &fetch_derivation_hash,
+    ) {
+        let cached = state.ical_cache.len_for(account_id) as u32;
+        log_info!(
+            LOG_TARGET,
+            "feed unchanged ({account_id}, cached={cached}, skipped_parse=true)"
+        );
+        return Ok(cached);
+    }
+
     let parsed = ical::parse_feed(&bytes).map_err(|e| format!("parse failed: {e}"))?;
     let parsed_count = parsed.len();
     log_info!(LOG_TARGET, "parsed {parsed_count} events ({account_id})");
@@ -245,10 +274,7 @@ async fn sync_one(app: &AppHandle, state: &AppState, account_id: &str) -> Result
     // owner@work.example on company meetings AND as
     // owner@personal.example on personal events that landed on the
     // shared calendar. Empty emails list ⇒ both filters are no-ops.
-    let emails = accounts
-        .get(account_id)
-        .map(|m| m.emails.clone())
-        .unwrap_or_default();
+    let emails = meta.emails.clone();
     if emails.is_empty() {
         crate::log_warn!(
             LOG_TARGET,
@@ -268,10 +294,6 @@ async fn sync_one(app: &AppHandle, state: &AppState, account_id: &str) -> Result
         .collect();
     let uninvolved_dropped = parsed_count - declined_dropped - after_involvement.len();
 
-    let sync_start_date = chrono::Local::now().date_naive();
-    let note_backed_series_ids = configured_vault_path(app)
-        .map(|vault| cache::note_backed_ical_series_ids(&vault))
-        .unwrap_or_default();
     let after_involvement_count = after_involvement.len();
     let events = cache::retain_events_on_or_after_or_note_backed(
         after_involvement,
@@ -299,9 +321,66 @@ async fn sync_one(app: &AppHandle, state: &AppState, account_id: &str) -> Result
     // ~5000 events).
     state.ical_cache.set(account_id.to_string(), events.clone());
     cache::save_to_disk(app, account_id, &events)?;
+    persist_feed_hashes(app, account_id, fetch_content_hash, fetch_derivation_hash)?;
     log_info!(LOG_TARGET, "cached {kept} events ({account_id})");
 
     Ok(kept)
+}
+
+fn persist_feed_hashes(
+    app: &AppHandle,
+    account_id: &str,
+    content_hash: String,
+    derivation_hash: String,
+) -> Result<(), String> {
+    let mut accounts = read_all_accounts(app)?;
+    if let Some(meta) = accounts.get_mut(account_id) {
+        meta.fetch_content_hash = Some(content_hash);
+        meta.fetch_derivation_hash = Some(derivation_hash);
+        write_all_accounts(app, &accounts)?;
+    }
+    Ok(())
+}
+
+fn calendar_feed_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn calendar_derivation_hash(
+    emails: &[String],
+    sync_start_date: chrono::NaiveDate,
+    note_backed_series_ids: &HashSet<String>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"woodshed-gcal-cache-v1");
+    hasher.update(sync_start_date.to_string().as_bytes());
+
+    let mut emails = emails.to_vec();
+    emails.sort();
+    for email in emails {
+        hasher.update(email.as_bytes());
+        hasher.update([0xff]);
+    }
+
+    let mut note_backed_series_ids: Vec<_> = note_backed_series_ids.iter().collect();
+    note_backed_series_ids.sort();
+    for series_id in note_backed_series_ids {
+        hasher.update(series_id.as_bytes());
+        hasher.update([0xff]);
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+fn calendar_feed_is_unchanged(
+    meta: &GcalAccountMeta,
+    has_cached_account: bool,
+    content_hash: &str,
+    derivation_hash: &str,
+) -> bool {
+    has_cached_account
+        && meta.fetch_content_hash.as_deref() == Some(content_hash)
+        && meta.fetch_derivation_hash.as_deref() == Some(derivation_hash)
 }
 
 fn configured_vault_path(app: &AppHandle) -> Option<PathBuf> {
@@ -398,6 +477,66 @@ mod credential_metadata_tests {
     use super::*;
 
     #[test]
+    fn unchanged_feed_body_skips_reparsing_only_when_local_inputs_match() {
+        let body = b"BEGIN:VCALENDAR\nEND:VCALENDAR";
+        let start = chrono::NaiveDate::from_ymd_opt(2031, 1, 1).unwrap();
+        let emails = vec!["owner@example.com".to_string()];
+        let note_backed = HashSet::from(["synthetic-series".to_string()]);
+        let derivation_hash = calendar_derivation_hash(&emails, start, &note_backed);
+        let meta = GcalAccountMeta {
+            display_name: "Synthetic".into(),
+            color: "#000000".into(),
+            url: String::new(),
+            url_configured: true,
+            emails: emails.clone(),
+            dismissed_uids: Vec::new(),
+            dismissed_occurrences: Vec::new(),
+            created_at: "2031-01-01T00:00:00Z".into(),
+            last_synced_at: Some("2031-01-01T00:00:00Z".into()),
+            last_error: None,
+            fetch_content_hash: Some(calendar_feed_hash(body)),
+            fetch_derivation_hash: Some(derivation_hash.clone()),
+        };
+
+        assert!(calendar_feed_is_unchanged(
+            &meta,
+            true,
+            &calendar_feed_hash(body),
+            &derivation_hash,
+        ));
+        assert!(!calendar_feed_is_unchanged(
+            &meta,
+            false,
+            &calendar_feed_hash(body),
+            &derivation_hash,
+        ));
+        assert!(!calendar_feed_is_unchanged(
+            &meta,
+            true,
+            &calendar_feed_hash(b"BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR"),
+            &derivation_hash,
+        ));
+        assert!(!calendar_feed_is_unchanged(
+            &meta,
+            true,
+            &calendar_feed_hash(body),
+            &calendar_derivation_hash(&["different@example.com".to_string()], start, &note_backed,),
+        ));
+        assert!(!calendar_feed_is_unchanged(
+            &meta,
+            true,
+            &calendar_feed_hash(body),
+            &calendar_derivation_hash(&emails, start.succ_opt().unwrap(), &note_backed,),
+        ));
+        assert!(!calendar_feed_is_unchanged(
+            &meta,
+            true,
+            &calendar_feed_hash(body),
+            &calendar_derivation_hash(&emails, start, &HashSet::new()),
+        ));
+    }
+
+    #[test]
     fn calendar_metadata_never_serializes_secret_url() {
         let meta = GcalAccountMeta {
             display_name: "Work".into(),
@@ -410,10 +549,14 @@ mod credential_metadata_tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             last_synced_at: None,
             last_error: None,
+            fetch_content_hash: None,
+            fetch_derivation_hash: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(!json.contains("token=secret"));
         assert!(!json.contains("\"url\""));
+        assert!(!json.contains("fetchEtag"));
+        assert!(!json.contains("fetchLastModified"));
         assert!(json.contains("urlConfigured"));
     }
 }

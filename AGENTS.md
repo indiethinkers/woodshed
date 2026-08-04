@@ -67,7 +67,9 @@ of truth; the application is a native lens over those files.
 - **Local by default.** There is no Woodshed account, telemetry, or operated
   data service.
 - **Bounded network actions.** Configured integrations send data only when the
-  user invokes them. The documented exception is a displayed YouTube embed,
+  user invokes them or through the foreground mail/calendar refresh schedule,
+  which defaults to five minutes and can be disabled with Manual. The documented
+  exception is a displayed YouTube embed,
   whose frame is restricted to `youtube-nocookie.com`. Opening an HTML email
   may load remote images through Woodshed's bounded cache; untrusted HTML never
   fetches URLs directly.
@@ -206,7 +208,8 @@ changing behavior:
 - Record schemas: `src-tauri/src/parsers/` and domain-specific renderers
 - Registered commands: the invoke handler in `src-tauri/src/lib.rs`
 - Routes: `src/routes/` and the generated route tree
-- Main navigation: `src/components/layout/sidebar.tsx`
+- Main navigation: `src/components/layout/sidebar.tsx` and
+  `src/components/layout/title-bar-actions.tsx`
 - Permissions: `src-tauri/capabilities/` and Tauri configuration
 - Verification commands: `README.md`, `package.json`, and `Cargo.toml`
 
@@ -383,8 +386,10 @@ read time.
 
 ## Surfaces and routes
 
-The sidebar order is the current product taxonomy and drives `⌘1` through `⌘9`.
-Confirm it in `src/components/layout/sidebar.tsx` before changing navigation.
+The sidebar order is the current product taxonomy and drives `⌘1` through `⌘8`.
+Graph lives in the title bar and command palette without a number shortcut.
+Confirm both in `src/components/layout/sidebar.tsx` and
+`src/components/layout/title-bar-actions.tsx` before changing navigation.
 
 | Surface | Primary route | Backing data |
 |---|---|---|
@@ -423,6 +428,11 @@ present there.
 Archiving updates Gmail and moves the local record from `inbox/` to `archive/`.
 Keep local and remote failure handling recoverable.
 
+Snoozing marks a message read, archives it remotely and locally, and persists an
+RFC 3339 return deadline on the archived Markdown record. While Woodshed is
+running it checks due snoozes every minute and on focus; restoration adds Gmail's
+`\Inbox` label before moving the local record back to `inbox/`.
+
 ### Google Calendar
 
 Google Calendar uses a read-only secret iCal URL. The URL is stored by the OS;
@@ -454,14 +464,32 @@ whose `retryOf` field points to the failed run. Requests go
 directly to the configured Hermes-compatible endpoint only after explicit user
 action.
 
-A loopback endpoint authenticates without a pasted token: Woodshed resolves the
-key from the local Hermes profile that owns the configured API port, reading
-bounded, regular, non-symlink profile files only. That key is used in place, not
-copied into Woodshed. Custom and remote endpoints still require an explicit
-bearer key, stored through `CredentialBroker`.
+The standard loopback endpoint follows Hermes's active profile and authenticates
+without a pasted token. Woodshed reads that profile's port, advertised gateway
+model, and key from bounded, regular, non-symlink `.env` and `config.yaml`
+files, applies Hermes's environment-over-config precedence, and uses the key in
+place without copying it. A named active profile that cannot be read safely
+fails closed instead of falling back to another profile. Explicit custom
+loopback endpoints resolve the profile owning their configured API port; custom
+remote endpoints require a bearer key stored through `CredentialBroker`. The
+active profile and its model and provider are changed in Hermes, while Woodshed
+displays connection status and hides managed connection fields.
 
 Generated actions that create records, archive mail, or otherwise mutate data
 must remain visible and user-confirmed at the established command boundary.
+
+User-selected PDF and text chat attachments are decoded and converted to bounded
+text inside Woodshed before a run is created. Selected PNG, JPEG, GIF, and WebP
+attachments are forwarded as bounded OpenAI-compatible multimodal data-URL parts
+after Rust validates their base64, signatures, dimensions, count, and byte
+budget. Remote image URLs are rejected, and queued image bytes are released from
+the durable run record when dispatch begins or the run otherwise becomes
+terminal. Hermes receives extracted text or selected image pixels, never the
+attachment's original filesystem path.
+Unsupported or unreadable attachments fail before the request rather than
+prompting the agent to search the machine by filename. PDFKit parsing runs in a
+short-lived Woodshed helper process that receives bytes over stdin; the parent
+kills and reaps it on timeout or any protocol-boundary failure.
 
 ## Privacy and diagnostics
 

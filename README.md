@@ -59,12 +59,13 @@ packaging instructions live in
 |---|---|
 | **Cadence** | Combines the daily journal, calendar schedule, and task rail |
 | **Mail** | Unifies configured Gmail inboxes, searchable sent/archive folders, drafts, and replies |
-| **Agent** | Stores AI conversations as vault records and adds page-aware chat |
+| **Agent** | Stores AI conversations as vault records, keeps submitted runs working across navigation, and shows streamed replies, reasoning, tool and plan progress, and provider-reported usage when available |
 | **Notebook** | Provides long-form Markdown editing plus folder browsing for adopted files |
 | **Resources** | Captures web links, metadata, highlights, and personal notes |
 | **People** | Acts as a personal CRM connected to events, notes, mail, and areas |
 | **Databases** | Supports resizable structured tables, board views, rows, and generated tag tables |
 | **Areas** | Groups related notes, tasks, events, and people around a focus |
+| **Graph** | Visualizes vault wikilinks and backlinks from the title bar or command palette; it has no numbered shortcut |
 
 ### Features across every surface
 
@@ -378,17 +379,27 @@ vault fixtures out of Git.
 Woodshed has no account system, analytics, crash reporter, or operated backend.
 Configured integrations communicate directly from the desktop app.
 
-- Gmail uses IMAP and SMTP. App Passwords are stored in an owner-only app-data
-  file that relies on OS account isolation and disk encryption.
+Mail and calendar refresh defaults to bounded foreground polling every 5 minutes
+while Woodshed is running. Settings can select 15, 30, or 60 minutes, or Manual
+to disable automatic refresh.
+
+- Gmail uses IMAP and SMTP, including recent Sent Mail so replies from other
+  clients remain visible in local threads. App Passwords are stored in an
+  owner-only app-data file that relies on OS account isolation and disk
+  encryption.
 - Google Calendar uses a read-only secret iCal URL stored by the OS.
 - Hermes receives selected content after an explicit Agent action.
-  Loopback endpoints authenticate from the matching local Hermes profile; custom
-  and remote endpoints use the same owner-only app-data file.
+  The standard local connection follows Hermes's active profile and reads its
+  API-server port, advertised gateway model, and key from that profile's
+  `.env` and `config.yaml` using Hermes's environment-over-config precedence;
+  switch profiles or change the model and provider in Hermes, not Woodshed.
+  Custom loopback endpoints read the matching local profile; remote endpoint
+  keys use the owner-only app-data file.
 - Opening an HTML email loads remote images through Woodshed's bounded cache.
 - Public URL requests reject local and private network destinations.
 
-Generated Agent plans show confirmation before creating records, archiving mail,
-or performing other supported mutations.
+Agent-proposed mutations show their concrete operation and require confirmation
+before creating records, archiving mail, or performing other supported writes.
 
 See the [privacy notice](docs/legal/PRIVACY.md) and
 [security model](docs/SECURITY-MODEL.md) for the complete boundaries.

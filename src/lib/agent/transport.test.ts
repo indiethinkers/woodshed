@@ -9,7 +9,13 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: mocks.tauriInvoke,
 }));
 
-import { type AgentRun, createAgentChatTransport } from "./transport";
+import {
+  type AgentRun,
+  cancelAgentRun,
+  createAgentChatTransport,
+  listActiveAgentRuns,
+  listAgentRunsByIds,
+} from "./transport";
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -50,7 +56,7 @@ async function readChunks(
 
 describe("createAgentChatTransport", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("creates a durable run with a stable user-message idempotency key", async () => {
@@ -107,6 +113,254 @@ describe("createAgentChatTransport", () => {
     );
   });
 
+  it("prepares PDF contents before sending an attachment to the agent", async () => {
+    mocks.tauriInvoke
+      .mockResolvedValueOnce({
+        context:
+          "[Attachment: review.pdf (application/pdf)]\nSynthetic review text.\n[/Attachment]",
+      })
+      .mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Summarize this review." },
+            {
+              type: "file",
+              filename: "review.pdf",
+              mediaType: "application/pdf",
+              url: "data:application/pdf;base64,JVBERi0xLjQK",
+            },
+          ],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      1,
+      "agent_attachment_prepare",
+      {
+        input: {
+          filename: "review.pdf",
+          mediaType: "application/pdf",
+          dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+        },
+      },
+    );
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      2,
+      "agent_run_create",
+      {
+        input: expect.objectContaining({
+          inputMessage: expect.objectContaining({
+            content:
+              "Summarize this review.\n\nAttachments:\n- review.pdf (application/pdf)",
+          }),
+          messages: [
+            {
+              role: "user",
+              content:
+                "Summarize this review.\n\n[Attachment: review.pdf (application/pdf)]\nSynthetic review text.\n[/Attachment]",
+            },
+          ],
+        }),
+      },
+    );
+  });
+
+  it("reuses attachment preparation performed before the optimistic user turn", async () => {
+    const file = {
+      type: "file" as const,
+      filename: "reference.pdf",
+      mediaType: "application/pdf",
+      url: "data:application/pdf;base64,JVBERi0xLjQK",
+    };
+    mocks.tauriInvoke
+      .mockResolvedValueOnce({
+        context: "[Attachment: reference.pdf]\nPrepared text.\n[/Attachment]",
+      })
+      .mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await transport.prepareAttachments([file]);
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Read this." }, file],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledTimes(2);
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      1,
+      "agent_attachment_prepare",
+      expect.anything(),
+    );
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(
+      2,
+      "agent_run_create",
+      expect.objectContaining({
+        input: expect.objectContaining({
+          messages: [
+            {
+              role: "user",
+              content:
+                "Read this.\n\n[Attachment: reference.pdf]\nPrepared text.\n[/Attachment]",
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("sends loaded images as multimodal content without text extraction", async () => {
+    const image = {
+      type: "file" as const,
+      filename: "diagram.png",
+      mediaType: "image/png",
+      url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    };
+    mocks.tauriInvoke.mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await transport.prepareAttachments([image]);
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "What is shown here?" }, image],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledOnce();
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_create", {
+      input: expect.objectContaining({
+        inputMessage: expect.objectContaining({
+          content:
+            "What is shown here?\n\nAttachments:\n- diagram.png (image/png)",
+        }),
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is shown here?" },
+              {
+                type: "image_url",
+                image_url: { url: image.url, detail: "auto" },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  });
+
+  it("rejects an unloaded attachment instead of sending a filename hint", async () => {
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    await expect(
+      transport.sendMessages({
+        abortSignal: undefined,
+        chatId: "chat-1",
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            parts: [
+              { type: "text", text: "Read this attachment." },
+              {
+                type: "file",
+                filename: "notes.pdf",
+                mediaType: "application/pdf",
+                url: "",
+              },
+            ],
+          },
+        ],
+        trigger: "submit-message",
+        messageId: "message-1",
+      }),
+    ).rejects.toThrow("no longer loaded");
+    expect(mocks.tauriInvoke).not.toHaveBeenCalled();
+  });
+
+  it("sends a follow-up without forwarding unavailable historical attachment metadata", async () => {
+    mocks.tauriInvoke.mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Review this reference." },
+            {
+              type: "file",
+              filename: "review.pdf",
+              mediaType: "application/pdf",
+              url: "",
+            },
+          ],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "I reviewed the reference." }],
+        },
+        {
+          id: "message-2",
+          role: "user",
+          parts: [{ type: "text", text: "What should I focus on next?" }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-2",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledOnce();
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_create", {
+      input: expect.objectContaining({
+        idempotencyKey: "message-2",
+        messages: [
+          {
+            role: "user",
+            content: "Review this reference.",
+          },
+          { role: "assistant", content: "I reviewed the reference." },
+          { role: "user", content: "What should I focus on next?" },
+        ],
+      }),
+    });
+  });
+
   it("reconnects to an existing active run and polls it to completion", async () => {
     mocks.tauriInvoke
       .mockResolvedValueOnce([
@@ -134,6 +388,204 @@ describe("createAgentChatTransport", () => {
     expect(chunks).toContainEqual(
       expect.objectContaining({ type: "finish", finishReason: "stop" }),
     );
+  });
+
+  it("survives a temporary Tauri restart and reconciles the durable run", async () => {
+    const recovered = run({
+      status: "failed",
+      finalResponse: null,
+      events: [],
+      error:
+        "Woodshed restarted before this agent run finished. Send the message again to retry.",
+    });
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockResolvedValueOnce(recovered);
+    const onRunChange = vi.fn();
+    const transport = createAgentChatTransport({
+      onRunChange,
+      pollIntervalMs: 0,
+    });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Keep this run recoverable." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledTimes(5);
+    expect(onRunChange).toHaveBeenLastCalledWith(recovered);
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: recovered.error,
+    });
+  });
+
+  it("reports a backend disconnect without fabricating a failed durable run", async () => {
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockRejectedValueOnce(new Error("backend unavailable"))
+      .mockResolvedValueOnce(run());
+    const onRunChange = vi.fn();
+    const onConnectionChange = vi.fn();
+    const transport = createAgentChatTransport({
+      onConnectionChange,
+      onRunChange,
+      pollIntervalMs: 0,
+      reconnectTimeoutMs: 0,
+    });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Keep the failure recoverable." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+
+    expect(onConnectionChange).toHaveBeenCalledWith({
+      status: "disconnected",
+      error: "backend unavailable",
+    });
+    expect(onConnectionChange).toHaveBeenLastCalledWith({
+      status: "connected",
+      error: null,
+    });
+    expect(onRunChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(onRunChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" }),
+    );
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({ type: "error" }),
+    );
+  });
+
+  it("polls active runs every 100ms by default for responsive streaming", async () => {
+    vi.useFakeTimers();
+    let stream: ReadableStream<UIMessageChunk> | undefined;
+    try {
+      mocks.tauriInvoke
+        .mockResolvedValueOnce(
+          run({ status: "running", events: [], finalResponse: null }),
+        )
+        .mockResolvedValueOnce(run());
+      const transport = createAgentChatTransport();
+
+      stream = await transport.sendMessages({
+        abortSignal: undefined,
+        chatId: "chat-1",
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            parts: [{ type: "text", text: "Stream a synthetic response." }],
+          },
+        ],
+        trigger: "submit-message",
+        messageId: "message-1",
+      });
+
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.tauriInvoke).toHaveBeenCalledTimes(2);
+    } finally {
+      await stream?.cancel();
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces a burst of text events from one poll into one UI update", async () => {
+    const deltas = Array.from({ length: 250 }, (_, index) => ({
+      kind: "delta" as const,
+      delta: `token-${index} `,
+    }));
+    const finalResponse = deltas.map((event) => event.delta).join("");
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(
+        run({ status: "running", events: [], finalResponse: null }),
+      )
+      .mockResolvedValueOnce(run({ events: deltas, finalResponse }));
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Stream a synthetic response." }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+    const textDeltas = chunks.filter((chunk) => chunk.type === "text-delta");
+
+    expect(textDeltas).toEqual([
+      expect.objectContaining({ delta: finalResponse }),
+    ]);
+  });
+
+  it("ends reasoning before response text begins", async () => {
+    mocks.tauriInvoke.mockResolvedValueOnce(
+      run({
+        events: [
+          { kind: "reasoning-delta", delta: "Checking context." },
+          { kind: "delta", delta: "The answer." },
+        ],
+        finalResponse: "The answer.",
+      }),
+    );
+    const transport = createAgentChatTransport();
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "What should I know?" }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-1",
+    });
+    const chunks = await readChunks(stream);
+    const reasoningEnd = chunks.findIndex((chunk) => chunk.type === "reasoning-end");
+    const textDelta = chunks.findIndex((chunk) => chunk.type === "text-delta");
+
+    expect(reasoningEnd).toBeGreaterThan(-1);
+    expect(reasoningEnd).toBeLessThan(textDelta);
   });
 
   it("surfaces a durable failed status and its stored error", async () => {
@@ -223,5 +675,42 @@ describe("createAgentChatTransport", () => {
         }),
       },
     );
+  });
+
+  it("lists active runs through the transport boundary", async () => {
+    const active = run({ status: "running" });
+    mocks.tauriInvoke.mockResolvedValueOnce([active]);
+
+    await expect(listActiveAgentRuns()).resolves.toEqual([active]);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_runs_active");
+  });
+
+  it("loads durable conversation runs in bounded id batches", async () => {
+    const runIds = Array.from({ length: 10 }, (_, index) => `agent-run-${index}`);
+    mocks.tauriInvoke
+      .mockResolvedValueOnce(runIds.slice(0, 8).map((id) => run({ id })))
+      .mockResolvedValueOnce(runIds.slice(8).map((id) => run({ id })));
+
+    await expect(listAgentRunsByIds("chat-1", runIds)).resolves.toHaveLength(10);
+
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(1, "agent_runs_by_ids", {
+      conversationId: "chat-1",
+      runIds: runIds.slice(0, 8),
+    });
+    expect(mocks.tauriInvoke).toHaveBeenNthCalledWith(2, "agent_runs_by_ids", {
+      conversationId: "chat-1",
+      runIds: runIds.slice(8),
+    });
+  });
+
+  it("owns explicit durable-run cancellation", async () => {
+    const cancelled = run({ status: "cancelled" });
+    mocks.tauriInvoke.mockResolvedValueOnce(cancelled);
+
+    await expect(cancelAgentRun("agent-run-1")).resolves.toEqual(cancelled);
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_cancel", {
+      runId: "agent-run-1",
+    });
   });
 });

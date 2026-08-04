@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  graph: { data: undefined as typeof SNAPSHOT | undefined, isLoading: true },
 }));
 
 // Freeze the d3-force internal timer before graph-view imports d3-force:
@@ -30,7 +31,7 @@ vi.mock("@tanstack/react-router", () => ({
 // databases-list.test.tsx — so the test renders a fixed snapshot
 // synchronously, with no QueryClient provider needed.
 vi.mock("@/lib/hooks/use-graph", () => ({
-  useGraph: () => ({ data: SNAPSHOT, isLoading: false }),
+  useGraph: () => mocks.graph,
 }));
 
 const SNAPSHOT = {
@@ -65,6 +66,7 @@ import { GraphView } from "./graph-view";
 describe("GraphView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.graph = { data: SNAPSHOT, isLoading: false };
   });
 
   it("renders the vault as a canvas with counts and a legend", () => {
@@ -128,5 +130,44 @@ describe("GraphView", () => {
     expect(allFilter).toHaveAttribute("aria-pressed", "true");
     expect(container.querySelector('[data-node-id="notebook/alpha.md"]')).not.toBeNull();
     expect(screen.getByText(/3 records · 2 links/)).toBeInTheDocument();
+  });
+
+  it("enables wheel zoom after the asynchronous graph load completes", () => {
+    mocks.graph = { data: undefined, isLoading: true };
+    const { rerender } = render(<GraphView />);
+
+    mocks.graph = { data: SNAPSHOT, isLoading: false };
+    rerender(<GraphView />);
+
+    const svg = screen.getByRole("img", { name: "Vault wikilink graph" });
+    vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 700,
+      width: 1000,
+      height: 700,
+      toJSON: () => ({}),
+    });
+    const canvas = svg.querySelector("g");
+    expect(canvas).toHaveAttribute("transform", "translate(0 0) scale(1)");
+
+    fireEvent.wheel(svg, { clientX: 500, clientY: 350, deltaY: -120 });
+
+    expect(canvas).not.toHaveAttribute("transform", "translate(0 0) scale(1)");
+  });
+
+  it("offers accessible zoom controls", () => {
+    const { container } = render(<GraphView />);
+    const canvas = container.querySelector("svg g");
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(canvas).not.toHaveAttribute("transform", "translate(0 0) scale(1)");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset graph view" }));
+    expect(canvas).toHaveAttribute("transform", "translate(0 0) scale(1)");
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeInTheDocument();
   });
 });

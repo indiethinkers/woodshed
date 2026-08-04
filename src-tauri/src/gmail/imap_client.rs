@@ -10,8 +10,18 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::pool::GmailImapPool;
+use crate::gmail::{IMAP_HOST, IMAP_PORT};
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 const MAX_RAW_MESSAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_IMAP_GREETING_BYTES: usize = 16 * 1024;
+const MAX_SPECIAL_USE_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_SPECIAL_USE_MAILBOXES: usize = 16;
+const GMAIL_IMAP_IO_TIMEOUT: Duration = Duration::from_secs(15);
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +32,7 @@ pub enum ImapError {
     Imap(#[from] imap::Error),
     #[error("auth failed for {email}: {message}")]
     AuthFailed { email: String, message: String },
-    #[error("message {message_id} not found in Gmail INBOX")]
+    #[error("message {message_id} not found in Gmail")]
     MessageNotFound { message_id: String },
     #[error("inbox listing inconsistent: {exists} messages present but none parseable")]
     InboxListInconsistent { exists: u32 },
@@ -32,6 +42,16 @@ pub enum ImapError {
     StaleRemoteIdentity,
     #[error("message id {message_id} matched multiple Gmail messages; refusing a bulk mutation")]
     AmbiguousMessageId { message_id: String },
+    #[error("Gmail special-use mailbox response was malformed or exceeded safety limits")]
+    InvalidSpecialUseResponse,
+    #[error("Gmail did not expose its All Mail special-use mailbox")]
+    MissingAllMailbox,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SpecialUseMailboxes {
+    sent: Option<String>,
+    all: Option<String>,
 }
 
 /// One raw message fetched from IMAP, before MIME parsing. Carries the
@@ -75,73 +95,262 @@ pub fn fetch_recent(
     limit: usize,
 ) -> Result<FetchBatch, ImapError> {
     pool.with_session(creds, |session| {
-        // The pool keeps INBOX selected; we re-issue NOOP-equivalent via
-        // a fresh fetch each call. To pick up new mail since the session
-        // was opened, refresh the `EXISTS` count via a SELECT roundtrip.
-        // Cheap (one round trip) and avoids relying on stale state.
-        let mailbox = session.select("INBOX")?;
-
-        if mailbox.exists == 0 {
-            return Ok(FetchBatch {
-                uid_validity: mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?,
-                messages: Vec::new(),
-            });
-        }
-        let uid_validity = mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?;
-
-        let total = mailbox.exists;
-        let start = total.saturating_sub(limit as u32 - 1).max(1);
-        let range = format!("{start}:{total}");
-
-        // BODY.PEEK[] leaves \Seen alone — fetching in Woodshed shouldn't
-        // mark mail as read in the user's other Gmail clients. X-GM-MSGID
-        // / X-GM-THRID disabled because imap 2.4's parser chokes on them;
-        // sync falls back to RFC 5322 Message-ID + References headers.
-        // Request at most 25 MiB of each message so one pathological mailbox
-        // item cannot force the IMAP parser to allocate an unbounded literal.
-        // RFC822.SIZE lets us distinguish a genuinely small message from a
-        // truncated partial response and skip the latter cleanly.
-        let fetch_spec = "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[]<0.26214400>)";
-        let fetches = session.fetch(&range, fetch_spec)?;
-
-        let mut out = Vec::with_capacity(fetches.len());
-        for f in fetches.iter() {
-            if f.size
-                .is_some_and(|size| size as usize > MAX_RAW_MESSAGE_BYTES)
-            {
-                eprintln!("gmail: skipped message larger than 25 MiB");
-                continue;
-            }
-            let body = match f.body() {
-                Some(b) => b.to_vec(),
-                None => continue,
-            };
-            if body.len() > MAX_RAW_MESSAGE_BYTES {
-                eprintln!("gmail: skipped oversized IMAP response");
-                continue;
-            }
-            let uid = f.uid.unwrap_or(0);
-            let seen = f
-                .flags()
-                .iter()
-                .any(|fl| matches!(fl, imap::types::Flag::Seen));
-            let internal_date = f.internal_date();
-            out.push(RawMessage {
-                body,
-                uid,
-                gm_msgid: 0,
-                gm_thrid: 0,
-                seen,
-                internal_date,
-            });
-        }
-        Ok(FetchBatch {
-            uid_validity,
-            messages: out,
-        })
+        fetch_recent_from_mailbox(session, "INBOX", limit)
     })
 }
 
+/// Fetch recent messages from the provider-designated Sent mailbox. Gmail
+/// exposes this through the standard `\Sent` SPECIAL-USE attribute, so the
+/// lookup remains correct when the visible mailbox name is localized.
+pub fn fetch_recent_sent(
+    pool: &GmailImapPool,
+    creds: &Credentials,
+    limit: usize,
+) -> Result<Option<FetchBatch>, ImapError> {
+    let sent_name = match pool.cached_sent_mailbox(&creds.email) {
+        Some(cached) => cached,
+        None => {
+            let discovered = discover_special_use_mailboxes(creds)?;
+            pool.remember_sent_mailbox(&creds.email, discovered.sent.clone());
+            pool.remember_all_mailbox(&creds.email, discovered.all);
+            discovered.sent
+        }
+    };
+    let Some(sent_name) = sent_name else {
+        return Ok(None);
+    };
+    pool.with_session(creds, |session| {
+        fetch_recent_from_mailbox(session, &sent_name, limit).map(Some)
+    })
+}
+
+/// Discover Gmail's localized Sent mailbox over a short-lived, read-bounded
+/// IMAP connection. The pooled `imap` session cannot apply a per-command read
+/// cap because its transport is private, so discovery is isolated and cached.
+fn discover_special_use_mailboxes(creds: &Credentials) -> Result<SpecialUseMailboxes, ImapError> {
+    let tcp = TcpStream::connect((IMAP_HOST, IMAP_PORT)).map_err(imap::Error::Io)?;
+    tcp.set_read_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
+        .map_err(imap::Error::Io)?;
+    tcp.set_write_timeout(Some(GMAIL_IMAP_IO_TIMEOUT))
+        .map_err(imap::Error::Io)?;
+    let tls = native_tls::TlsConnector::builder().build()?;
+    let tls_stream = tls
+        .connect(IMAP_HOST, tcp)
+        .map_err(imap::Error::TlsHandshake)?;
+    let (stream, budget) = ReadBudgetStream::new(tls_stream);
+    let mut client = imap::Client::new(stream);
+
+    budget.begin(MAX_IMAP_GREETING_BYTES);
+    let greeting = client.read_greeting();
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    greeting?;
+
+    budget.begin(MAX_SPECIAL_USE_RESPONSE_BYTES);
+    let login = client.login(&creds.email, &creds.app_password);
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    let mut session = login.map_err(|(error, _)| match error {
+        imap::Error::No(message) | imap::Error::Bad(message) => ImapError::AuthFailed {
+            email: creds.email.clone(),
+            message,
+        },
+        other => ImapError::Imap(other),
+    })?;
+
+    budget.begin(MAX_SPECIAL_USE_RESPONSE_BYTES);
+    let response = session.run_command_and_read_response("LIST (SPECIAL-USE) \"\" \"*\"");
+    if budget.finish() {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+    special_use_mailboxes_from_response(&response?)
+}
+
+#[derive(Debug, Clone)]
+struct ReadBudget {
+    remaining: Arc<AtomicUsize>,
+    tripped: Arc<AtomicBool>,
+}
+
+impl ReadBudget {
+    fn begin(&self, bytes: usize) {
+        self.tripped.store(false, Ordering::Release);
+        self.remaining.store(bytes, Ordering::Release);
+    }
+
+    /// Returns whether the peer attempted to exceed the active budget.
+    fn finish(&self) -> bool {
+        self.remaining.store(usize::MAX, Ordering::Release);
+        self.tripped.swap(false, Ordering::AcqRel)
+    }
+}
+
+#[derive(Debug)]
+struct ReadBudgetStream<T> {
+    inner: T,
+    budget: ReadBudget,
+}
+
+impl<T> ReadBudgetStream<T> {
+    fn new(inner: T) -> (Self, ReadBudget) {
+        let budget = ReadBudget {
+            remaining: Arc::new(AtomicUsize::new(usize::MAX)),
+            tripped: Arc::new(AtomicBool::new(false)),
+        };
+        (
+            Self {
+                inner,
+                budget: budget.clone(),
+            },
+            budget,
+        )
+    }
+}
+
+impl<T: Read> Read for ReadBudgetStream<T> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let remaining = self.budget.remaining.load(Ordering::Acquire);
+        if remaining == 0 {
+            self.budget.tripped.store(true, Ordering::Release);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "IMAP response exceeded its read budget",
+            ));
+        }
+        let allowed = if remaining == usize::MAX {
+            buffer.len()
+        } else {
+            buffer.len().min(remaining)
+        };
+        let read = self.inner.read(&mut buffer[..allowed])?;
+        if remaining != usize::MAX {
+            self.budget.remaining.fetch_sub(read, Ordering::AcqRel);
+        }
+        Ok(read)
+    }
+}
+
+impl<T: Write> Write for ReadBudgetStream<T> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+fn sent_mailbox_from_special_use_response(response: &[u8]) -> Result<Option<String>, ImapError> {
+    Ok(special_use_mailboxes_from_response(response)?.sent)
+}
+
+fn special_use_mailboxes_from_response(response: &[u8]) -> Result<SpecialUseMailboxes, ImapError> {
+    if response.len() > MAX_SPECIAL_USE_RESPONSE_BYTES {
+        return Err(ImapError::InvalidSpecialUseResponse);
+    }
+
+    let mut remaining = response;
+    let mut mailbox_count = 0;
+    let mut mailboxes = SpecialUseMailboxes::default();
+    while !remaining.is_empty() {
+        let (rest, parsed) = imap_proto::parse_response(remaining)
+            .map_err(|_| ImapError::InvalidSpecialUseResponse)?;
+        if rest.len() >= remaining.len() {
+            return Err(ImapError::InvalidSpecialUseResponse);
+        }
+        if let imap_proto::Response::MailboxData(imap_proto::MailboxDatum::List {
+            flags,
+            name,
+            ..
+        }) = parsed
+        {
+            mailbox_count += 1;
+            if mailbox_count > MAX_SPECIAL_USE_MAILBOXES {
+                return Err(ImapError::InvalidSpecialUseResponse);
+            }
+            if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\Sent")) {
+                mailboxes.sent.get_or_insert_with(|| name.to_string());
+            }
+            if flags.iter().any(|flag| flag.eq_ignore_ascii_case("\\All")) {
+                mailboxes.all.get_or_insert_with(|| name.to_string());
+            }
+        }
+        remaining = rest;
+    }
+    Ok(mailboxes)
+}
+
+fn fetch_recent_from_mailbox(
+    session: &mut crate::gmail::pool::ImapSessionInner,
+    mailbox_name: &str,
+    limit: usize,
+) -> Result<FetchBatch, ImapError> {
+    // Refresh the `EXISTS` count via a SELECT roundtrip. Cheap (one round
+    // trip) and avoids relying on stale state in the pooled connection.
+    let mailbox = session.select(mailbox_name)?;
+
+    if mailbox.exists == 0 {
+        return Ok(FetchBatch {
+            uid_validity: mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?,
+            messages: Vec::new(),
+        });
+    }
+    let uid_validity = mailbox.uid_validity.ok_or(ImapError::MissingUidValidity)?;
+
+    let total = mailbox.exists;
+    let start = total.saturating_sub(limit as u32 - 1).max(1);
+    let range = format!("{start}:{total}");
+
+    // BODY.PEEK[] leaves \Seen alone — fetching in Woodshed shouldn't
+    // mark mail as read in the user's other Gmail clients. X-GM-MSGID
+    // / X-GM-THRID disabled because imap 2.4's parser chokes on them;
+    // sync falls back to RFC 5322 Message-ID + References headers.
+    // Request at most 25 MiB of each message so one pathological mailbox
+    // item cannot force the IMAP parser to allocate an unbounded literal.
+    // RFC822.SIZE lets us distinguish a genuinely small message from a
+    // truncated partial response and skip the latter cleanly.
+    let fetch_spec = "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[]<0.26214400>)";
+    let fetches = session.fetch(&range, fetch_spec)?;
+
+    let mut out = Vec::with_capacity(fetches.len());
+    for f in fetches.iter() {
+        if f.size
+            .is_some_and(|size| size as usize > MAX_RAW_MESSAGE_BYTES)
+        {
+            eprintln!("gmail: skipped message larger than 25 MiB");
+            continue;
+        }
+        let body = match f.body() {
+            Some(b) => b.to_vec(),
+            None => continue,
+        };
+        if body.len() > MAX_RAW_MESSAGE_BYTES {
+            eprintln!("gmail: skipped oversized IMAP response");
+            continue;
+        }
+        let uid = f.uid.unwrap_or(0);
+        let seen = f
+            .flags()
+            .iter()
+            .any(|fl| matches!(fl, imap::types::Flag::Seen));
+        let internal_date = f.internal_date();
+        out.push(RawMessage {
+            body,
+            uid,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen,
+            internal_date,
+        });
+    }
+    Ok(FetchBatch {
+        uid_validity,
+        messages: out,
+    })
+}
 /// Fetch the identity of EVERY message currently in INBOX, header-only
 /// (no bodies). Used to reconcile the local inbox: any locally-stored
 /// inbox message whose id isn't in this set has left the Gmail inbox
@@ -257,6 +466,53 @@ pub fn archive_message(
     })
 }
 
+/// Return an archived Gmail message to INBOX. Archived messages are located
+/// in the provider-designated `\\All` mailbox, then the Gmail `\\Inbox` label
+/// is added with X-GM-LABELS. The RFC Message-ID fallback is exact-checked
+/// before mutation, matching the normal inbox mutation boundary.
+pub fn restore_message(
+    pool: &GmailImapPool,
+    creds: &Credentials,
+    local_id: &str,
+    message_id: &str,
+) -> Result<(), ImapError> {
+    let all_mailbox = match pool.cached_all_mailbox(&creds.email) {
+        Some(cached) => cached,
+        None => {
+            let discovered = discover_special_use_mailboxes(creds)?;
+            pool.remember_sent_mailbox(&creds.email, discovered.sent);
+            pool.remember_all_mailbox(&creds.email, discovered.all.clone());
+            discovered.all
+        }
+    }
+    .ok_or(ImapError::MissingAllMailbox)?;
+
+    pool.with_session(creds, |session| {
+        session.select(&all_mailbox)?;
+        let uids = if let Some(gm_msgid) = gmail_msgid_from_local_id(local_id) {
+            let mut matches: Vec<u32> = session
+                .uid_search(format!("X-GM-MSGID {gm_msgid}"))?
+                .into_iter()
+                .collect();
+            matches.sort();
+            matches
+        } else {
+            lookup_uids_by_message_id(session, message_id)?
+        };
+        if uids.is_empty() {
+            return Err(ImapError::MessageNotFound {
+                message_id: local_id.to_string(),
+            });
+        }
+        if uids.len() > 1 {
+            return Err(ImapError::AmbiguousMessageId {
+                message_id: local_id.to_string(),
+            });
+        }
+        apply_restore_plan(session, &join_uids(&uids))
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveCommand {
     StoreFlags(&'static str),
@@ -284,6 +540,16 @@ fn apply_archive_plan(
             }
         }
     }
+    Ok(())
+}
+
+const RESTORE_INBOX_LABELS: &str = "+X-GM-LABELS.SILENT (\\Inbox)";
+
+fn apply_restore_plan(
+    session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
+    uid_set: &str,
+) -> Result<(), ImapError> {
+    session.uid_store(uid_set, RESTORE_INBOX_LABELS)?;
     Ok(())
 }
 
@@ -506,5 +772,92 @@ mod tests {
                 ArchiveCommand::UidExpunge,
             ]
         );
+    }
+
+    #[test]
+    fn discovers_the_provider_designated_sent_mailbox() {
+        let response =
+            b"* LIST (\\Sent) \"/\" \"[Provider]/Localized Sent\"\r\na1 OK LIST completed\r\n";
+        assert_eq!(
+            sent_mailbox_from_special_use_response(response).unwrap(),
+            Some("[Provider]/Localized Sent".to_string()),
+        );
+    }
+
+    #[test]
+    fn discovers_the_provider_designated_all_mailbox() {
+        let response =
+            b"* LIST (\\All) \"/\" \"[Provider]/Localized All\"\r\na1 OK LIST completed\r\n";
+
+        assert_eq!(
+            special_use_mailboxes_from_response(response).unwrap().all,
+            Some("[Provider]/Localized All".to_string()),
+        );
+    }
+
+    #[test]
+    fn restoring_an_archived_message_adds_the_inbox_label() {
+        assert_eq!(RESTORE_INBOX_LABELS, "+X-GM-LABELS.SILENT (\\Inbox)");
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_allows_an_absent_sent_folder() {
+        let response = b"* LIST (\\Drafts) \"/\" \"[Provider]/Drafts\"\r\na1 OK LIST completed\r\n";
+        assert_eq!(
+            sent_mailbox_from_special_use_response(response).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_rejects_malformed_or_oversized_responses() {
+        assert!(sent_mailbox_from_special_use_response(b"not an IMAP response").is_err());
+        assert!(sent_mailbox_from_special_use_response(&vec![
+            b'x';
+            MAX_SPECIAL_USE_RESPONSE_BYTES + 1
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn sent_mailbox_discovery_enforces_the_mailbox_count_boundary() {
+        let response = |count: usize| {
+            let mut value = String::new();
+            for index in 0..count {
+                value.push_str(&format!(
+                    "* LIST (\\Drafts) \"/\" \"[Provider]/Folder {index}\"\r\n"
+                ));
+            }
+            value.push_str("a1 OK LIST completed\r\n");
+            value
+        };
+
+        assert!(sent_mailbox_from_special_use_response(
+            response(MAX_SPECIAL_USE_MAILBOXES).as_bytes()
+        )
+        .is_ok());
+        assert!(sent_mailbox_from_special_use_response(
+            response(MAX_SPECIAL_USE_MAILBOXES + 1).as_bytes()
+        )
+        .is_err());
+        let sent_first = response(MAX_SPECIAL_USE_MAILBOXES + 1).replacen("\\Drafts", "\\Sent", 1);
+        assert!(sent_mailbox_from_special_use_response(sent_first.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn read_budget_stops_the_transport_before_over_allocation() {
+        let (mut exact, exact_budget) = ReadBudgetStream::new(std::io::Cursor::new(b"abcd"));
+        exact_budget.begin(4);
+        let mut exact_bytes = [0_u8; 4];
+        exact.read_exact(&mut exact_bytes).unwrap();
+        assert!(!exact_budget.finish());
+        assert_eq!(&exact_bytes, b"abcd");
+
+        let (mut oversized, oversized_budget) =
+            ReadBudgetStream::new(std::io::Cursor::new(b"abcde"));
+        oversized_budget.begin(4);
+        let mut output = [0_u8; 5];
+        assert!(oversized.read_exact(&mut output).is_err());
+        assert!(oversized_budget.finish());
     }
 }

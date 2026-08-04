@@ -2,6 +2,7 @@ pub mod key;
 pub mod runs;
 
 use anyhow::{anyhow, Context};
+use base64::Engine as _;
 use gray_matter::{engine::YAML, Matter};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -13,8 +14,8 @@ use ulid::Ulid;
 pub const STORE_KEY: &str = "agent_hermes_config";
 // The desktop app talks to a Hermes gateway running on the same machine. (A
 // future mobile app will point at a VPS-hosted gateway instead.)
-pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8644/v1";
-pub const DEFAULT_MODEL: &str = "cadence";
+pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8642/v1";
+pub const DEFAULT_MODEL: &str = "hermes-agent";
 pub const DEFAULT_SESSION_KEY: &str = "woodshed";
 pub const DEFAULT_DISPLAY_NAME: &str = "Hermes";
 pub const CHAT_TYPE: &str = "agent_chat";
@@ -27,6 +28,11 @@ const MAX_AGENT_STREAM_BYTES: usize = 32 * 1024 * 1024;
 const MAX_AGENT_STREAM_BUFFER: usize = 1024 * 1024;
 const MAX_AGENT_MESSAGES: usize = 512;
 const MAX_AGENT_INPUT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AGENT_WIRE_INPUT_BYTES: usize = 12 * 1024 * 1024;
+const MAX_AGENT_IMAGES: usize = 4;
+const MAX_AGENT_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+const AGENT_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +65,23 @@ impl Default for HermesConfigMeta {
     }
 }
 
+pub fn migrate_legacy_default_profile(meta: &mut HermesConfigMeta) -> bool {
+    if meta.base_url != "http://127.0.0.1:8644/v1" || meta.model != "cadence" {
+        return false;
+    }
+    meta.base_url = DEFAULT_BASE_URL.to_string();
+    meta.model = DEFAULT_MODEL.to_string();
+    true
+}
+
+pub fn is_default_profile_connection(base_url: &str, model: &str) -> bool {
+    base_url == DEFAULT_BASE_URL && model == DEFAULT_MODEL
+}
+
+pub fn uses_default_profile(meta: &HermesConfigMeta) -> bool {
+    is_default_profile_connection(&meta.base_url, &meta.model)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
@@ -68,6 +91,16 @@ pub struct AgentConfig {
     pub session_key: String,
     pub has_api_key: bool,
     pub credential_source: CredentialSource,
+    pub managed_profile: Option<ManagedHermesProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedHermesProfile {
+    pub name: String,
+    pub port: u16,
+    pub model: String,
+    pub available: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -101,6 +134,7 @@ pub struct AgentConnectionTestResult {
     pub model_found: bool,
     pub models: Vec<String>,
     pub message: String,
+    pub managed_profile: Option<ManagedHermesProfile>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,6 +162,21 @@ pub struct AgentChatStreamEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentTokenUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentStreamEvent {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,6 +199,8 @@ pub struct AgentStreamEvent {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentTokenUsage>,
 }
 
 impl AgentStreamEvent {
@@ -166,6 +217,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -182,6 +234,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -202,6 +255,7 @@ impl AgentStreamEvent {
             error_text: None,
             title,
             dynamic: Some(true),
+            usage: None,
         }
     }
 
@@ -218,6 +272,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 
@@ -239,6 +294,41 @@ impl AgentStreamEvent {
             error_text: None,
             title,
             dynamic: Some(true),
+            usage: None,
+        }
+    }
+
+    pub fn tool_output_available(tool_call_id: String, output: Value) -> Self {
+        Self {
+            kind: "tool-output-available".to_string(),
+            delta: None,
+            error: None,
+            tool_call_id: Some(tool_call_id),
+            tool_name: None,
+            input_text_delta: None,
+            input: None,
+            output: Some(output),
+            error_text: None,
+            title: None,
+            dynamic: Some(true),
+            usage: None,
+        }
+    }
+
+    pub fn usage(usage: AgentTokenUsage) -> Self {
+        Self {
+            kind: "usage".to_string(),
+            delta: None,
+            error: None,
+            tool_call_id: None,
+            tool_name: None,
+            input_text_delta: None,
+            input: None,
+            output: None,
+            error_text: None,
+            title: None,
+            dynamic: None,
+            usage: Some(usage),
         }
     }
 
@@ -255,6 +345,7 @@ impl AgentStreamEvent {
             error_text: None,
             title: None,
             dynamic: None,
+            usage: None,
         }
     }
 }
@@ -263,7 +354,42 @@ impl AgentStreamEvent {
 #[serde(rename_all = "camelCase")]
 pub struct AgentChatMessage {
     pub role: String,
-    pub content: String,
+    pub content: AgentChatContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentChatContent {
+    Text(String),
+    Parts(Vec<AgentChatContentPart>),
+}
+
+impl From<String> for AgentChatContent {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for AgentChatContent {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AgentChatContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: AgentImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentImageUrl {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,6 +408,8 @@ pub struct AgentVaultMessage {
     pub role: String,
     pub created_at: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_run_id: Option<String>,
 }
 
 /// Lightweight descriptor of the page a chat was started from (sidebar mode).
@@ -395,6 +523,8 @@ struct AgentMessageMeta {
     id: String,
     role: String,
     created: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_run_id: Option<String>,
 }
 
 pub fn normalize_meta(
@@ -442,7 +572,22 @@ pub fn normalize_meta(
     })
 }
 
-pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource) -> AgentConfig {
+pub fn public_config(
+    meta: HermesConfigMeta,
+    credential_source: CredentialSource,
+    managed_profile: Option<ManagedHermesProfile>,
+) -> AgentConfig {
+    let has_api_key = if uses_default_profile(&meta) {
+        credential_source != CredentialSource::Missing
+    } else {
+        meta.api_key_configured
+            || meta
+                .api_key
+                .as_deref()
+                .and_then(normalize_api_key)
+                .is_some()
+            || credential_source != CredentialSource::Missing
+    };
     AgentConfig {
         display_name: if meta.display_name.trim().is_empty() {
             default_display_name()
@@ -452,14 +597,9 @@ pub fn public_config(meta: HermesConfigMeta, credential_source: CredentialSource
         base_url: meta.base_url,
         model: meta.model,
         session_key: meta.session_key,
-        has_api_key: meta.api_key_configured
-            || meta
-                .api_key
-                .as_deref()
-                .and_then(normalize_api_key)
-                .is_some()
-            || credential_source != CredentialSource::Missing,
+        has_api_key,
         credential_source,
+        managed_profile,
     }
 }
 
@@ -712,6 +852,7 @@ pub async fn test_connection(
                 "Hermes returned HTTP {status_code}: {}",
                 truncate(&text, 240)
             ),
+            managed_profile: None,
         });
     }
 
@@ -736,6 +877,7 @@ pub async fn test_connection(
         model_found,
         models,
         message,
+        managed_profile: None,
     })
 }
 
@@ -826,6 +968,31 @@ where
     Start: FnMut() -> Result<(), String>,
     Event: FnMut(AgentStreamEvent) -> Result<(), String>,
 {
+    chat_completion_stream_with_timeouts(
+        config,
+        api_key,
+        input,
+        &mut on_start,
+        &mut on_event,
+        AGENT_STREAM_RESPONSE_TIMEOUT,
+        AGENT_STREAM_IDLE_TIMEOUT,
+    )
+    .await
+}
+
+async fn chat_completion_stream_with_timeouts<Start, Event>(
+    config: &HermesConfigMeta,
+    api_key: &str,
+    input: AgentChatInput,
+    on_start: &mut Start,
+    on_event: &mut Event,
+    response_timeout: Duration,
+    idle_timeout: Duration,
+) -> Result<(), String>
+where
+    Start: FnMut() -> Result<(), String>,
+    Event: FnMut(AgentStreamEvent) -> Result<(), String>,
+{
     let base_url = normalize_base_url(&config.base_url)?;
     let chat_url = format!("{base_url}/chat/completions");
     let session_id = input.conversation_id.trim();
@@ -837,11 +1004,11 @@ where
     let messages = normalize_chat_messages(input.messages)?;
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| format!("build client failed: {e}"))?;
 
-    let mut response = client
+    let response = client
         .post(&chat_url)
         .bearer_auth(api_key)
         .header("Accept", "text/event-stream")
@@ -852,16 +1019,22 @@ where
             "messages": messages,
             "stream": true,
         }))
-        .send()
+        .send();
+    let mut response = tokio::time::timeout(response_timeout, response)
         .await
+        .map_err(|_| stream_response_timeout_message())?
         .map_err(|e| format!("chat failed: {e}. Is the local Hermes gateway running?"))?;
 
     let status = response.status();
     let status_code = status.as_u16();
     if !status.is_success() {
-        let text = response_text_limited(response, MAX_AGENT_MODELS_RESPONSE)
-            .await
-            .map_err(|e| format!("read chat error response failed: {e}"))?;
+        let text = tokio::time::timeout(
+            response_timeout,
+            response_text_limited(response, MAX_AGENT_MODELS_RESPONSE),
+        )
+        .await
+        .map_err(|_| stream_error_response_timeout_message())?
+        .map_err(|e| format!("read chat error response failed: {e}"))?;
         return Err(format!(
             "Hermes returned HTTP {status_code}: {}",
             truncate(&text, 360)
@@ -873,10 +1046,10 @@ where
     let mut parse_state = StreamParseState::default();
     let mut produced = false;
     let mut received_bytes = 0usize;
-    while let Some(chunk) = response
-        .chunk()
+    while let Some(chunk) = tokio::time::timeout(idle_timeout, response.chunk())
         .await
-        .map_err(|e| format!("read chat stream failed: {e}"))?
+        .map_err(|_| stream_idle_timeout_message())?
+        .map_err(|_| stream_read_failure_message())?
     {
         received_bytes = received_bytes.saturating_add(chunk.len());
         if received_bytes > MAX_AGENT_STREAM_BYTES {
@@ -885,15 +1058,15 @@ where
             ));
         }
         buffer.push_str(&String::from_utf8_lossy(&chunk));
-        produced |= drain_sse_buffer(&mut buffer, &mut parse_state, &mut on_event)?;
+        produced |= drain_sse_buffer(&mut buffer, &mut parse_state, on_event)?;
         if buffer.len() > MAX_AGENT_STREAM_BUFFER {
             return Err("Hermes stream contained an oversized event".to_string());
         }
     }
     if !buffer.trim().is_empty() {
-        produced |= parse_sse_event(&buffer, &mut parse_state, &mut on_event)?;
+        produced |= parse_sse_event(&buffer, &mut parse_state, on_event)?;
     }
-    produced |= finish_stream_parse(&mut parse_state, &mut on_event)?;
+    produced |= finish_stream_parse(&mut parse_state, on_event)?;
     // A stream that completes without ever emitting assistant text is a failure,
     // not an empty success — Hermes does this when the upstream model is rate
     // limited or unavailable and sends no content deltas. Without this the UI
@@ -906,6 +1079,25 @@ where
         );
     }
     Ok(())
+}
+
+fn stream_read_failure_message() -> String {
+    "Hermes ended its response unexpectedly. This agent run was saved as failed; try again."
+        .to_string()
+}
+
+fn stream_response_timeout_message() -> String {
+    "Hermes did not start its response within 30 seconds. This agent run was saved as failed; try again."
+        .to_string()
+}
+
+fn stream_error_response_timeout_message() -> String {
+    "Hermes error response timed out. This agent run was saved as failed; try again.".to_string()
+}
+
+fn stream_idle_timeout_message() -> String {
+    "Hermes stopped sending updates for five minutes. This agent run was saved as failed; try again."
+        .to_string()
 }
 
 pub fn parse_model_ids(value: &Value) -> Vec<String> {
@@ -922,38 +1114,147 @@ pub fn parse_model_ids(value: &Value) -> Vec<String> {
     ids
 }
 
-fn normalize_chat_messages(messages: Vec<AgentChatMessage>) -> Result<Vec<Value>, String> {
+pub(super) fn normalize_chat_messages(
+    messages: Vec<AgentChatMessage>,
+) -> Result<Vec<Value>, String> {
     if messages.len() > MAX_AGENT_MESSAGES {
         return Err(format!(
             "chat contains more than {MAX_AGENT_MESSAGES} messages"
         ));
     }
     let mut out = Vec::new();
-    let mut total_bytes = 0usize;
+    let mut text_bytes = 0usize;
+    let mut wire_bytes = 0usize;
+    let mut image_count = 0usize;
     for message in messages {
         let role = message.role.trim().to_ascii_lowercase();
         if !matches!(role.as_str(), "system" | "user" | "assistant") {
             return Err(format!("unsupported chat role '{role}'"));
         }
-        let content = message.content.trim();
-        if content.is_empty() {
-            continue;
+        match message.content {
+            AgentChatContent::Text(content) => {
+                let content = content.trim();
+                if content.is_empty() {
+                    continue;
+                }
+                add_agent_text_bytes(&mut text_bytes, content.len())?;
+                add_agent_wire_bytes(&mut wire_bytes, content.len())?;
+                out.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
+            AgentChatContent::Parts(parts) => {
+                if role != "user" {
+                    return Err("image content is only supported in user messages".to_string());
+                }
+                let content = normalize_chat_content_parts(
+                    parts,
+                    &mut text_bytes,
+                    &mut wire_bytes,
+                    &mut image_count,
+                )?;
+                if content.is_empty() {
+                    continue;
+                }
+                out.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
         }
-        total_bytes = total_bytes.saturating_add(content.len());
-        if total_bytes > MAX_AGENT_INPUT_BYTES {
-            return Err(format!(
-                "chat input exceeds {MAX_AGENT_INPUT_BYTES} byte limit"
-            ));
-        }
-        out.push(json!({
-            "role": role,
-            "content": content,
-        }));
     }
     if out.is_empty() {
         return Err("message is required".to_string());
     }
     Ok(out)
+}
+
+fn normalize_chat_content_parts(
+    parts: Vec<AgentChatContentPart>,
+    text_bytes: &mut usize,
+    wire_bytes: &mut usize,
+    image_count: &mut usize,
+) -> Result<Vec<Value>, String> {
+    let mut normalized = Vec::new();
+    for part in parts {
+        match part {
+            AgentChatContentPart::Text { text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                add_agent_text_bytes(text_bytes, text.len())?;
+                add_agent_wire_bytes(wire_bytes, text.len())?;
+                normalized.push(json!({ "type": "text", "text": text }));
+            }
+            AgentChatContentPart::ImageUrl { image_url } => {
+                *image_count += 1;
+                if *image_count > MAX_AGENT_IMAGES {
+                    return Err(format!("chat contains more than {MAX_AGENT_IMAGES} images"));
+                }
+                add_agent_wire_bytes(wire_bytes, image_url.url.len())?;
+                validate_agent_image_data_url(&image_url.url)?;
+                let detail = image_url.detail.as_deref().unwrap_or("auto");
+                if !matches!(detail, "auto" | "low" | "high") {
+                    return Err("image detail must be auto, low, or high".to_string());
+                }
+                normalized.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": image_url.url, "detail": detail },
+                }));
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn add_agent_text_bytes(total: &mut usize, bytes: usize) -> Result<(), String> {
+    *total = total.saturating_add(bytes);
+    if *total > MAX_AGENT_INPUT_BYTES {
+        return Err(format!(
+            "chat input exceeds {MAX_AGENT_INPUT_BYTES} byte limit"
+        ));
+    }
+    Ok(())
+}
+
+fn add_agent_wire_bytes(total: &mut usize, bytes: usize) -> Result<(), String> {
+    *total = total.saturating_add(bytes);
+    if *total > MAX_AGENT_WIRE_INPUT_BYTES {
+        return Err(format!(
+            "chat wire input exceeds {MAX_AGENT_WIRE_INPUT_BYTES} byte limit"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_agent_image_data_url(url: &str) -> Result<(), String> {
+    let (prefix, encoded) = url
+        .split_once(',')
+        .ok_or_else(|| "image must be a base64 data URL".to_string())?;
+    let extension = match prefix {
+        "data:image/png;base64" => "png",
+        "data:image/jpeg;base64" => "jpg",
+        "data:image/gif;base64" => "gif",
+        "data:image/webp;base64" => "webp",
+        _ => return Err("images must be PNG, JPEG, GIF, or WebP base64 data URLs".to_string()),
+    };
+    if encoded.is_empty() || encoded.len() > MAX_AGENT_IMAGE_BYTES.saturating_mul(4) / 3 + 4 {
+        return Err(format!(
+            "image exceeds the {MAX_AGENT_IMAGE_BYTES} byte limit"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "image contains invalid base64 data".to_string())?;
+    if bytes.len() > MAX_AGENT_IMAGE_BYTES {
+        return Err(format!(
+            "image exceeds the {MAX_AGENT_IMAGE_BYTES} byte limit"
+        ));
+    }
+    crate::commands::attachments::validate_image_upload(&bytes, extension)?;
+    Ok(())
 }
 
 fn message_content_text(value: &Value) -> Option<String> {
@@ -1028,6 +1329,10 @@ fn parse_sse_event<Event>(
 where
     Event: FnMut(AgentStreamEvent) -> Result<(), String>,
 {
+    let event_name = event.lines().find_map(|line| {
+        let line = line.trim_end_matches('\r');
+        line.strip_prefix("event:").map(str::trim)
+    });
     let data = event
         .lines()
         .filter_map(|line| {
@@ -1048,6 +1353,9 @@ where
         serde_json::from_str(data).map_err(|e| format!("parse chat stream failed: {e}"))?;
     if let Some(err) = upstream_error_message(&parsed) {
         return Err(err);
+    }
+    if event_name == Some("hermes.tool.progress") {
+        return parse_hermes_tool_progress(&parsed, on_event);
     }
     let mut produced = false;
     if let Some(reasoning) = parsed
@@ -1095,7 +1403,135 @@ where
     if let Some(tool_calls) = parsed.pointer("/choices/0/message/tool_calls") {
         produced |= parse_tool_calls(tool_calls, state, on_event)?;
     }
+    if let Some(usage) = token_usage_from_payload(&parsed) {
+        on_event(AgentStreamEvent::usage(usage))?;
+    }
     Ok(produced)
+}
+
+fn parse_hermes_tool_progress<Event>(payload: &Value, on_event: &mut Event) -> Result<bool, String>
+where
+    Event: FnMut(AgentStreamEvent) -> Result<(), String>,
+{
+    let Some(tool_call_id) = payload
+        .get("toolCallId")
+        .or_else(|| payload.get("tool_call_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(tool_name) = payload
+        .get("tool")
+        .or_else(|| payload.get("toolName"))
+        .or_else(|| payload.get("tool_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let tool_call_id = truncate(tool_call_id, 256);
+    let tool_name = truncate(tool_name, 128);
+
+    match status {
+        "running" => {
+            let title = payload
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| truncate(value, 240));
+            on_event(AgentStreamEvent::tool_input_available(
+                tool_call_id,
+                tool_name,
+                json!({}),
+                title,
+            ))?;
+            Ok(true)
+        }
+        "completed" => {
+            on_event(AgentStreamEvent::tool_output_available(
+                tool_call_id,
+                Value::Null,
+            ))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn token_usage_from_payload(payload: &Value) -> Option<AgentTokenUsage> {
+    let usage = payload.get("usage")?;
+    let input_tokens = first_u64(
+        usage,
+        &[
+            "/input_tokens",
+            "/inputTokens",
+            "/prompt_tokens",
+            "/promptTokens",
+        ],
+    );
+    let output_tokens = first_u64(
+        usage,
+        &[
+            "/output_tokens",
+            "/outputTokens",
+            "/completion_tokens",
+            "/completionTokens",
+        ],
+    );
+    let total_tokens = first_u64(usage, &["/total_tokens", "/totalTokens"])
+        .or_else(|| input_tokens?.checked_add(output_tokens?));
+    let reasoning_tokens = first_u64(
+        usage,
+        &[
+            "/reasoning_tokens",
+            "/reasoningTokens",
+            "/completion_tokens_details/reasoning_tokens",
+            "/completionTokensDetails/reasoningTokens",
+            "/output_tokens_details/reasoning_tokens",
+            "/outputTokensDetails/reasoningTokens",
+        ],
+    );
+    let cached_input_tokens = first_u64(
+        usage,
+        &[
+            "/cached_input_tokens",
+            "/cachedInputTokens",
+            "/prompt_tokens_details/cached_tokens",
+            "/promptTokensDetails/cachedTokens",
+            "/input_tokens_details/cached_tokens",
+            "/inputTokensDetails/cachedTokens",
+        ],
+    );
+    if input_tokens.is_none()
+        && output_tokens.is_none()
+        && total_tokens.is_none()
+        && reasoning_tokens.is_none()
+        && cached_input_tokens.is_none()
+    {
+        return None;
+    }
+    Some(AgentTokenUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        reasoning_tokens,
+        cached_input_tokens,
+    })
+}
+
+fn first_u64(value: &Value, pointers: &[&str]) -> Option<u64> {
+    pointers
+        .iter()
+        .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
 }
 
 fn parse_tool_calls<Event>(
@@ -1297,6 +1733,7 @@ fn parse_message_blocks(body: &str) -> anyhow::Result<Vec<AgentVaultMessage>> {
             role: meta.role,
             created_at: meta.created,
             content: trim_surrounding_newlines(&after_header[..message_end]).to_string(),
+            agent_run_id: meta.agent_run_id,
         });
         rest = &after_header[message_end + MESSAGE_END.len()..];
     }
@@ -1316,6 +1753,7 @@ fn serialize_message_block(message: &AgentVaultMessage) -> String {
         } else {
             message.created_at.clone()
         },
+        agent_run_id: message.agent_run_id.clone(),
     };
     let yaml = serde_yaml::to_string(&meta).unwrap_or_else(|_| {
         "id: msg-invalid\nrole: assistant\ncreated: 1970-01-01T00:00:00Z\n".to_string()
@@ -1395,6 +1833,45 @@ mod tests {
     }
 
     #[test]
+    fn defaults_to_the_default_hermes_profile() {
+        let meta = HermesConfigMeta::default();
+
+        assert_eq!(meta.base_url, "http://127.0.0.1:8642/v1");
+        assert_eq!(meta.model, "hermes-agent");
+    }
+
+    #[test]
+    fn migrates_the_legacy_cadence_defaults() {
+        let mut meta = HermesConfigMeta {
+            display_name: "Custom agent".to_string(),
+            base_url: "http://127.0.0.1:8644/v1".to_string(),
+            model: "cadence".to_string(),
+            session_key: "woodshed".to_string(),
+            api_key: None,
+            api_key_configured: true,
+        };
+
+        assert!(migrate_legacy_default_profile(&mut meta));
+        assert_eq!(meta.display_name, "Custom agent");
+        assert_eq!(meta.base_url, DEFAULT_BASE_URL);
+        assert_eq!(meta.model, DEFAULT_MODEL);
+        assert!(meta.api_key_configured);
+    }
+
+    #[test]
+    fn preserves_explicit_custom_agent_config() {
+        let mut meta = HermesConfigMeta {
+            base_url: "http://127.0.0.1:8644/v1".to_string(),
+            model: "custom-route".to_string(),
+            ..HermesConfigMeta::default()
+        };
+
+        assert!(!migrate_legacy_default_profile(&mut meta));
+        assert_eq!(meta.base_url, "http://127.0.0.1:8644/v1");
+        assert_eq!(meta.model, "custom-route");
+    }
+
+    #[test]
     fn normalize_base_url_rejects_embedded_secrets_and_ambiguous_suffixes() {
         for url in [
             "file:///tmp/hermes.sock",
@@ -1414,9 +1891,286 @@ mod tests {
     fn normalize_chat_messages_enforces_request_budget() {
         let oversized = AgentChatMessage {
             role: "user".to_string(),
-            content: "x".repeat(MAX_AGENT_INPUT_BYTES + 1),
+            content: "x".repeat(MAX_AGENT_INPUT_BYTES + 1).into(),
         };
         assert!(normalize_chat_messages(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_accepts_bounded_image_data_urls() {
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe this image." },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                        "detail": "auto"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        let normalized = normalize_chat_messages(vec![message]).unwrap();
+        assert_eq!(normalized[0]["content"][0]["text"], "Describe this image.");
+        assert_eq!(normalized[0]["content"][1]["type"], "image_url");
+    }
+
+    #[test]
+    fn normalize_chat_messages_rejects_remote_image_urls() {
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "https://example.test/private.png" }
+            }]
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![message]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_rejects_invalid_and_oversized_images() {
+        let invalid_signature: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,AA==" }
+            }]
+        }))
+        .unwrap();
+        assert!(normalize_chat_messages(vec![invalid_signature]).is_err());
+
+        let oversized_data =
+            base64::engine::general_purpose::STANDARD.encode(vec![0_u8; MAX_AGENT_IMAGE_BYTES + 1]);
+        let oversized: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:image/png;base64,{oversized_data}")
+                }
+            }]
+        }))
+        .unwrap();
+        assert!(normalize_chat_messages(vec![oversized]).is_err());
+    }
+
+    #[test]
+    fn normalize_chat_messages_allows_four_images_at_the_per_file_limit() {
+        let mut image = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .unwrap();
+        image.resize(MAX_AGENT_IMAGE_BYTES, 0);
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(image)
+        );
+        let parts = (0..MAX_AGENT_IMAGES)
+            .map(|_| {
+                json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url }
+                })
+            })
+            .collect::<Vec<_>>();
+        let message: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": parts
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![message]).is_ok());
+    }
+
+    #[test]
+    fn normalize_chat_messages_limits_images_across_the_complete_request() {
+        let image = json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            }
+        });
+        let first: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [image.clone(), image.clone(), image.clone()]
+        }))
+        .unwrap();
+        let second: AgentChatMessage = serde_json::from_value(json!({
+            "role": "user",
+            "content": [image.clone(), image]
+        }))
+        .unwrap();
+
+        assert!(normalize_chat_messages(vec![first, second]).is_err());
+    }
+
+    #[test]
+    fn stream_read_failures_are_presented_as_recoverable_agent_errors() {
+        let message = stream_read_failure_message();
+
+        assert!(message.contains("ended its response unexpectedly"));
+        assert!(message.contains("saved as failed"));
+        assert!(!message.contains("error decoding response body"));
+    }
+
+    #[tokio::test]
+    async fn active_stream_can_outlive_its_idle_timeout_window() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            for payload in [
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Still \"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"working\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            ] {
+                let chunk = format!("{:x}\r\n{payload}\r\n", payload.len());
+                if socket.write_all(chunk.as_bytes()).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        });
+
+        let config = HermesConfigMeta {
+            base_url: format!("http://{address}/v1"),
+            ..HermesConfigMeta::default()
+        };
+        let input = AgentChatInput {
+            conversation_id: "synthetic-stream".to_string(),
+            messages: vec![AgentChatMessage {
+                role: "user".to_string(),
+                content: "Keep streaming synthetic output.".into(),
+            }],
+        };
+        let mut started = false;
+        let mut output = String::new();
+        let result = chat_completion_stream_with_timeouts(
+            &config,
+            "synthetic-key",
+            input,
+            &mut || {
+                started = true;
+                Ok(())
+            },
+            &mut |event| {
+                if event.kind == "delta" {
+                    output.push_str(event.delta.as_deref().unwrap_or_default());
+                }
+                Ok(())
+            },
+            Duration::from_millis(200),
+            Duration::from_millis(200),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert!(result.is_ok(), "active stream failed: {result:?}");
+        assert!(started);
+        assert_eq!(output, "Still working");
+    }
+
+    #[tokio::test]
+    async fn silent_stream_times_out_without_discarding_the_process() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        let config = HermesConfigMeta {
+            base_url: format!("http://{address}/v1"),
+            ..HermesConfigMeta::default()
+        };
+        let result = chat_completion_stream_with_timeouts(
+            &config,
+            "synthetic-key",
+            synthetic_chat_input(),
+            &mut || Ok(()),
+            &mut |_| Ok(()),
+            Duration::from_millis(50),
+            Duration::from_millis(20),
+        )
+        .await;
+        server.await.unwrap();
+
+        assert_eq!(result.unwrap_err(), stream_idle_timeout_message());
+    }
+
+    #[tokio::test]
+    async fn response_headers_and_error_bodies_are_bounded() {
+        use tokio::io::AsyncWriteExt;
+
+        for (headers, expected_error) in [
+            (None, "did not start its response within 30 seconds"),
+            (
+                Some(
+                    b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                        .as_slice(),
+                ),
+                "error response timed out",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                if let Some(headers) = headers {
+                    socket.write_all(headers).await.unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            });
+            let config = HermesConfigMeta {
+                base_url: format!("http://{address}/v1"),
+                ..HermesConfigMeta::default()
+            };
+            let result = chat_completion_stream_with_timeouts(
+                &config,
+                "synthetic-key",
+                synthetic_chat_input(),
+                &mut || Ok(()),
+                &mut |_| Ok(()),
+                Duration::from_millis(20),
+                Duration::from_millis(50),
+            )
+            .await;
+            server.await.unwrap();
+
+            let error = result.unwrap_err();
+            assert!(error.contains(expected_error), "got: {error}");
+        }
+    }
+
+    fn synthetic_chat_input() -> AgentChatInput {
+        AgentChatInput {
+            conversation_id: "synthetic-stream".to_string(),
+            messages: vec![AgentChatMessage {
+                role: "user".to_string(),
+                content: "Keep streaming synthetic output.".into(),
+            }],
+        }
     }
 
     #[test]
@@ -1547,6 +2301,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_event_normalizes_token_usage() {
+        let mut events = Vec::new();
+        let mut state = StreamParseState::default();
+        let mut on_event = |event: AgentStreamEvent| {
+            events.push(event);
+            Ok(())
+        };
+
+        let produced = parse_sse_event(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":345,\"total_tokens\":1545,\"prompt_tokens_details\":{\"cached_tokens\":200},\"completion_tokens_details\":{\"reasoning_tokens\":45}}}",
+            &mut state,
+            &mut on_event,
+        )
+        .unwrap();
+
+        assert!(!produced, "usage alone is not visible assistant content");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "usage");
+        assert_eq!(events[0].usage.as_ref().unwrap().input_tokens, Some(1200));
+        assert_eq!(events[0].usage.as_ref().unwrap().output_tokens, Some(345));
+        assert_eq!(events[0].usage.as_ref().unwrap().total_tokens, Some(1545));
+        assert_eq!(
+            events[0].usage.as_ref().unwrap().cached_input_tokens,
+            Some(200)
+        );
+        assert_eq!(events[0].usage.as_ref().unwrap().reasoning_tokens, Some(45));
+    }
+
+    #[test]
     fn parse_sse_event_forwards_streamed_tool_calls() {
         let mut events = Vec::new();
         let mut state = StreamParseState::default();
@@ -1585,6 +2368,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_sse_event_forwards_hermes_tool_progress_lifecycle() {
+        let mut events = Vec::new();
+        let mut state = StreamParseState::default();
+        {
+            let mut on_event = |event: AgentStreamEvent| {
+                events.push(event);
+                Ok(())
+            };
+
+            let started = parse_sse_event(
+                "event: hermes.tool.progress\ndata: {\"tool\":\"web_search\",\"label\":\"Search the weekly forecast\",\"toolCallId\":\"call_weather\",\"status\":\"running\"}",
+                &mut state,
+                &mut on_event,
+            )
+            .unwrap();
+            let completed = parse_sse_event(
+                "event: hermes.tool.progress\ndata: {\"tool\":\"web_search\",\"toolCallId\":\"call_weather\",\"status\":\"completed\"}",
+                &mut state,
+                &mut on_event,
+            )
+            .unwrap();
+
+            assert!(started);
+            assert!(completed);
+        }
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "tool-input-available");
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("call_weather"));
+        assert_eq!(events[0].tool_name.as_deref(), Some("web_search"));
+        assert_eq!(
+            events[0].title.as_deref(),
+            Some("Search the weekly forecast")
+        );
+        assert_eq!(events[0].input, Some(json!({})));
+        assert_eq!(events[1].kind, "tool-output-available");
+        assert_eq!(events[1].tool_call_id.as_deref(), Some("call_weather"));
+    }
+
+    #[test]
     fn agent_chat_markdown_round_trips_messages() {
         let chat = AgentChatRecord {
             id: "agent-01h".to_string(),
@@ -1606,12 +2429,14 @@ mod tests {
                     role: "user".to_string(),
                     created_at: "2026-06-13T12:00:00-07:00".to_string(),
                     content: "Find loose threads.".to_string(),
+                    agent_run_id: None,
                 },
                 AgentVaultMessage {
                     id: "m2".to_string(),
                     role: "assistant".to_string(),
                     created_at: "2026-06-13T12:01:00-07:00".to_string(),
                     content: "Start with [[Woodshed]].".to_string(),
+                    agent_run_id: Some("agent-run-synthetic".to_string()),
                 },
             ],
         };
@@ -1619,6 +2444,10 @@ mod tests {
         assert!(raw.contains("type: agent_chat"));
         let parsed = parse_chat(&raw, "agent/agent-01h.md").unwrap();
         assert_eq!(parsed.title, "Loose threads");
+        assert_eq!(
+            parsed.messages[1].agent_run_id.as_deref(),
+            Some("agent-run-synthetic")
+        );
         assert!(parsed.pinned);
         let context = parsed.context.expect("context round-trips");
         assert_eq!(context.title, "June 20, 2026");
@@ -1646,8 +2475,8 @@ mod tests {
         let parsed: HermesConfigMeta = serde_json::from_str(&raw).unwrap();
         assert!(parsed.api_key.is_none());
 
-        let public = public_config(parsed, CredentialSource::Missing);
-        assert!(public.has_api_key);
+        let public = public_config(parsed, CredentialSource::Missing, None);
+        assert!(!public.has_api_key);
         assert_eq!(public.credential_source, CredentialSource::Missing);
         let public_raw = serde_json::to_string(&public).unwrap();
         let public_serialized: serde_json::Value = serde_json::from_str(&public_raw).unwrap();

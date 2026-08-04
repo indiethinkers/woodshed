@@ -81,6 +81,86 @@ describe("ComposeDialog", () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  it("addresses Reply All to every participant except the connected account", () => {
+    render(
+      <ComposeDialog
+        open
+        mode={{
+          kind: "replyAll",
+          source: {
+            id: "source-message@example.test",
+            messageId: "source-message@example.test",
+            threadId: "synthetic-thread",
+            from: "Originator",
+            fromEmail: "originator@example.test",
+            to: [
+              "sender@example.test",
+              "collaborator@example.test",
+              "originator@example.test",
+            ],
+            cc: ["observer@example.test", "sender@example.test"],
+            subject: "Synthetic discussion",
+            body: "A synthetic message body.",
+            html: null,
+            preview: "A synthetic message body.",
+            date: "2026-07-28T10:00:00Z",
+            read: true,
+            labels: ["inbox", "read"],
+            mentions: [],
+            links: [],
+            inbox: "gmail:sender@example.test",
+            path: "inbox/source.md",
+            attachments: [],
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("someone@example.com")).toHaveValue(
+      "originator@example.test, collaborator@example.test",
+    );
+    expect(
+      screen.getByText("Cc").parentElement?.querySelector("input"),
+    ).toHaveValue("observer@example.test");
+  });
+
+  it("replies to the other participant when the selected message was sent by the user", () => {
+    render(
+      <ComposeDialog
+        open
+        mode={{
+          kind: "reply",
+          source: {
+            id: "sent-message@example.test",
+            threadId: "synthetic-thread",
+            from: "Connected User",
+            fromEmail: "sender@example.test",
+            to: ["recipient@example.test"],
+            cc: [],
+            subject: "Synthetic discussion",
+            body: "A sent message.",
+            html: null,
+            preview: "A sent message.",
+            date: "2026-07-28T10:00:00Z",
+            read: true,
+            labels: ["sent", "read"],
+            mentions: [],
+            links: [],
+            inbox: "gmail:sender@example.test",
+            path: "sent/source.md",
+            attachments: [],
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("someone@example.com")).toHaveValue(
+      "recipient@example.test",
+    );
+  });
+
   it("can expand and send user-selected attachments", async () => {
     render(
       <ComposeDialog

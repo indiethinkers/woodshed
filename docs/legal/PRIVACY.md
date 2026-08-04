@@ -1,6 +1,6 @@
 # Woodshed privacy notice
 
-**Effective:** July 26, 2026 · **Last updated:** August 1, 2026
+**Effective:** July 26, 2026 · **Last updated:** August 4, 2026
 
 This notice describes the behavior of the open-source Woodshed desktop
 application in this repository. A third party that distributes a modified
@@ -11,9 +11,10 @@ build is responsible for documenting any behavior it adds or changes.
 Woodshed is local-first. It has no Woodshed account, analytics, advertising,
 crash-reporting service, or Woodshed-operated backend. Your vault and local
 caches stay on your computer. Configured integrations make direct network
-requests when you invoke them. Displaying a YouTube embed loads YouTube's
-standard player, and opening an HTML email loads its remote images by default
-through Woodshed's bounded cache.
+requests when you invoke them or while foreground mail/calendar polling is
+enabled. Displaying a YouTube embed loads YouTube's standard player, and opening
+an HTML email loads its remote images by default through Woodshed's bounded
+cache.
 
 ## Data stored on your device
 
@@ -26,11 +27,17 @@ through Woodshed's bounded cache.
   SQLite search index, a rebuildable iCal event cache, durable Agent run records,
   and rotating local logs. Agent run records include submitted message context,
   progress events, final responses, and errors so a request can survive page
-  navigation or reload.
+  navigation or reload. A selected image is temporarily included in its queued
+  run as a base64 data URL, then removed from that record when the worker copies
+  it for dispatch or the run otherwise becomes terminal. When the configured
+  provider reports token usage, Woodshed stores it as a progress event in the
+  corresponding run record.
 - Gmail App Passwords and custom Hermes bearer keys are stored in an owner-only
   (`0600`) plaintext file in the application-data directory, protected by
-  operating-system account isolation and disk encryption. Local Hermes keys are
-  read from the matching Hermes profile without being copied into Woodshed.
+  operating-system account isolation and disk encryption. The standard local
+  connection reads the active Hermes profile's key from its bounded `.env` or
+  `config.yaml`; an explicit custom loopback endpoint reads the profile owning
+  that port. Neither key is copied into Woodshed.
   Google Calendar secret iCal URLs are stored in the operating-system credential
   store. Legacy plaintext configuration values are migrated and scrubbed on
   first use.
@@ -44,14 +51,23 @@ encryption and a backup strategy appropriate for the sensitivity of your data.
 ## Direct integrations
 
 Woodshed communicates directly with the following services. Most network
-actions require a configured integration and an explicit command. YouTube
-embeds and remote email images are the exceptions described below.
+actions require a configured integration and an explicit command. Mail and
+calendar refresh also runs every five minutes by default while Woodshed is
+running; Settings can change the interval or select Manual. YouTube embeds and
+remote email images are the
+other exceptions described below.
 
-- **Gmail:** IMAP reads inbox content and synchronizes read/archive state; SMTP
-  sends mail, replies, and user-selected attachments. Synced messages and
-  attachment copies are written to the local vault.
-- **Google Calendar or another iCal host:** an explicit Sync downloads the
-  configured read-only calendar feed and writes a derived local cache.
+- **Gmail:** IMAP reads inbox and sent content and synchronizes read/archive
+  state; SMTP sends mail, replies, and user-selected attachments. Synced
+  messages and attachment copies are written to the local vault. If automatic
+  refresh is enabled, IMAP polling runs at the selected interval while
+  Woodshed is running; the navigation rail indicates only whether unread mail
+  exists, without showing sender, subject, account, or message content.
+  A snooze you create also authorizes Woodshed to restore that message through
+  IMAP when its locally stored deadline becomes due while the app is running.
+- **Google Calendar or another iCal host:** an explicit Sync—or the optional
+  foreground refresh interval—downloads the configured read-only calendar feed
+  and writes a derived local cache.
 - **Resource capture:** saving a URL downloads that public page and, for
   supported providers, an oEmbed response. If an X oEmbed response contains an
   incomplete long-form preview, Woodshed sends the public numeric post id to
@@ -67,10 +83,17 @@ embeds and remote email images are the exceptions described below.
   default through Woodshed's bounded public-network cache. Sender HTML never
   fetches the URLs directly. Loading an image can reveal your IP address and
   time of access to the image host.
-- **Hermes-compatible agent endpoint:** an explicit agent command sends the
-  selected instruction and relevant vault or email content directly to the
-  endpoint you configured. Proposed record creation and mail archive actions
-  require confirmation.
+- **Hermes-compatible agent endpoint:** Woodshed's standard local connection
+  follows the active Hermes profile, including its configured API port and
+  advertised gateway model. Switch profiles or change the model or provider in
+  Hermes; Woodshed displays connection status without managing them. An
+  explicit agent command sends the selected instruction and relevant vault or
+  email content directly to that endpoint, or to an explicitly configured
+  custom endpoint. Proposed record creation and mail archive actions require
+  confirmation. User-selected PDF and text attachments are converted to bounded
+  text locally. Selected PNG, JPEG, GIF, and WebP images are sent as bounded
+  multimodal image data after local validation. The endpoint receives that text
+  or those image pixels, not the original file path.
 These providers receive requests directly from your device and handle them
 under their own terms. Woodshed does not proxy or retain a server-side copy.
 
@@ -85,7 +108,9 @@ sharing them publicly.
 ## Retention and deletion
 
 Vault records persist until you remove them. Agent run records currently persist
-in the application-data directory until that directory is removed. Retired
+in the application-data directory until that directory is removed, except raw
+image payloads, which are released when dispatch begins or the run otherwise
+becomes terminal. Retired
 Sweep-card Markdown created by older builds remains in the vault's `sweep/`
 directory until you inspect, move, or delete it; current builds do not use or
 remove those files. In-app record deletion moves files to `.woodshed/trash/`

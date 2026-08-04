@@ -25,23 +25,25 @@
 
 use crate::gmail::creds::Credentials;
 use crate::gmail::imap_client::ImapError;
+use crate::gmail::{IMAP_HOST, IMAP_PORT};
 use crate::sync_ext::MutexRecover;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub type ImapSessionInner = imap::Session<native_tls::TlsStream<std::net::TcpStream>>;
 
-const HOST: &str = "imap.gmail.com";
-const PORT: u16 = 993;
-
 pub struct GmailImapPool {
     sessions: Mutex<HashMap<String, Arc<Mutex<ImapSessionInner>>>>,
+    sent_mailboxes: Mutex<HashMap<String, Option<String>>>,
+    all_mailboxes: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl GmailImapPool {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            sent_mailboxes: Mutex::new(HashMap::new()),
+            all_mailboxes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -90,6 +92,8 @@ impl GmailImapPool {
     /// `gmail_account_clear` so disconnecting an account doesn't leak
     /// a live IMAP socket.
     pub fn forget(&self, email: &str) {
+        self.sent_mailboxes.lock_recover().remove(email);
+        self.all_mailboxes.lock_recover().remove(email);
         let removed = {
             let mut map = self.sessions.lock_recover();
             map.remove(email)
@@ -102,6 +106,26 @@ impl GmailImapPool {
                 let _ = session.logout();
             }
         }
+    }
+
+    pub(crate) fn cached_sent_mailbox(&self, email: &str) -> Option<Option<String>> {
+        self.sent_mailboxes.lock_recover().get(email).cloned()
+    }
+
+    pub(crate) fn remember_sent_mailbox(&self, email: &str, mailbox: Option<String>) {
+        self.sent_mailboxes
+            .lock_recover()
+            .insert(email.to_string(), mailbox);
+    }
+
+    pub(crate) fn cached_all_mailbox(&self, email: &str) -> Option<Option<String>> {
+        self.all_mailboxes.lock_recover().get(email).cloned()
+    }
+
+    pub(crate) fn remember_all_mailbox(&self, email: &str, mailbox: Option<String>) {
+        self.all_mailboxes
+            .lock_recover()
+            .insert(email.to_string(), mailbox);
     }
 
     fn acquire(&self, creds: &Credentials) -> Result<Arc<Mutex<ImapSessionInner>>, ImapError> {
@@ -162,7 +186,7 @@ impl Default for GmailImapPool {
 
 fn connect_and_login(creds: &Credentials) -> Result<ImapSessionInner, ImapError> {
     let tls = native_tls::TlsConnector::builder().build()?;
-    let client = imap::connect((HOST, PORT), HOST, &tls)?;
+    let client = imap::connect((IMAP_HOST, IMAP_PORT), IMAP_HOST, &tls)?;
     let mut session =
         client
             .login(&creds.email, &creds.app_password)

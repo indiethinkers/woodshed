@@ -32,6 +32,10 @@ pub struct ParsedMessage {
     pub from: String,
     /// Sender address.
     pub from_email: String,
+    /// Bare recipient addresses from the To header.
+    pub to: Vec<String>,
+    /// Bare recipient addresses from the Cc header.
+    pub cc: Vec<String>,
     pub subject: String,
     /// Plaintext body. If the message is HTML-only, we pass the HTML
     /// through and let the caller decide whether to surface or strip it.
@@ -75,6 +79,8 @@ pub fn parse(raw: &RawMessage) -> ParsedMessage {
         subject,
         from,
         from_email,
+        to,
+        cc,
         body,
         html,
         message_id,
@@ -86,6 +92,8 @@ pub fn parse(raw: &RawMessage) -> ParsedMessage {
             let subject = m.subject().unwrap_or_default().to_string();
 
             let (from_name, from_addr) = first_address(m.from());
+            let to = addresses(m.to());
+            let cc = addresses(m.cc());
             // Plaintext: prefer `body_text`, walk parts as fallback.
             let body = m.body_text(0).map(|s| s.into_owned()).unwrap_or_default();
             let html = m.body_html(0).map(|s| s.into_owned());
@@ -116,6 +124,8 @@ pub fn parse(raw: &RawMessage) -> ParsedMessage {
                 subject,
                 from_name,
                 from_addr,
+                to,
+                cc,
                 body,
                 html,
                 message_id,
@@ -128,6 +138,8 @@ pub fn parse(raw: &RawMessage) -> ParsedMessage {
             String::new(),
             String::new(),
             String::new(),
+            Vec::new(),
+            Vec::new(),
             String::new(),
             None,
             String::new(),
@@ -149,6 +161,8 @@ pub fn parse(raw: &RawMessage) -> ParsedMessage {
         thread_root_message_id,
         from,
         from_email,
+        to,
+        cc,
         subject,
         body,
         html,
@@ -226,6 +240,17 @@ fn first_address(addr: Option<&Address<'_>>) -> (String, String) {
     (String::new(), String::new())
 }
 
+fn addresses(addr: Option<&Address<'_>>) -> Vec<String> {
+    addr.and_then(Address::as_list)
+        .into_iter()
+        .flatten()
+        .filter_map(|address| address.address())
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,7 +270,8 @@ mod tests {
     #[test]
     fn parses_plaintext_message() {
         let bytes = b"From: \"Alex Rivera\" <alex@example.com>\r\n\
-                      To: me@example.com\r\n\
+                      To: me@example.com, Teammate <teammate@example.test>\r\n\
+                      Cc: Observer <observer@example.test>\r\n\
                       Subject: Lunch?\r\n\
                       Message-ID: <abc123@mail.gmail.com>\r\n\
                       Date: Mon, 8 May 2026 10:30:00 -0700\r\n\
@@ -256,6 +282,8 @@ mod tests {
         assert_eq!(p.subject, "Lunch?");
         assert_eq!(p.from, "Alex Rivera");
         assert_eq!(p.from_email, "alex@example.com");
+        assert_eq!(p.to, vec!["me@example.com", "teammate@example.test"]);
+        assert_eq!(p.cc, vec!["observer@example.test"]);
         assert_eq!(p.message_id, "abc123@mail.gmail.com");
         assert!(p.body.contains("12:30"));
     }

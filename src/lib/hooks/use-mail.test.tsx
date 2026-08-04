@@ -19,7 +19,13 @@ vi.mock("@/lib/tauri", () => ({
   tauriInvoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useArchiveOne, useMail, useMarkRead } from "./use-mail";
+import {
+  useArchiveOne,
+  useHasUnreadMail,
+  useMail,
+  useMarkRead,
+  useRefreshMail,
+} from "./use-mail";
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -64,6 +70,73 @@ function cachedEmails(qc: QueryClient): EmailSummary[] | undefined {
     ?.pages.flatMap((page) => page.items);
 }
 
+describe("useHasUnreadMail", () => {
+  it("reads the bounded aggregate unread count", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    invokeMock.mockResolvedValueOnce(2);
+
+    const { result } = renderHook(() => useHasUnreadMail(), {
+      wrapper: makeWrapper(qc),
+    });
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(invokeMock).toHaveBeenCalledWith("mail_inbox_unread_count");
+  });
+});
+
+describe("useRefreshMail", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("invalidates open thread data after Sent Mail synchronization", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["thread", email.threadId], [email]);
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "gmail_accounts_list") {
+        return Promise.resolve([
+          {
+            inboxId: email.inbox,
+            email: "alex@example.test",
+            displayName: "Synthetic account",
+            createdAt: "2026-08-03T12:00:00Z",
+          },
+        ]);
+      }
+      if (command === "gmail_sync_recent") {
+        return Promise.resolve({
+          written: [],
+          newMessages: 0,
+          fetched: 0,
+          removed: 0,
+          durationMs: 1,
+          email: "alex@example.test",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { result } = renderHook(() => useRefreshMail(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(qc.getQueryState(["thread", email.threadId])?.isInvalidated).toBe(
+      true,
+    );
+  });
+});
+
 describe("useMarkRead", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -78,6 +151,7 @@ describe("useMarkRead", () => {
     });
     const email = makeEmail();
     qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 1);
     qc.setQueryData(["email", email.id], email);
     qc.setQueryData(["thread", email.threadId], [email]);
     qc.setQueryData(["email-full", email.id, email.inbox], {
@@ -95,6 +169,7 @@ describe("useMarkRead", () => {
       await result.current(email.id);
     });
 
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(0);
     expect(cachedEmails(qc)?.[0]).toMatchObject({ read: true });
     expect(qc.getQueryData<EmailSummary>(["email", email.id])).toMatchObject({
       read: true,
@@ -185,6 +260,7 @@ describe("useMarkRead", () => {
     });
     const email = makeEmail();
     qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
 
     let finishSync!: () => void;
     invokeMock.mockImplementationOnce(
@@ -204,11 +280,83 @@ describe("useMarkRead", () => {
       second = result.current(email.id);
     });
 
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
     await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
     await act(async () => {
       finishSync();
       await Promise.all([first, second]);
     });
+  });
+
+  it("decrements once when mark-read overlaps an archive", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
+    invokeMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => ({ markRead: useMarkRead(), archive: useArchiveOne() }),
+      { wrapper: makeWrapper(qc) },
+    );
+
+    let markRead!: Promise<void>;
+    let archive!: Promise<void>;
+    act(() => {
+      markRead = result.current.markRead(email.id);
+      archive = result.current.archive(email.id);
+    });
+
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
+    await act(async () => {
+      await Promise.all([markRead, archive]);
+    });
+  });
+
+  it("ignores an older unread-count result after marking read", async () => {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const email = makeEmail();
+    qc.setQueryData(["emails"], makeMailData(email));
+    qc.setQueryData(["mail-unread-count"], 2);
+
+    let resolveStaleCount!: (count: number) => void;
+    const staleCountRequest = qc
+      .fetchQuery({
+        queryKey: ["mail-unread-count"],
+        queryFn: () =>
+          new Promise<number>((resolve) => {
+            resolveStaleCount = resolve;
+          }),
+        staleTime: 0,
+      })
+      .catch(() => undefined);
+    invokeMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useMarkRead(), {
+      wrapper: makeWrapper(qc),
+    });
+
+    let markRead!: Promise<void>;
+    act(() => {
+      markRead = result.current(email.id);
+    });
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
+
+    resolveStaleCount(2);
+    await act(async () => {
+      await Promise.all([markRead, staleCountRequest]);
+    });
+    expect(qc.getQueryData(["mail-unread-count"])).toBe(1);
   });
 
   it("updates a thread cache that appears while provider sync is pending", async () => {

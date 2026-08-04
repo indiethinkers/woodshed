@@ -63,21 +63,53 @@ conversation id, submitted message context, streamed progress, terminal result,
 and error state. The webview can poll or cancel through narrow commands but does
 not own the network request. Completion writes one deterministic assistant
 message id to the vault transcript, and repeat finalization checks that id before
-writing. After an app restart, a queued or running record with no process-local
-owner becomes a recoverable failure when it is next read.
+writing. The global active-run query considers only process-owned run ids and
+reads at most 20 run records per poll. After an app restart, a queued or running
+record with no process-local owner becomes a recoverable failure when it is next
+read.
 
 Gmail App Passwords and custom Hermes bearer keys live in an atomic, owner-only
 (`0600`) `secrets.json` file under the application-data directory. It is
 plaintext by design and relies on operating-system account isolation and
 full-disk encryption; it is never included in logs, diagnostics, exports, or the
-vault. Local Hermes keys are read from bounded, regular, non-symlink profile
-files, and only for loopback endpoints. Secret iCal URLs remain in the
-operating-system credential store. `config.json` stores only non-secret account
-metadata. Older plaintext fields are accepted solely for one-time migration and
-are skipped during serialization; legacy Gmail and Hermes Keychain entries are
-imported only after a verified write to `secrets.json`.
+vault. The standard local Agent connection follows Hermes's active profile and
+reads its port, advertised gateway model, and key from bounded, regular,
+non-symlink `.env` and `config.yaml` files with environment values taking
+precedence. An unreadable named active profile fails closed rather than routing
+through a different profile. Custom loopback endpoints resolve the profile that
+owns their configured port. Local keys are used only for loopback endpoints.
+Secret iCal URLs remain in the operating-system credential store. `config.json`
+stores only non-secret account metadata. Older plaintext fields are accepted
+solely for one-time migration and are skipped during serialization; legacy Gmail
+and Hermes Keychain entries are imported only after a verified write to
+`secrets.json`.
 
 ## Network policy
+
+Mail and calendar refreshes run on explicit refresh or the foreground polling
+interval selected in Settings. Five minutes is the default; Manual disables it.
+Scheduled refresh stops when Woodshed exits, catches up when the running app
+regains focus, and uses the same bounded Gmail and iCal clients as manual
+refresh. The navigation rail exposes only whether unread mail exists; it does
+not display sender, subject, account, or message contents.
+
+Email snooze restoration is separate from refresh polling: after the user
+chooses a deadline, Woodshed checks local archived records every minute and on
+focus while running. Only a due record triggers the bounded IMAP label update
+that returns it to INBOX; this still runs when refresh is set to Manual.
+
+Agent PDF and text attachments are decoded from the user-selected in-memory data
+URL and converted to bounded text inside the Tauri command boundary. PDF bytes
+cross only stdin into a short-lived Woodshed PDFKit helper process; stdout is
+bounded, and the parent kills and reaps the helper on timeout or protocol error.
+PNG, JPEG, GIF, and WebP attachments are sent to Hermes as OpenAI-compatible
+multimodal data-URL parts only after Rust revalidates their base64, signature,
+dimensions, count, and byte budget; remote image URLs are rejected. Hermes
+receives extracted document text or selected image pixels, never the original
+filesystem path. Image bytes are removed from the durable run record after the
+worker copies them for dispatch or the run otherwise becomes terminal.
+Unsupported, malformed, and oversized attachments fail before an agent run is
+created.
 
 Public resource, calendar, oEmbed, and remote-image fetches:
 
@@ -103,7 +135,8 @@ Network activity inside the frame is controlled by YouTube.
 
 Resource budgets are enforced at ingress: text records and rendered email
 bodies are capped at 16 MiB, raw IMAP messages and calendar feed downloads at
-25 MiB, image uploads at 20 MiB with signature and dimension validation, and
+25 MiB, Agent images at 2 MiB each and four per turn, image uploads at 20 MiB
+with signature and dimension validation, and
 remote email images at 10 MiB each with a 256 MiB cache quota. Calendar caches
 are capped at 100,000 retained events and 128 MiB per account. Both uploaded
 and remote raster images enforce decoded-dimension and total-pixel limits.
@@ -112,17 +145,18 @@ in total; base64, filenames, and content types are validated again inside the
 bounded send command. Agent request, response, attachment, and stream budgets
 are enforced independently.
 
-The Hermes endpoint is user-configured and may intentionally be local, so it is
-not subject to the public-host SSRF rule. Its URL syntax, requests, response
-sizes, stream sizes, and timeouts are still bounded.
+The standard Hermes endpoint follows the active local profile. Explicit custom
+endpoints may also intentionally be local, so Hermes endpoints are not subject
+to the public-host SSRF rule. Their URL syntax, requests, response sizes, stream
+sizes, and timeouts are still bounded.
 
 ## Explicit authority
 
-External writes are initiated by the user. Agent-generated action plans display
-the concrete operation fields—including resource URLs and task scheduling—and
-require confirmation before creating records or archiving mail. Confirmation
-text is normalized and bounded before display, and execution uses those exact
-confirmed values.
+External writes are initiated by the user. Agent-proposed mutations display the
+concrete operation fields—including resource URLs and task scheduling—and require
+confirmation before creating records or archiving mail. Confirmation text is
+normalized and bounded before display, and execution uses those exact confirmed
+values.
 
 ## Residual assumptions
 

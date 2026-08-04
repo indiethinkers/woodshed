@@ -1,13 +1,27 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  pathname: "/",
   refreshCalendars: vi.fn(),
   refreshMail: vi.fn(),
   tauriInvoke: vi.fn(),
   toastError: vi.fn(),
   toastLoading: vi.fn(),
   toastSuccess: vi.fn(),
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, viewTransition: _viewTransition, ...props }: ComponentProps<"a"> & { to: string; viewTransition?: boolean }) => (
+    <a href={to} {...props} />
+  ),
+  useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => string }) =>
+    select({ location: { pathname: mocks.pathname } }),
+}));
+
+vi.mock("@/components/layout/right-sidebar-context-internal", () => ({
+  useRightSidebar: () => ({ open: false, toggleSidebar: vi.fn() }),
 }));
 
 vi.mock("@/lib/hooks/use-gcal", () => ({
@@ -31,9 +45,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { WoodshedRefreshButton } from "./title-bar-actions";
+import { TitleBarActions, WoodshedRefreshButton } from "./title-bar-actions";
 
 beforeEach(() => {
+  mocks.pathname = "/";
   mocks.refreshCalendars.mockReset();
   mocks.refreshCalendars.mockResolvedValue({ accounts: [] });
   mocks.refreshMail.mockReset();
@@ -51,6 +66,19 @@ beforeEach(() => {
   mocks.toastLoading.mockReset();
   mocks.toastLoading.mockReturnValue("refresh-toast");
   mocks.toastSuccess.mockReset();
+});
+
+describe("TitleBarActions", () => {
+  it("places Graph immediately before the appearance toggle", () => {
+    render(<TitleBarActions />);
+
+    const graph = screen.getByRole("link", { name: "Graph" });
+    const appearance = screen.getByRole("button", {
+      name: "Switch to dark mode",
+    });
+    expect(graph).toHaveAttribute("href", "/graph");
+    expect(graph.nextElementSibling).toBe(appearance);
+  });
 });
 
 describe("WoodshedRefreshButton", () => {

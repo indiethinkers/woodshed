@@ -5,7 +5,9 @@ import {
   RefreshCw,
   Search,
   Sun,
+  Waypoints,
 } from "lucide-react";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { useRightSidebar } from "@/components/layout/right-sidebar-context-internal";
 import { useGcalSync } from "@/lib/hooks/use-gcal";
@@ -79,9 +81,33 @@ export function TitleBarActions({ compact = false }: { compact?: boolean }) {
     >
       <SearchTrigger compact={compact} />
       <WoodshedRefreshButton />
+      <GraphButton />
       <ThemeToggle />
       <ReferencesButton />
     </div>
+  );
+}
+
+export function GraphButton() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const active = pathname === "/graph" || pathname.startsWith("/graph/");
+
+  return (
+    <Link
+      aria-current={active ? "page" : undefined}
+      aria-label="Graph"
+      className={cn(
+        titleBarIconButtonClass,
+        active && "bg-foreground/[0.07] text-foreground",
+      )}
+      data-tauri-drag-region="false"
+      data-woodshed-action="navigate:graph"
+      title="Graph"
+      to="/graph"
+      viewTransition
+    >
+      <Waypoints className="h-4 w-4" strokeWidth={1.85} />
+    </Link>
   );
 }
 

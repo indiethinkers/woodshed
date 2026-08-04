@@ -9,7 +9,6 @@ import {
   Database,
   Library,
   Layers,
-  Waypoints,
   Settings,
 } from "lucide-react";
 import { BrandMark } from "@/components/shared/brand-mark";
@@ -23,6 +22,7 @@ import {
 import { useTabs } from "./tabs-context-internal";
 import { IndexingIndicator } from "./indexing-indicator";
 import { cn } from "@/lib/utils";
+import { useHasUnreadMail } from "@/lib/hooks/use-mail";
 
 // Per-icon optical sizing: lucide glyphs sit on equal 32px boxes, but dense/
 // boxy marks (Calendar, Database) read larger than thin/sparse ones (Bot,
@@ -39,17 +39,23 @@ const navItems = [
   { label: "People", href: "/people", icon: Users, iconClass: "size-[17px]" },
   { label: "Databases", href: "/databases", icon: Database, iconClass: "size-[15px]" },
   { label: "Areas", href: "/areas", icon: Layers, iconClass: "size-[17px]" },
-  { label: "Graph", href: "/graph", icon: Waypoints, iconClass: "size-4" },
 ] as const;
 
 const railButtonClass =
   "relative h-8 w-8 rounded-lg flex items-center justify-center transition-colors";
 const railIconClass = "h-4 w-4";
 
-export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }) {
+export function Sidebar({
+  visuallyHidden = false,
+  mailReady = false,
+}: {
+  visuallyHidden?: boolean;
+  mailReady?: boolean;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const { cycleTab, goBack, goForward } = useTabs();
+  const hasUnreadMail = useHasUnreadMail(mailReady);
 
   // Global app shortcuts that should override browser defaults.
   useEffect(() => {
@@ -141,6 +147,7 @@ export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }
                 ? pathname === "/" || pathname.startsWith("/cadence")
                 : pathname === item.href ||
                   pathname.startsWith(item.href + "/");
+            const showsUnreadMail = item.href === "/mail" && hasUnreadMail;
 
             return (
               <Tooltip key={item.href}>
@@ -149,17 +156,33 @@ export function Sidebar({ visuallyHidden = false }: { visuallyHidden?: boolean }
                     <Link
                       to={item.href}
                       viewTransition
-                      aria-label={item.label}
+                      aria-label={
+                        showsUnreadMail
+                          ? `${item.label}, unread messages`
+                          : item.label
+                      }
+                      data-unread={showsUnreadMail ? "true" : undefined}
                       data-woodshed-action={`navigate:${item.label.toLowerCase()}`}
-                      className={`${railButtonClass} ${
-                        isActive
-                          ? "bg-muted-foreground/15 text-foreground"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                      }`}
+                      className={cn(
+                        railButtonClass,
+                        isActive && "bg-muted-foreground/15",
+                        showsUnreadMail
+                          ? "text-blue-500 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-400"
+                          : isActive
+                            ? "text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                      )}
                     />
                   }
                 >
                   <item.icon className={item.iconClass} />
+                  {showsUnreadMail && (
+                    <span
+                      aria-hidden="true"
+                      data-unread-indicator
+                      className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500 ring-2 ring-rail dark:bg-blue-400"
+                    />
+                  )}
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={8}>
                   <span className="inline-flex items-center gap-2">

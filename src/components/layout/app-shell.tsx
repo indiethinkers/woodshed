@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -7,6 +7,7 @@ import { useAgentPanel } from "@/components/layout/agent-panel-context-internal"
 import { isAgentFocusMode } from "@/components/layout/agent-panel-route";
 import { RightSidebarPanel } from "@/components/layout/right-sidebar-panel";
 import { TitleBar } from "@/components/layout/title-bar";
+import { IntegrationRefreshScheduler } from "@/components/layout/integration-refresh-scheduler";
 import { CommandPalette } from "@/components/shared/command-palette";
 import { tauriInvoke, hasBackend } from "@/lib/tauri";
 import { clearSystemThemeWatcher, setThemePreference } from "@/lib/theme";
@@ -31,6 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const { open: agentPanelOpen } = useAgentPanel();
   const checkedVault = useRef(false);
+  const [watcherReady, setWatcherReady] = useState(false);
 
   const isFullScreen = pathname.startsWith("/welcome");
   const agentFocusMode = isAgentFocusMode(pathname, agentPanelOpen);
@@ -86,6 +88,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // result is replaced.
       tauriInvoke<void>("watcher_start", { vaultPath })
         .then(() => {
+          setWatcherReady(true);
           queryClient.invalidateQueries({ queryKey: ["events"] });
         })
         .catch(() => {
@@ -101,9 +104,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      {watcherReady && <IntegrationRefreshScheduler />}
       <TitleBar />
       <div className="flex flex-1 min-h-0">
-        <Sidebar visuallyHidden={agentFocusMode} />
+        <Sidebar visuallyHidden={agentFocusMode} mailReady={watcherReady} />
         <main className="flex-1 flex overflow-hidden">
           <AgentSidebarPanel />
           {children}

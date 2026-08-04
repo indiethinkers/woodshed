@@ -48,31 +48,76 @@ import {
 // Helpers
 // ============================================================================
 
-const convertBlobUrlToDataUrl = async (url: string): Promise<string | null> => {
-  try {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    // FileReader uses callback-based API, wrapping in Promise is necessary
-    // oxlint-disable-next-line eslint-plugin-promise(avoid-new)
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
-      reader.onloadend = () => resolve(reader.result as string);
-      // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
+const MEDIA_TYPE_BY_EXTENSION: Record<string, string> = {
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  markdown: "text/markdown",
+  md: "text/markdown",
+  pdf: "application/pdf",
+  png: "image/png",
+  txt: "text/plain",
+  webp: "image/webp",
 };
+
+function selectedFileMediaType(file: Pick<File, "name" | "type">): string {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return MEDIA_TYPE_BY_EXTENSION[extension] ?? file.type;
+}
+
+function normalizeDataUrlMediaType(dataUrl: string, mediaType: string): string {
+  if (!mediaType || !dataUrl.startsWith("data:")) return dataUrl;
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex < 0 || !dataUrl.slice(0, commaIndex).endsWith(";base64")) {
+    return dataUrl;
+  }
+  return `data:${mediaType};base64,${dataUrl.slice(commaIndex + 1)}`;
+}
+
+const convertFileToDataUrl = (
+  file: File,
+  mediaType: string,
+): Promise<string | null> => {
+  // FileReader uses callback-based API, wrapping in Promise is necessary.
+  // Reading the selected File directly avoids release-webview restrictions on
+  // fetching the temporary blob URL used for attachment previews.
+  // oxlint-disable-next-line eslint-plugin-promise(avoid-new)
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
+    reader.onloadend = () => {
+      resolve(
+        typeof reader.result === "string"
+          ? normalizeDataUrlMediaType(reader.result, mediaType)
+          : null,
+      );
+    };
+    // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+};
+
+type PromptInputAttachment = FileUIPart & {
+  id: string;
+  sourceFile: File;
+};
+
+const createPromptInputAttachment = (file: File): PromptInputAttachment => ({
+  filename: file.name,
+  id: nanoid(),
+  mediaType: selectedFileMediaType(file),
+  sourceFile: file,
+  type: "file",
+  url: URL.createObjectURL(file),
+});
 
 // ============================================================================
 // Provider Context & Types
 // ============================================================================
 
 export interface AttachmentsContext {
-  files: (FileUIPart & { id: string })[];
+  files: PromptInputAttachment[];
   add: (files: File[] | FileList) => void;
   remove: (id: string) => void;
   clear: () => void;
@@ -138,7 +183,7 @@ export const PromptInputProvider = ({
 
   // ----- attachments state (global when wrapped)
   const [attachmentFiles, setAttachmentFiles] = useState<
-    (FileUIPart & { id: string })[]
+    PromptInputAttachment[]
   >([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // oxlint-disable-next-line eslint(no-empty-function)
@@ -152,13 +197,7 @@ export const PromptInputProvider = ({
 
     setAttachmentFiles((prev) => [
       ...prev,
-      ...incoming.map((file) => ({
-        filename: file.name,
-        id: nanoid(),
-        mediaType: file.type,
-        type: "file" as const,
-        url: URL.createObjectURL(file),
-      })),
+      ...incoming.map(createPromptInputAttachment),
     ]);
   }, []);
 
@@ -319,7 +358,7 @@ export const PromptInput = ({
   const formRef = useRef<HTMLFormElement | null>(null);
 
   // ----- Local attachments (only used when no provider)
-  const [items, setItems] = useState<(FileUIPart & { id: string })[]>([]);
+  const [items, setItems] = useState<PromptInputAttachment[]>([]);
   const files = usingProvider ? controller.attachments.files : items;
 
   // Keep a ref to files for cleanup on unmount (avoids stale closure)
@@ -345,6 +384,9 @@ export const PromptInput = ({
         .filter(Boolean);
 
       return patterns.some((pattern) => {
+        if (pattern.startsWith(".")) {
+          return f.name.toLowerCase().endsWith(pattern.toLowerCase());
+        }
         if (pattern.endsWith("/*")) {
           // e.g: image/* -> image/
           const prefix = pattern.slice(0, -1);
@@ -391,15 +433,9 @@ export const PromptInput = ({
             message: "Too many files. Some were not added.",
           });
         }
-        const next: (FileUIPart & { id: string })[] = [];
+        const next: PromptInputAttachment[] = [];
         for (const file of capped) {
-          next.push({
-            filename: file.name,
-            id: nanoid(),
-            mediaType: file.type,
-            type: "file",
-            url: URL.createObjectURL(file),
-          });
+          next.push(createPromptInputAttachment(file));
         }
         return [...prev, ...next];
       });
@@ -615,18 +651,18 @@ export const PromptInput = ({
       }
 
       try {
-        // Convert blob URLs to data URLs asynchronously
+        // Convert selected files to data URLs asynchronously. Keep the object
+        // URL only for local preview rendering; it is not a durable payload.
         const convertedFiles: FileUIPart[] = await Promise.all(
-          files.map(async ({ id: _id, ...item }) => {
-            if (item.url?.startsWith("blob:")) {
-              const dataUrl = await convertBlobUrlToDataUrl(item.url);
-              // If conversion failed, keep the original blob URL
-              return {
-                ...item,
-                url: dataUrl ?? item.url,
-              };
+          files.map(async ({ id: _id, sourceFile, ...item }) => {
+            const dataUrl = await convertFileToDataUrl(
+              sourceFile,
+              item.mediaType,
+            );
+            if (!dataUrl) {
+              throw new Error("Woodshed could not read the attachment.");
             }
-            return item;
+            return { ...item, url: dataUrl };
           })
         );
 

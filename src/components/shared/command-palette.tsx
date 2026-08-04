@@ -137,6 +137,7 @@ export function CommandPalette() {
 
       // Type-to-search. All gates must pass.
       if (open) return;
+      if (e.defaultPrevented) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key.length !== 1 || !/^[a-zA-Z0-9]$/.test(e.key)) return;
@@ -145,6 +146,7 @@ export function CommandPalette() {
       // points such as Command-K available, but don't let global typeahead
       // steal those shortcuts.
       if (/^\/mail\/[^/]+\/?$/.test(pathname)) return;
+      if (document.querySelector('[data-mail-index-focused="true"]')) return;
       if (
         isEditableElement(e.target) ||
         isEditableElement(document.activeElement)

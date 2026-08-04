@@ -47,7 +47,7 @@ export function GmailAccountSection() {
   return (
     <SettingsGroup
       label="Gmail accounts"
-      description="Connect Gmail accounts via IMAP + App Password. Passwords stay in macOS Keychain; signed releases remember access, while unsigned development rebuilds may prompt again."
+      description="Connect Gmail accounts via IMAP + App Password. Passwords stay in Woodshed's owner-only app-data credential file, protected by your operating-system account and disk encryption."
     >
       <div className="flex flex-col gap-3 max-w-[640px]">
         {accounts === null ? (

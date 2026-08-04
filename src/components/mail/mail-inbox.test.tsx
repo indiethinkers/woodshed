@@ -80,6 +80,7 @@ vi.mock("@/lib/hooks/use-mail", () => ({
   useDrafts: () => ({ data: mocks.drafts, isLoading: false }),
   useMarkRead: () => mocks.markRead,
   useRefreshMail: () => vi.fn(),
+  useSnoozeOne: () => vi.fn(async () => {}),
 }));
 
 vi.mock("@/components/mail/compose-dialog", () => ({
@@ -279,6 +280,23 @@ describe("MailInbox", () => {
     });
     expect(mocks.archiveOne).toHaveBeenCalledWith("message-1");
     expect(mocks.archiveOne).toHaveBeenCalledWith("message-2");
+  });
+
+  it("releases the focused mail row on Escape so printable keys are no longer mail shortcuts", async () => {
+    mocks.emails = [email({ id: "message-1" })];
+    const { container } = render(<MailInbox />);
+
+    expect(
+      container.querySelector('[data-mail-index-focused="true"]'),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "e" });
+
+    expect(
+      container.querySelector('[data-mail-index-focused="false"]'),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(mocks.archiveOne).not.toHaveBeenCalled());
   });
 });
 

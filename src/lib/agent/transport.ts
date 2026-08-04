@@ -1,11 +1,32 @@
-import type { ChatTransport, FileUIPart, UIMessage, UIMessageChunk } from "ai";
+import type {
+  ChatTransport,
+  DynamicToolUIPart,
+  FileUIPart,
+  UIMessage,
+  UIMessageChunk,
+} from "ai";
 import { nanoid } from "nanoid";
+import { isAgentImageAttachment } from "@/lib/agent/attachments";
 import { attachmentContextFromFiles } from "@/lib/agent/attachment-context";
 import { tauriInvoke } from "@/lib/tauri";
 
 interface AgentChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: AgentChatContent;
+}
+
+type AgentChatContent =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | {
+          type: "image_url";
+          image_url: { url: string; detail: "auto" };
+        }
+    >;
+
+interface PreparedAgentAttachment {
+  context: string;
 }
 
 export type AgentRunStatus =
@@ -39,7 +60,15 @@ export interface AgentRun {
   retryOf?: string | null;
 }
 
-interface AgentRunEvent {
+export interface AgentTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedInputTokens?: number;
+}
+
+export interface AgentRunEvent {
   kind:
     | "delta"
     | "reasoning-delta"
@@ -50,6 +79,7 @@ interface AgentRunEvent {
     | "tool-output-available"
     | "tool-output-error"
     | "tool-output-denied"
+    | "usage"
     | "done"
     | "error";
   delta?: string | null;
@@ -62,6 +92,7 @@ interface AgentRunEvent {
   errorText?: string | null;
   title?: string | null;
   dynamic?: boolean | null;
+  usage?: AgentTokenUsage | null;
 }
 
 interface StreamPartIds {
@@ -69,33 +100,74 @@ interface StreamPartIds {
   textId: string;
   reasoningId: string;
   reasoningStarted: boolean;
+  tools: Map<string, HydratedAgentTool>;
 }
 
 interface AgentTransportOptions {
   getSystemContext?: () => string | null;
+  onConnectionChange?: (connection: AgentTransportConnection) => void;
   onRunChange?: (run: AgentRun | null) => void;
   pollIntervalMs?: number;
+  reconnectTimeoutMs?: number;
 }
+
+export interface AgentChatTransport extends ChatTransport<UIMessage> {
+  prepareAttachments(files: FileUIPart[]): Promise<void>;
+  forgetPreparedAttachments(files: FileUIPart[]): void;
+}
+
+export interface AgentTransportConnection {
+  status: "connected" | "reconnecting" | "disconnected";
+  error: string | null;
+}
+
+const DEFAULT_AGENT_RECONNECT_TIMEOUT_MS = 30_000;
 
 export function createAgentChatTransport(
   options: AgentTransportOptions = {},
-): ChatTransport<UIMessage> {
+): AgentChatTransport {
+  const preparedAttachmentContexts = new Map<string, string[]>();
   return {
+    async prepareAttachments(files) {
+      const extractableFiles = files.filter(
+        (file) => !isAgentImageAttachment(file),
+      );
+      const prepared = await Promise.all(
+        extractableFiles.map(async (file) => [
+          attachmentPreparationKey(file),
+          await prepareAgentAttachment(file),
+        ] as const),
+      );
+      for (const [key, context] of prepared) {
+        const contexts = preparedAttachmentContexts.get(key) ?? [];
+        contexts.push(context);
+        preparedAttachmentContexts.set(key, contexts);
+      }
+    },
+    forgetPreparedAttachments(files) {
+      for (const file of files) {
+        preparedAttachmentContexts.delete(attachmentPreparationKey(file));
+      }
+    },
     async sendMessages({ chatId, messages, trigger, messageId, abortSignal }) {
       const systemContext = options.getSystemContext?.()?.trim();
-      const agentMessages = messagesToAgentMessages(messages);
-      if (systemContext) {
-        agentMessages.unshift({ role: "system", content: systemContext });
-      }
       const inputMessage = latestUserMessage(messages);
       if (!inputMessage) {
         throw new Error("Agent requests need a user message.");
+      }
+      const agentMessages = await messagesToAgentMessages(
+        messages,
+        inputMessage.id,
+        preparedAttachmentContexts,
+      );
+      if (systemContext) {
+        agentMessages.unshift({ role: "system", content: systemContext });
       }
 
       let retryOf: string | undefined;
       let idempotencyKey = inputMessage.id;
       if (trigger === "regenerate-message") {
-        const recent = await listRuns(chatId);
+        const recent = await listAgentRunsForConversation(chatId);
         retryOf = recent.find(
           (run) =>
             run.assistantMessageId === messageId ||
@@ -119,7 +191,7 @@ export function createAgentChatTransport(
       return streamAgentRun(run, abortSignal, options);
     },
     async reconnectToStream({ chatId }) {
-      const runs = await listRuns(chatId);
+      const runs = await listAgentRunsForConversation(chatId);
       const active = runs.find(
         (run) => run.status === "queued" || run.status === "running",
       );
@@ -135,6 +207,16 @@ export function createAgentChatTransport(
   };
 }
 
+export async function listActiveAgentRuns(): Promise<AgentRun[]> {
+  return (await tauriInvoke<AgentRun[]>("agent_runs_active")) ?? [];
+}
+
+export async function cancelAgentRun(runId: string): Promise<AgentRun> {
+  const run = await tauriInvoke<AgentRun>("agent_run_cancel", { runId });
+  if (!run) throw new Error("Woodshed did not cancel the agent run.");
+  return run;
+}
+
 function streamAgentRun(
   initialRun: AgentRun,
   abortSignal: AbortSignal | undefined,
@@ -146,7 +228,17 @@ function streamAgentRun(
       const ids = startMessage(controller, initialRun.assistantMessageId);
       let eventIndex = 0;
       let emittedText = "";
-      let pollFailures = 0;
+      let pollFailureStartedAt: number | null = null;
+      let connection: AgentTransportConnection | null = null;
+
+      const reportConnection = (
+        status: AgentTransportConnection["status"],
+        error: string | null = null,
+      ) => {
+        if (connection?.status === status && connection.error === error) return;
+        connection = { status, error };
+        options.onConnectionChange?.(connection);
+      };
 
       const close = () => {
         if (stopped) return;
@@ -164,7 +256,7 @@ function streamAgentRun(
       };
       const accept = (run: AgentRun): boolean => {
         options.onRunChange?.(run);
-        for (const event of run.events.slice(eventIndex)) {
+        for (const event of coalesceAgentEvents(run.events.slice(eventIndex))) {
           enqueueAgentEvent(controller, ids, event);
           if (event.kind === "delta" && event.delta) emittedText += event.delta;
         }
@@ -203,10 +295,11 @@ function streamAgentRun(
         return;
       }
       abortSignal?.addEventListener("abort", abort, { once: true });
+      reportConnection("connected");
       if (accept(initialRun)) return;
 
       while (!stopped) {
-        await delay(options.pollIntervalMs ?? 300);
+        await delay(options.pollIntervalMs ?? 100);
         if (stopped) return;
         try {
           const run = await tauriInvoke<AgentRun | null>("agent_run_get", {
@@ -216,14 +309,27 @@ function streamAgentRun(
             fail("Agent run could not be found.");
             return;
           }
-          pollFailures = 0;
+          pollFailureStartedAt = null;
+          reportConnection("connected");
           if (accept(run)) return;
         } catch (error) {
-          pollFailures += 1;
-          if (pollFailures >= 3) {
-            fail(error instanceof Error ? error.message : String(error));
-            return;
-          }
+          const now = Date.now();
+          pollFailureStartedAt ??= now;
+          const reconnectTimeoutMs =
+            options.reconnectTimeoutMs ?? DEFAULT_AGENT_RECONNECT_TIMEOUT_MS;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          reportConnection(
+            now - pollFailureStartedAt < reconnectTimeoutMs
+              ? "reconnecting"
+              : "disconnected",
+            message,
+          );
+          // A renderer-side transport failure cannot authoritatively fail the
+          // durable backend job. Keep polling so a restarted Tauri process can
+          // return the stored terminal state; enabling Retry here could launch
+          // duplicate work while the original run is still alive.
+          continue;
         }
       }
     },
@@ -235,7 +341,53 @@ function streamAgentRun(
   });
 }
 
-async function listRuns(chatId: string): Promise<AgentRun[]> {
+/**
+ * A durable run records model output at provider-token granularity. Polling can
+ * therefore discover hundreds of adjacent deltas at once. Replaying every one
+ * through the AI SDK forces React to rebuild and reparse the growing message
+ * hundreds of times in one task. Merge only adjacent, semantically equivalent
+ * deltas so tool/reasoning boundaries and their ordering remain intact while
+ * each poll produces a bounded number of UI updates.
+ */
+function coalesceAgentEvents(events: AgentRunEvent[]): AgentRunEvent[] {
+  const coalesced: AgentRunEvent[] = [];
+  for (const event of events) {
+    const previous = coalesced.at(-1);
+    if (event.kind === "delta" && event.delta) {
+      if (previous?.kind === "delta") {
+        previous.delta = `${previous.delta ?? ""}${event.delta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    if (event.kind === "reasoning-delta" && event.delta) {
+      if (previous?.kind === "reasoning-delta") {
+        previous.delta = `${previous.delta ?? ""}${event.delta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    if (event.kind === "tool-input-delta" && event.inputTextDelta) {
+      if (
+        previous?.kind === "tool-input-delta" &&
+        previous.toolCallId === event.toolCallId
+      ) {
+        previous.inputTextDelta = `${previous.inputTextDelta ?? ""}${event.inputTextDelta}`;
+      } else {
+        coalesced.push({ ...event });
+      }
+      continue;
+    }
+    coalesced.push(event);
+  }
+  return coalesced;
+}
+
+export async function listAgentRunsForConversation(
+  chatId: string,
+): Promise<AgentRun[]> {
   return (
     (await tauriInvoke<AgentRun[]>("agent_runs_for_conversation", {
       conversationId: chatId,
@@ -243,11 +395,253 @@ async function listRuns(chatId: string): Promise<AgentRun[]> {
   );
 }
 
+const AGENT_RUN_READ_BATCH_SIZE = 8;
+
+export async function listAgentRunsByIds(
+  conversationId: string,
+  runIds: string[],
+): Promise<AgentRun[]> {
+  const uniqueIds = [...new Set(runIds.map((id) => id.trim()).filter(Boolean))];
+  const runs: AgentRun[] = [];
+  for (let index = 0; index < uniqueIds.length; index += AGENT_RUN_READ_BATCH_SIZE) {
+    const batch = uniqueIds.slice(index, index + AGENT_RUN_READ_BATCH_SIZE);
+    const loaded = await tauriInvoke<AgentRun[]>("agent_runs_by_ids", {
+      conversationId,
+      runIds: batch,
+    });
+    if (loaded) runs.push(...loaded);
+  }
+  return runs;
+}
+
+export function latestAgentUsage(run: AgentRun | null): AgentTokenUsage | null {
+  if (!run) return null;
+  for (let index = run.events.length - 1; index >= 0; index -= 1) {
+    const usage = run.events[index].usage;
+    if (usage) return usage;
+  }
+  return null;
+}
+
+interface HydratedAgentTool {
+  errorText?: string;
+  input: unknown;
+  inputText: string;
+  output?: unknown;
+  state: DynamicToolUIPart["state"];
+  title?: string;
+  toolCallId: string;
+  toolName: string;
+}
+
+interface AgentToolTransition {
+  chunk: UIMessageChunk;
+  tool?: HydratedAgentTool;
+}
+
+/** Rebuild the visible assistant timeline from one durable Agent run. */
+export function messagePartsFromAgentRun(run: AgentRun): UIMessage["parts"] {
+  const reasoning = run.events
+    .filter((event) => event.kind === "reasoning-delta" && event.delta)
+    .map((event) => event.delta)
+    .join("");
+  const tools = new Map<string, HydratedAgentTool>();
+
+  for (const event of run.events) {
+    const toolCallId = event.toolCallId?.trim();
+    const transition = agentToolTransition(
+      event,
+      toolCallId ? tools.get(toolCallId) : undefined,
+    );
+    if (transition?.tool)
+      tools.set(transition.tool.toolCallId, transition.tool);
+  }
+
+  const parts: UIMessage["parts"] = [];
+  if (reasoning) {
+    parts.push({ type: "reasoning", text: reasoning, state: "done" });
+  }
+  for (const tool of tools.values()) {
+    parts.push(hydratedToolPart(tool));
+  }
+  const responseText =
+    run.finalResponse ??
+    run.events
+      .filter((event) => event.kind === "delta" && event.delta)
+      .map((event) => event.delta)
+      .join("");
+  if (responseText) parts.push({ type: "text", text: responseText });
+  return parts;
+}
+
+function hydratedToolPart(tool: HydratedAgentTool): DynamicToolUIPart {
+  const base = {
+    type: "dynamic-tool" as const,
+    toolName: tool.toolName,
+    toolCallId: tool.toolCallId,
+    ...(tool.title ? { title: tool.title } : {}),
+  };
+  if (tool.state === "output-available") {
+    return {
+      ...base,
+      state: tool.state,
+      input: tool.input,
+      output: tool.output,
+    };
+  }
+  if (tool.state === "output-error") {
+    return {
+      ...base,
+      state: tool.state,
+      input: tool.input,
+      errorText: tool.errorText || "Tool failed.",
+    };
+  }
+  if (tool.state === "input-available") {
+    return { ...base, state: tool.state, input: tool.input };
+  }
+  return { ...base, state: "input-streaming", input: tool.input };
+}
+
+function parseHydratedToolInput(raw: string): unknown {
+  const input = raw.trim();
+  if (!input) return {};
+  try {
+    return JSON.parse(input) as unknown;
+  } catch {
+    return input;
+  }
+}
+
+function agentToolTransition(
+  event: AgentRunEvent,
+  current?: HydratedAgentTool,
+): AgentToolTransition | null {
+  const toolCallId = event.toolCallId?.trim();
+  if (!toolCallId) return null;
+  const toolName = event.toolName?.trim() || current?.toolName;
+  const tool = current
+    ? { ...current }
+    : toolName
+      ? {
+          input: {},
+          inputText: "",
+          state: "input-streaming" as const,
+          toolCallId,
+          toolName,
+        }
+      : undefined;
+  if (tool && toolName) tool.toolName = toolName;
+  if (tool && event.title?.trim()) tool.title = event.title.trim();
+
+  switch (event.kind) {
+    case "tool-input-start":
+      if (!tool || !toolName) return null;
+      tool.state = "input-streaming";
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-start",
+          toolCallId,
+          toolName,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-input-delta": {
+      const inputTextDelta = event.inputTextDelta;
+      if (!inputTextDelta) return null;
+      if (tool) {
+        tool.state = "input-streaming";
+        tool.inputText += inputTextDelta;
+        tool.input = parseHydratedToolInput(tool.inputText);
+      }
+      return {
+        tool,
+        chunk: { type: "tool-input-delta", toolCallId, inputTextDelta },
+      };
+    }
+    case "tool-input-available":
+      if (!tool || !toolName) return null;
+      tool.state = "input-available";
+      tool.input = event.input ?? parseHydratedToolInput(tool.inputText);
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-available",
+          toolCallId,
+          toolName,
+          input: tool.input,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-input-error":
+      if (!tool || !toolName) return null;
+      tool.state = "output-error";
+      tool.input = event.input ?? parseHydratedToolInput(tool.inputText);
+      tool.errorText = event.errorText || "Tool input failed.";
+      return {
+        tool,
+        chunk: {
+          type: "tool-input-error",
+          toolCallId,
+          toolName,
+          input: tool.input,
+          errorText: tool.errorText,
+          dynamic: event.dynamic ?? true,
+          title: event.title ?? undefined,
+        },
+      };
+    case "tool-output-available":
+      if (tool) {
+        tool.state = "output-available";
+        tool.output = event.output;
+      }
+      return {
+        tool,
+        chunk: {
+          type: "tool-output-available",
+          toolCallId,
+          output: event.output ?? {},
+          dynamic: event.dynamic ?? true,
+        },
+      };
+    case "tool-output-error": {
+      const errorText = event.errorText || "Tool output failed.";
+      if (tool) {
+        tool.state = "output-error";
+        tool.errorText = errorText;
+      }
+      return {
+        tool,
+        chunk: {
+          type: "tool-output-error",
+          toolCallId,
+          errorText,
+          dynamic: event.dynamic ?? true,
+        },
+      };
+    }
+    case "tool-output-denied":
+      if (tool) {
+        tool.state = "output-error";
+        tool.errorText = "Tool use was denied.";
+      }
+      return {
+        tool,
+        chunk: { type: "tool-output-denied", toolCallId },
+      };
+    default:
+      return null;
+  }
+}
+
 function latestUserMessage(messages: UIMessage[]): AgentRunInputMessage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "user") continue;
-    const content = messageContentForAgent(message).trim();
+    const content = messageContentForTranscript(message).trim();
     if (!content) continue;
     return {
       id: message.id,
@@ -272,16 +666,20 @@ function startMessage(
   enqueue(controller, { type: "start", messageId });
   enqueue(controller, { type: "start-step" });
   enqueue(controller, { type: "text-start", id: textId });
-  return { messageId, reasoningId, reasoningStarted: false, textId };
+  return {
+    messageId,
+    reasoningId,
+    reasoningStarted: false,
+    textId,
+    tools: new Map<string, HydratedAgentTool>(),
+  };
 }
 
 function finishMessage(
   controller: ReadableStreamDefaultController<UIMessageChunk>,
   ids: StreamPartIds,
 ) {
-  if (ids.reasoningStarted) {
-    enqueue(controller, { type: "reasoning-end", id: ids.reasoningId });
-  }
+  endReasoning(controller, ids);
   enqueue(controller, { type: "text-end", id: ids.textId });
   enqueue(controller, { type: "finish-step" });
   enqueue(controller, { type: "finish", finishReason: "stop" });
@@ -292,6 +690,9 @@ function enqueueAgentEvent(
   ids: StreamPartIds,
   payload: AgentRunEvent,
 ) {
+  if (payload.kind !== "reasoning-delta") {
+    endReasoning(controller, ids);
+  }
   if (payload.kind === "delta" && payload.delta) {
     enqueue(controller, {
       type: "text-delta",
@@ -312,85 +713,26 @@ function enqueueAgentEvent(
     });
     return;
   }
-  if (payload.kind === "tool-input-start") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-start",
-      toolCallId,
-      toolName,
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
+  const toolCallId = payload.toolCallId?.trim();
+  const transition = agentToolTransition(
+    payload,
+    toolCallId ? ids.tools.get(toolCallId) : undefined,
+  );
+  if (!transition) return;
+  if (transition.tool) {
+    ids.tools.set(transition.tool.toolCallId, transition.tool);
   }
-  if (payload.kind === "tool-input-delta") {
-    const toolCallId = payload.toolCallId;
-    const inputTextDelta = payload.inputTextDelta;
-    if (!toolCallId || !inputTextDelta) return;
-    enqueue(controller, {
-      type: "tool-input-delta",
-      toolCallId,
-      inputTextDelta,
-    });
-    return;
-  }
-  if (payload.kind === "tool-input-available") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-available",
-      toolCallId,
-      toolName,
-      input: payload.input ?? {},
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
-  }
-  if (payload.kind === "tool-input-error") {
-    const toolCallId = payload.toolCallId;
-    const toolName = payload.toolName;
-    if (!toolCallId || !toolName) return;
-    enqueue(controller, {
-      type: "tool-input-error",
-      toolCallId,
-      toolName,
-      input: payload.input,
-      errorText: payload.errorText || "Tool input failed.",
-      dynamic: payload.dynamic ?? true,
-      title: payload.title ?? undefined,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-available") {
-    if (!payload.toolCallId) return;
-    enqueue(controller, {
-      type: "tool-output-available",
-      toolCallId: payload.toolCallId,
-      output: payload.output ?? {},
-      dynamic: payload.dynamic ?? true,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-error") {
-    if (!payload.toolCallId) return;
-    enqueue(controller, {
-      type: "tool-output-error",
-      toolCallId: payload.toolCallId,
-      errorText: payload.errorText || "Tool output failed.",
-      dynamic: payload.dynamic ?? true,
-    });
-    return;
-  }
-  if (payload.kind === "tool-output-denied" && payload.toolCallId) {
-    enqueue(controller, {
-      type: "tool-output-denied",
-      toolCallId: payload.toolCallId,
-    });
-  }
+  enqueue(controller, transition.chunk);
+}
+
+function endReasoning(
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+  ids: StreamPartIds,
+) {
+  if (!ids.reasoningStarted) return;
+  enqueue(controller, { type: "reasoning-end", id: ids.reasoningId });
+  ids.reasoningStarted = false;
+  ids.reasoningId = nanoid();
 }
 
 function enqueue(
@@ -405,30 +747,138 @@ function enqueue(
   }
 }
 
-function messagesToAgentMessages(messages: UIMessage[]): AgentChatMessage[] {
-  return messages
-    .map((message) => ({
-      role: message.role,
-      content: messageContentForAgent(message).trim(),
-    }))
-    .filter((message): message is AgentChatMessage => {
-      return (
-        (message.role === "system" ||
-          message.role === "user" ||
-          message.role === "assistant") &&
-        message.content.length > 0
-      );
-    });
+async function messagesToAgentMessages(
+  messages: UIMessage[],
+  submittedMessageId: string,
+  preparedAttachmentContexts?: Map<string, string[]>,
+): Promise<AgentChatMessage[]> {
+  const prepared = await Promise.all(
+    messages.map(async (message) => {
+      const submitted = message.id === submittedMessageId;
+      return {
+        role: message.role,
+        content: await messageContentForHermes(
+          message,
+          submitted ? "submitted" : "history",
+          submitted ? preparedAttachmentContexts : undefined,
+        ),
+      };
+    }),
+  );
+  return prepared.filter((message): message is AgentChatMessage => {
+    return (
+      (message.role === "system" ||
+        message.role === "user" ||
+        message.role === "assistant") &&
+      hasAgentChatContent(message.content)
+    );
+  });
 }
 
-function messageContentForAgent(message: UIMessage): string {
+function hasAgentChatContent(content: AgentChatContent): boolean {
+  return typeof content === "string"
+    ? content.trim().length > 0
+    : content.length > 0;
+}
+
+function messageTextAndFiles(message: UIMessage): {
+  files: FileUIPart[];
+  text: string;
+} {
   const text = message.parts
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("")
     .trim();
   const files = message.parts.filter(isFilePart);
+  return { files, text };
+}
+
+function messageContentForTranscript(message: UIMessage): string {
+  const { files, text } = messageTextAndFiles(message);
   return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
+}
+
+async function messageContentForHermes(
+  message: UIMessage,
+  attachmentPolicy: "submitted" | "history",
+  preparedAttachmentContexts?: Map<string, string[]>,
+): Promise<AgentChatContent> {
+  const { files, text } = messageTextAndFiles(message);
+  const loadedFiles = files.filter((file) => Boolean(file.url));
+  const unloadedFiles = files.filter((file) => !file.url);
+  if (attachmentPolicy === "submitted" && unloadedFiles.length > 0) {
+    throw new Error(
+      "An attachment is no longer loaded. Reattach it before sending.",
+    );
+  }
+  const imageFiles =
+    attachmentPolicy === "submitted"
+      ? loadedFiles.filter(isAgentImageAttachment)
+      : [];
+  const extractableFiles = loadedFiles.filter(
+    (file) => !isAgentImageAttachment(file),
+  );
+  const preparedContext = await prepareAttachmentContext(
+    extractableFiles,
+    preparedAttachmentContexts,
+  );
+  const textContent = [text, preparedContext].filter(Boolean).join("\n\n");
+  if (imageFiles.length === 0) return textContent;
+  return [
+    ...(textContent ? [{ type: "text" as const, text: textContent }] : []),
+    ...imageFiles.map((file) => ({
+      type: "image_url" as const,
+      image_url: { url: file.url, detail: "auto" as const },
+    })),
+  ];
+}
+
+async function prepareAttachmentContext(
+  files: FileUIPart[],
+  preparedAttachmentContexts?: Map<string, string[]>,
+): Promise<string> {
+  if (files.length === 0) return "";
+  const contexts = await Promise.all(
+    files.map(async (file) => {
+      const key = attachmentPreparationKey(file);
+      const prepared = preparedAttachmentContexts?.get(key)?.shift();
+      if (prepared) {
+        if (preparedAttachmentContexts?.get(key)?.length === 0) {
+          preparedAttachmentContexts.delete(key);
+        }
+        return prepared;
+      }
+      return prepareAgentAttachment(file);
+    }),
+  );
+  return contexts.join("\n\n");
+}
+
+function attachmentPreparationKey(file: FileUIPart): string {
+  return `${file.mediaType}\u0000${file.filename ?? ""}\u0000${file.url}`;
+}
+
+async function prepareAgentAttachment(file: FileUIPart): Promise<string> {
+  if (!file.url) {
+    throw new Error(
+      "An attachment is no longer loaded. Reattach it before sending.",
+    );
+  }
+  const prepared = await tauriInvoke<PreparedAgentAttachment>(
+    "agent_attachment_prepare",
+    {
+      input: {
+        filename: file.filename,
+        mediaType: file.mediaType,
+        dataUrl: file.url,
+      },
+    },
+  );
+  if (!prepared?.context) {
+    throw new Error("Woodshed could not prepare the attachment.");
+  }
+  return prepared.context;
 }
 
 function isFilePart(

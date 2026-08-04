@@ -10,6 +10,7 @@ import {
   Loader2,
   Paperclip,
   Reply,
+  ReplyAll,
   Trash2,
 } from "lucide-react";
 import {
@@ -40,6 +41,7 @@ import {
 } from "@/components/mail/compose-dialog";
 import { HtmlBody } from "@/components/mail/html-body";
 import { InlineReply } from "@/components/mail/inline-reply";
+import { SnoozeButton } from "@/components/mail/snooze-button";
 import { Markdown } from "@/components/shared/markdown";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -93,6 +95,43 @@ export function EmailDetail({
     [thread, email],
   );
   const latest = messages[messages.length - 1];
+  const snoozableMessageIds = useMemo(
+    () =>
+      mailbox === "inbox"
+        ? messages
+            .filter(
+              (message) =>
+                message.path.startsWith("inbox/") ||
+                message.labels.some((label) =>
+                  label.toLowerCase().includes("inbox"),
+                ),
+            )
+            .map((message) => message.id)
+        : [],
+    [mailbox, messages],
+  );
+  const [openMessageIds, setOpenMessageIds] = useState<Set<string>>(() =>
+    isLoading ? new Set() : new Set([latest.id]),
+  );
+  const initializedOpenState = useRef(!isLoading);
+  const previousLatestId = useRef(latest.id);
+
+  // The route-level message is only a temporary fallback while the complete
+  // local thread loads. Initialize expansion from the complete result so that
+  // fallback does not remain open next to the actual newest message.
+  useEffect(() => {
+    if (isLoading) return;
+    if (!initializedOpenState.current) {
+      initializedOpenState.current = true;
+      previousLatestId.current = latest.id;
+      setOpenMessageIds(new Set([latest.id]));
+      return;
+    }
+    if (previousLatestId.current !== latest.id) {
+      previousLatestId.current = latest.id;
+      setOpenMessageIds(new Set([latest.id]));
+    }
+  }, [isLoading, latest.id]);
 
   // Cursor for keyboard navigation through the thread. Null = no manual
   // navigation yet, so the cursor tracks the newest message (which is
@@ -231,9 +270,9 @@ export function EmailDetail({
         const target = messages[selectedIdx] ?? latest;
         setReplyTargetId(target.id);
       } else if (e.shiftKey && e.key === "R") {
-        // Shift-R opens the full reply composer with editable recipients.
+        // Shift-R opens Reply All in the full composer with editable recipients.
         e.preventDefault();
-        setCompose({ kind: "reply", source: latest });
+        setCompose({ kind: "replyAll", source: latest });
       } else if (!e.shiftKey && (e.key === "f" || e.key === "F")) {
         // F forwards the latest message.
         e.preventDefault();
@@ -304,7 +343,7 @@ export function EmailDetail({
 
       {/* Action buttons. Reply targets whichever message the j/k cursor
           (or click) most recently focused — defaults to the latest. */}
-      <div className="flex gap-2 mb-6">
+      <div className="mb-6 flex flex-wrap gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -316,16 +355,40 @@ export function EmailDetail({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setCompose({ kind: "forward", source: latest })}
+          onClick={() =>
+            setCompose({
+              kind: "replyAll",
+              source: messages[selectedIdx] ?? latest,
+            })
+          }
+        >
+          <ReplyAll className="h-3.5 w-3.5 mr-1.5" />
+          Reply all
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            setCompose({
+              kind: "forward",
+              source: messages[selectedIdx] ?? latest,
+            })
+          }
         >
           <Forward className="h-3.5 w-3.5 mr-1.5" />
           Forward
         </Button>
         {mailbox === "inbox" && (
-          <Button variant="outline" size="sm" onClick={handleArchive}>
-            <Archive className="h-3.5 w-3.5 mr-1.5" />
-            Archive
-          </Button>
+          <>
+            <SnoozeButton
+              messageIds={snoozableMessageIds}
+              onSnoozed={() => openAfterAction(nextEmailIdAfter())}
+            />
+            <Button variant="outline" size="sm" onClick={handleArchive}>
+              <Archive className="h-3.5 w-3.5 mr-1.5" />
+              Archive
+            </Button>
+          </>
         )}
         <Button
           variant="outline"
@@ -343,9 +406,20 @@ export function EmailDetail({
           <ThreadMessage
             key={m.id}
             message={m}
-            defaultOpen={idx === messages.length - 1}
+            open={openMessageIds.has(m.id)}
+            onToggle={() => {
+              setOpenMessageIds((current) => {
+                const next = new Set(current);
+                if (next.has(m.id)) next.delete(m.id);
+                else next.add(m.id);
+                return next;
+              });
+            }}
             isSelected={idx === selectedIdx}
             onSelect={() => setUserCursor(idx)}
+            onReply={() => setReplyTargetId(m.id)}
+            onReplyAll={() => setCompose({ kind: "replyAll", source: m })}
+            onForward={() => setCompose({ kind: "forward", source: m })}
             people={people}
             ref={(el) => {
               messageRefs.current[idx] = el;
@@ -417,20 +491,27 @@ export function useAutoMarkRead(
  */
 function ThreadMessage({
   message,
-  defaultOpen,
+  open,
+  onToggle,
   isSelected,
   onSelect,
+  onReply,
+  onReplyAll,
+  onForward,
   people,
   ref,
 }: {
   message: EmailSummary;
-  defaultOpen: boolean;
+  open: boolean;
+  onToggle: () => void;
   isSelected: boolean;
   onSelect: () => void;
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
   people: PersonDto[];
   ref?: React.Ref<HTMLDivElement>;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const senderPerson = findPersonForMailSender(people, message);
   const senderName = senderPerson?.name ?? message.from;
@@ -466,7 +547,7 @@ function ThreadMessage({
         type="button"
         onClick={() => {
           onSelect();
-          setOpen((o) => !o);
+          onToggle();
         }}
         className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-foreground/[0.02] transition-colors"
       >
@@ -570,7 +651,7 @@ function ThreadMessage({
         </div>
       )}
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-border min-h-screen">
+        <div className="px-4 pb-4 pt-1 border-t border-border">
           {message.attachments.length > 0 && (
             <AttachmentRow
               messageId={message.id}
@@ -582,6 +663,30 @@ function ThreadMessage({
           ) : (
             <Markdown text={message.body} className="text-base leading-7" />
           )}
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-border/70 pt-3">
+            <Button type="button" variant="ghost" size="sm" onClick={onReply}>
+              <Reply className="h-3.5 w-3.5 mr-1.5" />
+              Reply
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onReplyAll}
+            >
+              <ReplyAll className="h-3.5 w-3.5 mr-1.5" />
+              Reply all
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onForward}
+            >
+              <Forward className="h-3.5 w-3.5 mr-1.5" />
+              Forward
+            </Button>
+          </div>
         </div>
       )}
     </div>

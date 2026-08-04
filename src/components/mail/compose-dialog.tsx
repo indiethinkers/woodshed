@@ -18,6 +18,7 @@ import {
   useSendMail,
 } from "@/lib/hooks/use-mail";
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
+import { replyRecipients } from "@/lib/mail-lib/reply-recipients";
 import type {
   ComposeInput,
   DraftDto,
@@ -39,6 +40,7 @@ interface SelectedAttachment extends OutgoingAttachment {
 export type ComposeMode =
   | { kind: "new"; defaultFromInbox?: string }
   | { kind: "reply"; source: EmailSummary }
+  | { kind: "replyAll"; source: EmailSummary }
   | { kind: "forward"; source: EmailSummary };
 
 interface ComposeDialogProps {
@@ -95,11 +97,12 @@ export function ComposeDialog({
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  const draftKind = draft?.kind ?? (mode.kind === "reply" ? "reply" : "new");
+  const replyMode = isReplyMode(mode);
+  const draftKind = draft?.kind ?? (replyMode ? "reply" : "new");
   const draftSourceMessageId =
     draft?.sourceMessageId ?? ("source" in mode ? mode.source.id : undefined);
   const draftThreadId =
-    draft?.threadId ?? (mode.kind === "reply" ? mode.source.threadId : undefined);
+    draft?.threadId ?? (replyMode ? mode.source.threadId : undefined);
   const isReply =
     draftKind === "reply" && !!draftSourceMessageId && !!draftThreadId;
 
@@ -718,15 +721,19 @@ function buildInitialState(
       body: draft.body,
     };
   }
-  if (mode.kind === "reply") {
+  if (isReplyMode(mode)) {
     const quoted = quote(mode.source);
     const subj = mode.source.subject.startsWith("Re:")
       ? mode.source.subject
       : `Re: ${mode.source.subject}`;
+    const recipients =
+      mode.kind === "replyAll"
+        ? replyRecipients(mode.source, true)
+        : replyRecipients(mode.source, false);
     return {
       fromInbox: mode.source.inbox || inboxes[0]?.inboxId || "",
-      to: mode.source.fromEmail,
-      cc: "",
+      to: recipients.to.join(", "),
+      cc: recipients.cc.join(", "),
       bcc: "",
       subject: subj,
       body: `\n\n${quoted}`,
@@ -754,6 +761,12 @@ function buildInitialState(
     subject: "",
     body: "",
   };
+}
+
+function isReplyMode(
+  mode: ComposeMode,
+): mode is Extract<ComposeMode, { kind: "reply" | "replyAll" }> {
+  return mode.kind === "reply" || mode.kind === "replyAll";
 }
 
 /**

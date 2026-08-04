@@ -42,7 +42,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Async runtime for Gmail/HTTP commands and app background work.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "process", "io-util"] }
 
 # Legacy OS keychain migration plus current calendar-secret custody, and the
 # HTTP client (Gmail has no HTTP dep, but gcal/resources/agent/image-cache do).
@@ -64,6 +64,7 @@ imagesize = "0.13"
 # Gmail (IMAP + SMTP) — direct from desktop, no sync server. App Passwords
 # live in the private app-data credential store. See src/gmail/.
 imap = "2.4"
+imap-proto = "0.10.2"
 native-tls = "0.2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mail-parser = "0.9"
@@ -74,6 +75,14 @@ mail-parser = "0.9"
 # from VTIMEZONE blocks into chrono offsets so DTSTART times come out right.
 ical = "0.11"
 chrono-tz = "0.10"
+
+# Agent PDF attachments use Apple's in-process PDFKit on the macOS target.
+# Keeping these target-scoped avoids a generic parser subprocess and preserves
+# the crate's Rust 1.77 MSRV.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.2", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
+objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["std", "PDFDocument", "PDFPage"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -43,7 +43,7 @@ export function GcalAccountSection() {
   return (
     <SettingsGroup
       label="Google Calendars"
-      description="Subscribe to a Google Calendar by its private iCal URL. Events appear on Cadence pages alongside vault-local events — read-only; edits live in Google. Click Sync (on this row, or on the Cadence page) to pull the latest events."
+      description="Subscribe to a Google Calendar by its private iCal URL. Events appear on Cadence pages alongside vault-local events — read-only; edits live in Google. Refresh manually here or opt into foreground polling above."
     >
       <div className="flex flex-col gap-2 max-w-[560px]">
         {isLoading ? (

@@ -69,6 +69,18 @@ impl IcalEventCache {
         self.inner.lock_recover().values().all(Vec::is_empty)
     }
 
+    pub fn contains_account(&self, account_id: &str) -> bool {
+        self.inner.lock_recover().contains_key(account_id)
+    }
+
+    pub fn len_for(&self, account_id: &str) -> usize {
+        self.inner
+            .lock_recover()
+            .get(account_id)
+            .map(Vec::len)
+            .unwrap_or(0)
+    }
+
     /// Look up a single cached iCal event by (account_id, external_id).
     /// Used by the meeting-notes flow: the user opens an iCal event,
     /// writes notes, and we need the canonical metadata to merge into

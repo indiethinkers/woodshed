@@ -18,6 +18,7 @@ use crate::gmail::{creds, imap_client, parse, smtp_client, CredsError};
 use crate::AppState;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tauri::{AppHandle, State};
@@ -111,8 +112,11 @@ pub struct GmailInboxDto {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GmailSyncResult {
-    /// Newly-persisted message IDs. Useful for UI toast.
+    /// Inbox message IDs persisted during this refresh, including re-fetches.
     pub written: Vec<String>,
+    /// Messages that did not already exist anywhere in the local mail store.
+    /// This excludes ordinary re-fetches and drives batched new-mail notices.
+    pub new_messages: usize,
     /// Total messages pulled in this round trip (might exceed `written`
     /// once we add dedupe — for v1 we always re-write).
     pub fetched: usize,
@@ -434,6 +438,7 @@ pub async fn gmail_sync_recent(
     };
 
     let mut written = Vec::with_capacity(batch.messages.len());
+    let mut new_messages = 0;
     let fetched = batch.messages.len();
 
     // Gmail's conversation id is unavailable, so subject-based grouping fills
@@ -455,16 +460,7 @@ pub async fn gmail_sync_recent(
         // legitimately exist in two configured inboxes.
         let id = canonical_uid.clone();
         let wire_message_id = parsed.message_id.clone();
-        let raw_thread_id = if parsed.gm_thrid != 0 {
-            format!("gmail-thread-{:x}", parsed.gm_thrid)
-        } else {
-            choose_thread_id(
-                &id,
-                (!wire_message_id.is_empty()).then_some(wire_message_id.as_str()),
-                parsed.thread_root_message_id.as_deref(),
-            )
-        };
-        let proposed_thread_id = account_scoped_thread_id(&email, &raw_thread_id);
+        let proposed_thread_id = thread_id_for_parsed(&email, &id, &parsed);
         // Only messages with no reply headers need subject grouping. A real
         // References chain is authoritative and must never be overridden by a
         // subject match.
@@ -490,48 +486,31 @@ pub async fn gmail_sync_recent(
         // from IMAP, so writing to `attachments/mail/<id>/` here avoids
         // a re-IMAP roundtrip on click. A failure to write any one
         // attachment is logged and skipped; the email itself still lands.
-        let mut attachments: Vec<Attachment> = Vec::new();
-        if !parsed.attachments.is_empty() {
-            for a in &parsed.attachments {
-                match save_attachment_bytes(
-                    &state,
-                    &vault,
-                    &id,
-                    &a.id,
-                    &a.filename,
-                    &a.content_type,
-                    &a.bytes,
-                ) {
-                    Ok(meta) => attachments.push(meta),
-                    Err(e) => eprintln!("gmail: skip attachment {} of {}: {e}", a.filename, id),
-                }
-            }
-        }
-
-        let summary = build_email_summary(
+        let attachments = save_parsed_attachments(&state, &vault, &id, &parsed);
+        let summary = build_summary_from_parsed(
             id.clone(),
             wire_message_id,
             thread_id,
             inbox.clone(),
-            parsed.from.clone(),
-            parsed.from_email.clone(),
-            parsed.subject.clone(),
-            parsed.body.clone(),
-            parsed.html.clone(),
-            parsed.date.clone(),
+            &parsed,
             labels,
             attachments,
         );
+        let mut superseded = vec![legacy_uid.clone()];
+        if parsed.gm_msgid != 0 {
+            superseded.push(format!("gmail-{:x}", parsed.gm_msgid));
+        }
+        if !parsed.message_id.is_empty() {
+            superseded.push(parsed.message_id.clone());
+        }
+        let is_new = std::iter::once(id.as_str())
+            .chain(superseded.iter().map(String::as_str))
+            .all(|candidate| {
+                crate::commands::mail::find_email_path_anywhere(&vault, candidate).is_none()
+            });
 
         match persist_inbox_email(&app, &state, &summary, snapshot_epoch) {
             Ok(Some(_)) => {
-                let mut superseded = vec![legacy_uid.clone()];
-                if parsed.gm_msgid != 0 {
-                    superseded.push(format!("gmail-{:x}", parsed.gm_msgid));
-                }
-                if !parsed.message_id.is_empty() {
-                    superseded.push(parsed.message_id.clone());
-                }
                 for obsolete_id in superseded {
                     crate::commands::mail::trash_superseded_email_identity(
                         &app,
@@ -540,6 +519,9 @@ pub async fn gmail_sync_recent(
                         &obsolete_id,
                         &inbox,
                     );
+                }
+                if is_new {
+                    new_messages += 1;
                 }
                 written.push(id)
             }
@@ -565,8 +547,44 @@ pub async fn gmail_sync_recent(
         None => 0,
     };
 
+    // Pull the provider's recent Sent mailbox as part of the same refresh.
+    // This is what makes replies sent from Gmail, Apple Mail, or another
+    // client appear in Woodshed's local conversation view. Sent sync is
+    // additive and never participates in INBOX reconciliation.
+    let sent_batch = {
+        let pool = state.gmail_pool.clone();
+        let creds = credentials.clone();
+        match tokio::task::spawn_blocking(move || {
+            imap_client::fetch_recent_sent(&pool, &creds, limit)
+        })
+        .await
+        {
+            Ok(Ok(batch)) => batch,
+            Ok(Err(_)) => {
+                eprintln!("gmail: sent mailbox refresh failed");
+                None
+            }
+            Err(_) => {
+                eprintln!("gmail: sent mailbox refresh worker failed");
+                None
+            }
+        }
+    };
+
+    if let Some(sent_batch) = sent_batch {
+        import_sent_batch(
+            &email,
+            &inbox,
+            &sent_batch,
+            |id| mail_get_local_inner(&vault, id).ok().flatten(),
+            |id, parsed| save_parsed_attachments(&state, &vault, id, parsed),
+            |summary| persist_sent_email(&app, &state, summary).map(|_| ()),
+        );
+    }
+
     Ok(GmailSyncResult {
         written,
+        new_messages,
         fetched,
         removed,
         duration_ms: started.elapsed().as_millis() as u64,
@@ -987,6 +1005,135 @@ fn choose_thread_id(
         .unwrap_or_else(|| local_id.to_string())
 }
 
+fn thread_id_for_parsed(
+    account_email: &str,
+    local_id: &str,
+    parsed: &parse::ParsedMessage,
+) -> String {
+    let raw_thread_id = if parsed.gm_thrid != 0 {
+        format!("gmail-thread-{:x}", parsed.gm_thrid)
+    } else {
+        choose_thread_id(
+            local_id,
+            (!parsed.message_id.is_empty()).then_some(parsed.message_id.as_str()),
+            parsed.thread_root_message_id.as_deref(),
+        )
+    };
+    account_scoped_thread_id(account_email, &raw_thread_id)
+}
+
+fn sent_thread_id_for_parsed(
+    account_email: &str,
+    local_id: &str,
+    parsed: &parse::ParsedMessage,
+    existing: Option<&EmailSummary>,
+) -> String {
+    existing
+        .map(|email| email.thread_id.trim())
+        .filter(|thread_id| !thread_id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| thread_id_for_parsed(account_email, local_id, parsed))
+}
+
+fn import_sent_batch<FindExisting, SaveAttachments, Persist>(
+    account_email: &str,
+    inbox: &str,
+    batch: &imap_client::FetchBatch,
+    mut find_existing: FindExisting,
+    mut save_attachments: SaveAttachments,
+    mut persist: Persist,
+) -> usize
+where
+    FindExisting: FnMut(&str) -> Option<EmailSummary>,
+    SaveAttachments: FnMut(&str, &parse::ParsedMessage) -> Vec<Attachment>,
+    Persist: FnMut(&EmailSummary) -> Result<(), String>,
+{
+    let mut written = 0;
+    for raw in &batch.messages {
+        let parsed = parse::parse(raw);
+        let id = if parsed.message_id.is_empty() {
+            format!(
+                "gmail-sent-{}-{}-{}",
+                imap_client::account_fingerprint(account_email),
+                batch.uid_validity,
+                raw.uid
+            )
+        } else {
+            parsed.message_id.clone()
+        };
+        let existing = find_existing(&id);
+        let thread_id = sent_thread_id_for_parsed(account_email, &id, &parsed, existing.as_ref());
+        let attachments = save_attachments(&id, &parsed);
+        let summary = build_summary_from_parsed(
+            id,
+            parsed.message_id.clone(),
+            thread_id,
+            inbox.to_string(),
+            &parsed,
+            vec!["sent".to_string(), "read".to_string()],
+            attachments,
+        );
+        match persist(&summary) {
+            Ok(()) => written += 1,
+            Err(_) => eprintln!("gmail: failed to persist one sent message"),
+        }
+    }
+    written
+}
+
+fn save_parsed_attachments(
+    state: &State<AppState>,
+    vault: &Path,
+    message_id: &str,
+    parsed: &parse::ParsedMessage,
+) -> Vec<Attachment> {
+    parsed
+        .attachments
+        .iter()
+        .filter_map(|attachment| {
+            save_attachment_bytes(
+                state,
+                vault,
+                message_id,
+                &attachment.id,
+                &attachment.filename,
+                &attachment.content_type,
+                &attachment.bytes,
+            )
+            .map_err(|_| eprintln!("gmail: skipped one attachment"))
+            .ok()
+        })
+        .collect()
+}
+
+fn build_summary_from_parsed(
+    id: String,
+    wire_message_id: String,
+    thread_id: String,
+    inbox: String,
+    parsed: &parse::ParsedMessage,
+    labels: Vec<String>,
+    attachments: Vec<Attachment>,
+) -> EmailSummary {
+    let mut summary = build_email_summary(
+        id,
+        wire_message_id,
+        thread_id,
+        inbox,
+        parsed.from.clone(),
+        parsed.from_email.clone(),
+        parsed.subject.clone(),
+        parsed.body.clone(),
+        parsed.html.clone(),
+        parsed.date.clone(),
+        labels,
+        attachments,
+    );
+    summary.to = parsed.to.clone();
+    summary.cc = parsed.cc.clone();
+    summary
+}
+
 // ─── Subject-based conversation grouping ────────────────────────────────────
 //
 // Gmail's own conversation id (X-GM-THRID) is unavailable — imap-proto 0.10
@@ -1343,6 +1490,131 @@ mod credential_metadata_tests {
 
         assert_eq!(original, "root-message@example.test");
         assert_eq!(reply, original);
+    }
+
+    #[test]
+    fn sent_and_received_replies_with_the_same_root_share_a_local_thread() {
+        let received = parse::parse(&imap_client::RawMessage {
+            body: b"From: Person <person@example.test>\r\nTo: owner@example.test\r\nSubject: Re: Topic\r\nMessage-ID: <received@example.test>\r\nReferences: <root@example.test>\r\n\r\nReceived reply"
+                .to_vec(),
+            uid: 1,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen: true,
+            internal_date: None,
+        });
+        let sent = parse::parse(&imap_client::RawMessage {
+            body: b"From: Owner <owner@example.test>\r\nTo: person@example.test\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <root@example.test>\r\n\r\nSent reply"
+                .to_vec(),
+            uid: 2,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen: true,
+            internal_date: None,
+        });
+
+        assert_eq!(
+            thread_id_for_parsed("owner@example.test", "received-local", &received),
+            thread_id_for_parsed("owner@example.test", "sent-local", &sent),
+        );
+    }
+
+    #[test]
+    fn sent_resync_preserves_an_existing_canonical_thread() {
+        let parsed = parse::parse(&imap_client::RawMessage {
+            body: b"From: Owner <owner@example.test>\r\nTo: person@example.test\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <immediate-parent@example.test>\r\n\r\nSent reply"
+                .to_vec(),
+            uid: 3,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen: true,
+            internal_date: None,
+        });
+        let existing = conversation_summary(
+            "sent@example.test",
+            "Re: Topic",
+            "2026-08-03T12:00:00Z",
+            "gmail-account-owner-example-test-conversation-root",
+        );
+
+        assert_eq!(
+            sent_thread_id_for_parsed(
+                "owner@example.test",
+                "sent@example.test",
+                &parsed,
+                Some(&existing),
+            ),
+            existing.thread_id,
+        );
+    }
+
+    #[test]
+    fn sent_wire_message_becomes_a_sent_summary_with_recipients() {
+        let parsed = parse::parse(&imap_client::RawMessage {
+            body: b"From: Owner <owner@example.test>\r\nTo: Person <person@example.test>\r\nCc: Observer <observer@example.test>\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <root@example.test>\r\n\r\nSent reply"
+                .to_vec(),
+            uid: 4,
+            gm_msgid: 0,
+            gm_thrid: 0,
+            seen: true,
+            internal_date: None,
+        });
+        let summary = build_summary_from_parsed(
+            "sent@example.test".into(),
+            parsed.message_id.clone(),
+            thread_id_for_parsed("owner@example.test", "sent@example.test", &parsed),
+            "gmail:owner@example.test".into(),
+            &parsed,
+            vec!["sent".into(), "read".into()],
+            Vec::new(),
+        );
+
+        assert_eq!(summary.to, vec!["person@example.test"]);
+        assert_eq!(summary.cc, vec!["observer@example.test"]);
+        assert_eq!(summary.labels, vec!["sent", "read"]);
+        assert_eq!(
+            summary.thread_id,
+            account_scoped_thread_id("owner@example.test", "root@example.test"),
+        );
+    }
+
+    #[test]
+    fn sent_batch_import_orchestrates_external_reply_persistence() {
+        let batch = imap_client::FetchBatch {
+            uid_validity: 42,
+            messages: vec![imap_client::RawMessage {
+                body: b"From: Owner <owner@example.test>\r\nTo: Person <person@example.test>\r\nSubject: Re: Topic\r\nMessage-ID: <sent@example.test>\r\nReferences: <root@example.test>\r\n\r\nExternal-client reply"
+                    .to_vec(),
+                uid: 7,
+                gm_msgid: 0,
+                gm_thrid: 0,
+                seen: true,
+                internal_date: None,
+            }],
+        };
+        let mut persisted = Vec::new();
+
+        let written = import_sent_batch(
+            "owner@example.test",
+            "gmail:owner@example.test",
+            &batch,
+            |_| None,
+            |_, _| Vec::new(),
+            |summary| {
+                persisted.push(summary.clone());
+                Ok(())
+            },
+        );
+
+        assert_eq!(written, 1);
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, "sent@example.test");
+        assert_eq!(persisted[0].to, vec!["person@example.test"]);
+        assert!(persisted[0].labels.iter().any(|label| label == "sent"));
+        assert_eq!(
+            persisted[0].thread_id,
+            account_scoped_thread_id("owner@example.test", "root@example.test"),
+        );
     }
 
     fn conversation_summary(id: &str, subject: &str, date: &str, thread_id: &str) -> EmailSummary {
