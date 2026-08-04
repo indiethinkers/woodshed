@@ -371,6 +371,45 @@ describe("AgentRunBanner", () => {
 });
 
 describe("persisted agent attachments", () => {
+  it("preserves a loaded attachment URL while hydrating the completed turn", () => {
+    const [message] = toUiMessages(
+      [
+        {
+          id: "message-1",
+          role: "user",
+          createdAt: "2031-02-03T12:00:00Z",
+          content:
+            "Review this reference.\n\nAttachments:\n- sample-review.pdf (application/pdf)",
+        },
+      ],
+      [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Review this reference." },
+            {
+              type: "file",
+              filename: "sample-review.pdf",
+              mediaType: "application/pdf",
+              url: "data:application/pdf;base64,JVBERi0xLjQK",
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(message.parts).toEqual([
+      { type: "text", text: "Review this reference." },
+      {
+        type: "file",
+        filename: "sample-review.pdf",
+        mediaType: "application/pdf",
+        url: "data:application/pdf;base64,JVBERi0xLjQK",
+      },
+    ]);
+  });
+
   it("restores attachment context as a file part instead of message text", () => {
     const [message] = toUiMessages([
       {

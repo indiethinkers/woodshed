@@ -200,6 +200,60 @@ describe("createAgentChatTransport", () => {
     expect(mocks.tauriInvoke).not.toHaveBeenCalled();
   });
 
+  it("sends a follow-up when only a historical attachment is no longer loaded", async () => {
+    mocks.tauriInvoke.mockResolvedValueOnce(run());
+    const transport = createAgentChatTransport({ pollIntervalMs: 0 });
+
+    const stream = await transport.sendMessages({
+      abortSignal: undefined,
+      chatId: "chat-1",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [
+            { type: "text", text: "Review this reference." },
+            {
+              type: "file",
+              filename: "review.pdf",
+              mediaType: "application/pdf",
+              url: "",
+            },
+          ],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "I reviewed the reference." }],
+        },
+        {
+          id: "message-2",
+          role: "user",
+          parts: [{ type: "text", text: "What should I focus on next?" }],
+        },
+      ],
+      trigger: "submit-message",
+      messageId: "message-2",
+    });
+    await readChunks(stream);
+
+    expect(mocks.tauriInvoke).toHaveBeenCalledOnce();
+    expect(mocks.tauriInvoke).toHaveBeenCalledWith("agent_run_create", {
+      input: expect.objectContaining({
+        idempotencyKey: "message-2",
+        messages: [
+          {
+            role: "user",
+            content:
+              "Review this reference.\n\nAttachments:\n- review.pdf (application/pdf)",
+          },
+          { role: "assistant", content: "I reviewed the reference." },
+          { role: "user", content: "What should I focus on next?" },
+        ],
+      }),
+    });
+  });
+
   it("reconnects to an existing active run and polls it to completion", async () => {
     mocks.tauriInvoke
       .mockResolvedValueOnce([

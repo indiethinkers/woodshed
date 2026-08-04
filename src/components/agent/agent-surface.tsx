@@ -421,7 +421,7 @@ function AgentSurfaceInner({
         messageTimesRef.current = new Map(
           chat.messages.map((message) => [message.id, message.createdAt]),
         );
-        const nextMessages = toUiMessages(chat.messages);
+        const nextMessages = toUiMessages(chat.messages, messagesRef.current);
         setMessages(nextMessages);
         void resumeStream().catch((error) => {
           if (!cancelled) {
@@ -477,7 +477,7 @@ function AgentSurfaceInner({
           messageTimesRef.current = new Map(
             chat.messages.map((message) => [message.id, message.createdAt]),
           );
-          setMessages(toUiMessages(chat.messages));
+          setMessages(toUiMessages(chat.messages, messagesRef.current));
         }
       })
       .catch((error) => {
@@ -2330,7 +2330,13 @@ function AgentComposer({
   );
 }
 
-export function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
+export function toUiMessages(
+  messages: AgentVaultMessage[],
+  loadedMessages: UIMessage[] = [],
+): UIMessage[] {
+  const loadedMessagesById = new Map(
+    loadedMessages.map((message) => [message.id, message]),
+  );
   return messages.map((message) => {
     if (message.role !== "user") {
       return {
@@ -2341,14 +2347,37 @@ export function toUiMessages(messages: AgentVaultMessage[]): UIMessage[] {
     }
 
     const { files, text } = parsePersistedAttachmentContext(message.content);
+    const restoredFiles = restoreLoadedAttachmentUrls(
+      files,
+      loadedMessagesById.get(message.id),
+    );
     return {
       id: message.id,
       role: message.role,
       parts: [
         ...(text ? [{ type: "text" as const, text }] : []),
-        ...files,
+        ...restoredFiles,
       ],
     };
+  });
+}
+
+function restoreLoadedAttachmentUrls(
+  files: FileUIPart[],
+  loadedMessage: UIMessage | undefined,
+): FileUIPart[] {
+  if (!loadedMessage) return files;
+  const loadedFiles = filePartsFromMessage(loadedMessage);
+  return files.map((file, index) => {
+    const loaded = loadedFiles[index];
+    if (
+      !loaded?.url ||
+      loaded.filename !== file.filename ||
+      loaded.mediaType !== file.mediaType
+    ) {
+      return file;
+    }
+    return { ...file, url: loaded.url };
   });
 }
 

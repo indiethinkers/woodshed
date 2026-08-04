@@ -87,13 +87,16 @@ export function createAgentChatTransport(
   return {
     async sendMessages({ chatId, messages, trigger, messageId, abortSignal }) {
       const systemContext = options.getSystemContext?.()?.trim();
-      const agentMessages = await messagesToAgentMessages(messages);
-      if (systemContext) {
-        agentMessages.unshift({ role: "system", content: systemContext });
-      }
       const inputMessage = latestUserMessage(messages);
       if (!inputMessage) {
         throw new Error("Agent requests need a user message.");
+      }
+      const agentMessages = await messagesToAgentMessages(
+        messages,
+        inputMessage.id,
+      );
+      if (systemContext) {
+        agentMessages.unshift({ role: "system", content: systemContext });
       }
 
       let retryOf: string | undefined;
@@ -411,11 +414,17 @@ function enqueue(
 
 async function messagesToAgentMessages(
   messages: UIMessage[],
+  submittedMessageId: string,
 ): Promise<AgentChatMessage[]> {
   const prepared = await Promise.all(
     messages.map(async (message) => ({
       role: message.role,
-      content: (await messageContentForHermes(message)).trim(),
+      content: (
+        await messageContentForHermes(
+          message,
+          message.id === submittedMessageId,
+        )
+      ).trim(),
     })),
   );
   return prepared.filter((message): message is AgentChatMessage => {
@@ -446,10 +455,21 @@ function messageContentForTranscript(message: UIMessage): string {
   return [text, attachmentContextFromFiles(files)].filter(Boolean).join("\n\n");
 }
 
-async function messageContentForHermes(message: UIMessage): Promise<string> {
+async function messageContentForHermes(
+  message: UIMessage,
+  requireLoadedFiles: boolean,
+): Promise<string> {
   const { files, text } = messageTextAndFiles(message);
-  const context = await prepareAttachmentContext(files);
-  return [text, context].filter(Boolean).join("\n\n");
+  const loadedFiles = files.filter((file) => Boolean(file.url));
+  const unloadedFiles = files.filter((file) => !file.url);
+  if (requireLoadedFiles && unloadedFiles.length > 0) {
+    throw new Error(
+      "An attachment is no longer loaded. Reattach it before sending.",
+    );
+  }
+  const preparedContext = await prepareAttachmentContext(loadedFiles);
+  const unloadedContext = attachmentContextFromFiles(unloadedFiles);
+  return [text, preparedContext, unloadedContext].filter(Boolean).join("\n\n");
 }
 
 async function prepareAttachmentContext(files: FileUIPart[]): Promise<string> {
