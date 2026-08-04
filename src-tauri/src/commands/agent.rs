@@ -18,7 +18,7 @@ use tauri_plugin_store::StoreExt;
 
 const STORE_FILE: &str = "config.json";
 const AGENT_RUN_EVENT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(60);
+const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_AGENT_PDF_PAGES: usize = 2_000;
@@ -347,10 +347,9 @@ async fn exchange_with_pdf_helper(
         .write_all(&input)
         .await
         .map_err(|_| "Woodshed's PDF reader stopped accepting input".to_string())?;
-    stdin
-        .shutdown()
-        .await
-        .map_err(|_| "Woodshed could not finish sending the PDF".to_string())?;
+    // Tokio's Unix `ChildStdin::poll_shutdown` is a no-op. Drop the handle so
+    // the helper receives EOF and can leave its bounded `read_to_end` call.
+    drop(stdin);
     let mut output = Vec::new();
     stdout
         .take((max_output_bytes + 1) as u64)
@@ -1217,6 +1216,24 @@ mod tests {
         let error = append_pdf_page_text(&mut output, "g", 7).unwrap_err();
         assert!(error.contains("byte limit"));
         assert_eq!(output, "abc\ndef");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn helper_receives_eof_after_attachment_input_is_written() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "cat >/dev/null; printf finished"]);
+
+        let output = run_bounded_helper(
+            command,
+            b"synthetic attachment bytes".to_vec(),
+            Duration::from_millis(100),
+            64,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output, b"finished");
     }
 
     #[cfg(target_os = "macos")]
