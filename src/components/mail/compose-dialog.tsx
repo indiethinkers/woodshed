@@ -19,6 +19,7 @@ import {
 } from "@/lib/hooks/use-mail";
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { replyRecipients } from "@/lib/mail-lib/reply-recipients";
+import { useCompactTextareaCaret } from "@/components/shared/textarea-compact-caret";
 import type {
   ComposeInput,
   DraftDto,
@@ -114,6 +115,7 @@ export function ComposeDialog({
   const subjectRef = useRef<HTMLInputElement>(null);
   const toRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  useCompactTextareaCaret(bodyRef);
   const draftIdRef = useRef<string | undefined>(draft?.id);
   const saveDraftRef = useRef(saveDraft);
   const autosaveChainRef = useRef<Promise<void>>(Promise.resolve());

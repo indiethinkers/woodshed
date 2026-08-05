@@ -6,6 +6,8 @@ import {
   ExternalLink,
   MoreHorizontal,
   Trash2,
+  UserPlus,
+  X,
 } from "lucide-react";
 import { FavoriteToggle } from "@/components/shared/favorite-toggle";
 import { ExternalAnchor } from "@/components/shared/external-link";
@@ -116,7 +118,6 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
   const publishedLabel = resource.published
     ? formatDateOnly(resource.published)
     : null;
-  const authorPerson = findPersonForAuthor(resource.author, people);
 
   return (
     <div className="w-full max-w-[768px]">
@@ -169,9 +170,12 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
           {resource.url ? (
             <ExternalAnchor
               href={resource.url}
-              className="inline-flex items-center gap-1.5 text-[15px] text-foreground hover:underline underline-offset-2 -mx-1 px-1 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 truncate"
+              // `max-w-full min-w-0` lets the flex chain shrink the row so
+              // the URL ellipsizes instead of running off the panel edge
+              // with the open icon clipped.
+              className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-[15px] text-foreground hover:underline underline-offset-2 -mx-1 px-1 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
             >
-              <span className="truncate">
+              <span className="truncate min-w-0">
                 {resource.url}
               </span>
               <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -195,16 +199,12 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
             </span>
           )}
         </PropertyRow>
-        <PropertyRow label="Author">
-          <ResourceAuthorPicker
-            author={resource.author}
-            authorPerson={authorPerson}
+        <PropertyRow label="People">
+          <ResourcePeoplePicker
+            peopleIds={resource.people}
             people={people}
-            onCommit={(personId) =>
-              update.mutate({
-                id: resource.id,
-                update: { author: personId ?? "" },
-              })
+            onCommit={(next) =>
+              update.mutate({ id: resource.id, update: { people: next } })
             }
           />
         </PropertyRow>
@@ -257,21 +257,37 @@ function ResourceDetailInner({ resource }: { resource: ResourceDto }) {
   );
 }
 
-function ResourceAuthorPicker({
-  author,
-  authorPerson,
+/**
+ * Multi-value "People" picker for a resource. Each linked person renders
+ * as a removable chip (linked to their record; legacy unmatched bylines
+ * show muted with a remove affordance), plus an "Add" trigger that opens
+ * the searchable person list. Every toggle commits the full replacement
+ * list of person ids.
+ */
+function ResourcePeoplePicker({
+  peopleIds,
   people,
   onCommit,
 }: {
-  author: string | undefined;
-  authorPerson: PersonDto | null;
+  peopleIds: string[];
   people: PersonDto[];
-  onCommit: (personId: string | null) => void;
+  onCommit: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+
+  const selectedIds = useMemo(() => new Set(peopleIds), [peopleIds]);
+
+  const chips = useMemo(
+    () =>
+      peopleIds.map((entry) => ({
+        entry,
+        person: findPersonByReference(entry, people),
+      })),
+    [peopleIds, people],
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
@@ -308,48 +324,77 @@ function ResourceAuthorPicker({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
 
-  const label = authorPerson?.name ?? author ?? "";
-  const unmatched = Boolean(author && !authorPerson);
+  function toggle(personId: string) {
+    const next = selectedIds.has(personId)
+      ? peopleIds.filter((id) => id !== personId)
+      : [...peopleIds, personId];
+    onCommit(next);
+  }
 
   return (
     <div ref={pickerRef} className="relative min-w-0">
-      {authorPerson ? (
-        <div className="flex min-w-0 items-center">
-          <Link
-            to="/people/$id"
-            params={{ id: authorPerson.id }}
-            className="min-w-0 truncate -mx-1 rounded-sm px-1 text-foreground underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
-          >
-            {authorPerson.name}
-          </Link>
-          <button
-            type="button"
-            aria-label={`Change author (${authorPerson.name})`}
-            title="Change author"
-            onClick={() => setOpen((value) => !value)}
-            className="ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : (
+      {chips.length === 0 ? (
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
-          className="w-full text-left -mx-1 px-1 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 truncate"
+          className="inline-flex items-center gap-1.5 -mx-1 px-1 rounded-sm text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
         >
-          {label ? (
-            <span
-              className={
-                unmatched ? "text-muted-foreground truncate" : "truncate"
-              }
-            >
-              {unmatched ? `Unmatched: ${label}` : label}
-            </span>
-          ) : (
-            <EmptyValue>Empty</EmptyValue>
-          )}
+          <EmptyValue>Empty</EmptyValue>
         </button>
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {chips.map(({ entry, person }) =>
+            person ? (
+              <span
+                key={entry}
+                className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-foreground/[0.03] py-0.5 pl-2 pr-1 text-[13px]"
+              >
+                <Link
+                  to="/people/$id"
+                  params={{ id: person.id }}
+                  className="truncate text-foreground underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+                >
+                  {person.name}
+                </Link>
+                <button
+                  type="button"
+                  aria-label={`Remove ${person.name}`}
+                  onClick={() => toggle(person.id)}
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ) : (
+              <span
+                key={entry}
+                className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-dashed border-border py-0.5 pl-2 pr-1 text-[13px] text-muted-foreground"
+                title="Unmatched person — remove it or pick from the list"
+              >
+                <span className="truncate">{entry}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${entry}`}
+                  onClick={() =>
+                    onCommit(peopleIds.filter((id) => id !== entry))
+                  }
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ),
+          )}
+          <button
+            type="button"
+            aria-label="Add people"
+            onClick={() => setOpen((value) => !value)}
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm px-1 text-[13px] text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Add
+          </button>
+        </div>
       )}
       {open && (
         <div className="absolute left-0 top-[calc(100%+4px)] z-50 w-72 rounded-lg bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
@@ -373,46 +418,34 @@ function ResourceAuthorPicker({
             </p>
           ) : (
             <ul className="max-h-64 space-y-px overflow-y-auto">
-              {filtered.map((person) => (
-                <li key={person.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onCommit(person.id);
-                      setOpen(false);
-                    }}
-                    className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-foreground/[0.05] focus:bg-foreground/[0.05] focus:outline-none"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate">{person.name}</span>
-                      {person.email && (
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {person.email}
-                        </span>
+              {filtered.map((person) => {
+                const selected = selectedIds.has(person.id);
+                return (
+                  <li key={person.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(person.id)}
+                      className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-foreground/[0.05] focus:bg-foreground/[0.05] focus:outline-none"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate">{person.name}</span>
+                        {person.email && (
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {person.email}
+                          </span>
+                        )}
+                      </span>
+                      {selected && (
+                        <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
-                    </span>
-                    {person.id === authorPerson?.id && (
-                      <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                  </button>
-                </li>
-              ))}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
-          {author && (
-            <button
-              type="button"
-              onClick={() => {
-                onCommit(null);
-                setOpen(false);
-              }}
-              className="mt-1 w-full rounded-sm px-2 py-1.5 text-left text-[13px] text-muted-foreground hover:bg-foreground/[0.05] focus:bg-foreground/[0.05] focus:outline-none"
-            >
-              No author
-            </button>
-          )}
         </div>
-        )}
+      )}
     </div>
   );
 }
@@ -442,22 +475,28 @@ function localDateKey(value: string): string | null {
   return `${year}-${month}-${day}`;
 }
 
-function findPersonForAuthor(
-  author: string | undefined,
+/**
+ * Resolve a stored people-list entry to a person record. Entries are
+ * usually the linked person's id; legacy files may hold a freeform name
+ * (possibly prefixed "by …"), which is matched against the name and the
+ * id-with-dashes-spaced. Returns null when nothing matches.
+ */
+function findPersonByReference(
+  reference: string,
   people: PersonDto[],
 ): PersonDto | null {
-  if (!author) return null;
-  const normalizedAuthor = normalizeAuthorName(author);
-  if (!normalizedAuthor) return null;
+  if (!reference) return null;
+  const normalizedReference = normalizeAuthorName(reference);
+  if (!normalizedReference) return null;
   return (
-    people.find((person) => person.id === author) ??
+    people.find((person) => person.id === reference) ??
     people.find(
-      (person) => normalizeAuthorName(person.name) === normalizedAuthor,
+      (person) => normalizeAuthorName(person.name) === normalizedReference,
     ) ??
     people.find(
       (person) =>
         normalizeAuthorName(person.id.replaceAll("-", " ")) ===
-        normalizedAuthor,
+        normalizedReference,
     ) ??
     null
   );

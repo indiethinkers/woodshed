@@ -699,6 +699,22 @@
   /* Clock-like cadence: 0.5s visible, then 0.5s hidden, with no lead-in. */
   animation: tiptap-compact-caret-blink 1s step-end infinite;
 }
+/* Textarea companion to .tiptap-compact-caret: same font-sized overlay
+   caret, drawn by useCompactTextareaCaret (textarea-compact-caret.ts)
+   because WebKit sizes native textarea carets to the line box. */
+.ws-textarea-caret {
+  position: absolute;
+  display: block;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  width: 0;
+  border-left: 1.5px solid currentColor;
+  color: var(--foreground);
+  pointer-events: none;
+  user-select: none;
+  animation: tiptap-compact-caret-blink 1s step-end infinite;
+}
 @keyframes tiptap-compact-caret-blink {
   50%,
   100% {

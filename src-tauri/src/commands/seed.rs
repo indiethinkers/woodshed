@@ -659,7 +659,7 @@ fn resource(
         source: source.to_string(),
         area: None,
         saved: saved.to_string(),
-        author: None,
+        people: Vec::new(),
         published: None,
         captured_at: None,
         content_hash: None,

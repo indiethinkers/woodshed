@@ -1,6 +1,7 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useChat } from "@ai-sdk/react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useCompactTextareaCaret } from "@/components/shared/textarea-compact-caret";
 import type {
   ChatAddToolApproveResponseFunction,
   ChatStatus,
@@ -2838,6 +2839,7 @@ function AgentComposer({
   // keep the agent composer quieter so the button stays inside the dark input.
   const generating = status === "submitted" || status === "streaming";
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useCompactTextareaCaret(textareaRef);
   const attachments = usePromptInputAttachments();
   const { textInput } = usePromptInputController();
   const hasText = textInput.value.trim().length > 0;

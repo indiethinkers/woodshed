@@ -156,11 +156,11 @@ function matchesEvent(
 }
 
 function matchesResource(resource: ResourceDto, labels: string[]): boolean {
-  // The captured author is stored as the linked person's id (or, for legacy
-  // values, their name) — both land in `labels`. A plain wikilink mention in
-  // the title/body also counts, mirroring notes and tasks.
-  const author = resource.author?.trim().toLowerCase();
-  if (author && labels.includes(author)) return true;
+  // Captured people are stored as linked person ids (or, for legacy
+  // values, their names) — all land in `labels`. A plain wikilink mention
+  // in the title/body also counts, mirroring notes and tasks.
+  const people = resource.people.map((entry) => entry.trim().toLowerCase());
+  if (people.some((entry) => labels.includes(entry))) return true;
   return containsPersonWikilink(`${resource.title}\n${resource.body}`, labels);
 }
 

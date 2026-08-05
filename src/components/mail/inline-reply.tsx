@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useReplyMail } from "@/lib/hooks/use-mail";
 import { replyRecipients } from "@/lib/mail-lib/reply-recipients";
 import type { EmailSummary, ReplyInput } from "@/lib/mail-lib/types";
+import { useCompactTextareaCaret } from "@/components/shared/textarea-compact-caret";
 
 interface InlineReplyProps {
   /** The message being replied to. Drives To/threadId/inbox. */
@@ -30,6 +31,7 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  useCompactTextareaCaret(bodyRef);
   const recipients = replyRecipients(message, false).to;
   const recipientLabel = recipients[0] ?? message.fromEmail;
 

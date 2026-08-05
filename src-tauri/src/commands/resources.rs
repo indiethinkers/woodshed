@@ -37,8 +37,8 @@ pub struct ResourceDto {
     pub url: String,
     pub source: String,
     pub saved: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
+    /// Linked person ids (authors/creators). Empty when unset.
+    pub people: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,7 +65,7 @@ impl ResourceDto {
             url: b.url,
             source: b.source,
             saved: b.saved,
-            author: b.author,
+            people: b.people,
             published: b.published,
             captured_at: b.captured_at,
             content_hash: b.content_hash,
@@ -98,7 +98,9 @@ pub struct ResourceUpdate {
     pub title: Option<String>,
     pub url: Option<String>,
     pub source: Option<String>,
-    pub author: Option<String>,
+    /// Full replacement list of linked person ids.
+    #[serde(default)]
+    pub people: Option<Vec<String>>,
     pub published: Option<String>,
     pub captured_at: Option<String>,
     pub content_hash: Option<String>,
@@ -953,7 +955,7 @@ pub fn resource_create(
         source,
         area: None,
         saved: chrono::Local::now().to_rfc3339(),
-        author: None,
+        people: Vec::new(),
         published: None,
         captured_at: None,
         content_hash: None,
@@ -1049,7 +1051,11 @@ pub async fn resource_capture_url(
         resource.title = title;
         resource.url = canonical;
         resource.source = source;
-        resource.author = author;
+        // A fresh byline replaces the linked people; an absent byline
+        // preserves whatever the user had already attached.
+        if let Some(person_id) = author {
+            resource.people = vec![person_id];
+        }
         resource.published = published;
         resource.captured_at = Some(now);
         write_resource(&state, &path, &resource)?;
@@ -1077,7 +1083,7 @@ pub async fn resource_capture_url(
         source,
         area: None,
         saved: now.clone(),
-        author,
+        people: author.into_iter().collect(),
         published,
         captured_at: Some(now),
         content_hash: None,
@@ -1134,12 +1140,14 @@ pub fn resource_update(
     // `serialize_resource` so an in-memory update can never reintroduce a value
     // that the next write would silently drop.
     resource.area = None;
-    if let Some(author) = update.author {
-        resource.author = if author.trim().is_empty() {
-            None
-        } else {
-            Some(author)
-        };
+    if let Some(people) = update.people {
+        // The picker commits the full replacement list; defensive trim
+        // keeps stray empties out of the vault file.
+        resource.people = people
+            .into_iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
     }
     if let Some(published) = update.published {
         resource.published = if published.trim().is_empty() {
@@ -1270,7 +1278,7 @@ mod tests {
             source: "example.com".to_string(),
             area: None,
             saved: saved.to_string(),
-            author: None,
+            people: Vec::new(),
             published: None,
             captured_at: None,
             content_hash: None,
@@ -1404,7 +1412,7 @@ mod tests {
             source: "example.com".to_string(),
             area: None,
             saved: "2026-05-21T21:03:00-07:00".to_string(),
-            author: None,
+            people: Vec::new(),
             published: None,
             captured_at: None,
             content_hash: None,
