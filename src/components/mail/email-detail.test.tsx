@@ -47,6 +47,66 @@ describe("useAutoMarkRead", () => {
     expect(markRead).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
+
+  it("leaves a message that arrives while reading earlier mail unread", async () => {
+    const opened = email({ id: "message-1", read: false });
+    const arriving = email({ id: "message-2", read: false });
+    const markRead = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      ({ messages }) => useAutoMarkRead(messages, false, markRead, () => false),
+      { initialProps: { messages: [opened] } },
+    );
+
+    // The messages present when the thread opened are marked read.
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith("message-1"));
+
+    // A message that syncs in while the user reads earlier mail must NOT
+    // become read before it's ever seen.
+    rerender({ messages: [opened, arriving] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(markRead).not.toHaveBeenCalledWith("message-2");
+  });
+
+  it("marks a message that arrives while following the newest message", async () => {
+    const opened = email({ id: "message-1", read: false });
+    const arriving = email({ id: "message-2", read: false });
+    const markRead = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      ({ messages }) => useAutoMarkRead(messages, false, markRead, () => true),
+      { initialProps: { messages: [opened] } },
+    );
+
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith("message-1"));
+
+    // While the user is watching the newest position, an arrival is seen.
+    rerender({ messages: [opened, arriving] });
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith("message-2"));
+  });
+
+  it("does not re-capture the initial unread set after a loading cycle", async () => {
+    const first = email({ id: "message-1", read: false });
+    const arriving = email({ id: "message-2", read: false });
+    const markRead = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      ({ messages, isLoading }) =>
+        useAutoMarkRead(messages, isLoading, markRead, () => false),
+      { initialProps: { messages: [] as EmailSummary[], isLoading: true } },
+    );
+
+    // The initial set is captured on the first non-loading run with content.
+    rerender({ messages: [first], isLoading: false });
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith("message-1"));
+
+    // A later loading cycle must NOT re-capture: an arrival that lands
+    // during it is still gated on isFollowingNewest (false → stays unread).
+    rerender({ messages: [first, arriving], isLoading: true });
+    rerender({ messages: [first, arriving], isLoading: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(markRead).not.toHaveBeenCalledWith("message-2");
+  });
 });
 
 function email(overrides: Partial<EmailSummary>): EmailSummary {

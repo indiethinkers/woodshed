@@ -168,6 +168,11 @@ export function EmailDetail({
   // and scrolling back to the newest position re-engages it.
   const followLatestRef = useRef(true);
 
+  // Live view into whether the user is still following the newest message —
+  // feeds useAutoMarkRead so a message that syncs in while the user reads
+  // earlier mail stays unread (only watched arrivals are marked).
+  const isFollowingNewest = useCallback(() => followLatestRef.current, []);
+
   // Scroll the focused message into view as the cursor moves, or land
   // on the newest message when a thread opens. Two modes:
   //
@@ -266,7 +271,7 @@ export function EmailDetail({
     ? (messages.find((m) => m.id === replyTargetId) ?? null)
     : null;
 
-  useAutoMarkRead(messages, isLoading, markRead);
+  useAutoMarkRead(messages, isLoading, markRead, isFollowingNewest);
 
   // Find the row that follows this thread in the inbox list — used to
   // jump straight to the next email when archiving or deleting, so the
@@ -552,20 +557,42 @@ export function EmailDetail({
  * Each message is attempted once per mounted detail view. A remote failure is
  * reported without making an already-viewed message look unread again, and it
  * must not turn that render into an unbounded integration retry loop.
+ *
+ * Only the messages that were unread when the thread opened are marked read
+ * unconditionally (that's the "opening" gesture). A message that arrives
+ * LATER while the thread is open is marked read only while the user is still
+ * following the newest message — i.e. actually watching it land — and stays
+ * unread otherwise, so mail that syncs in while the user reads earlier
+ * messages doesn't silently become "read before I opened it".
+ *
+ * `isFollowingNewest` should be memoized (stable identity): a new identity
+ * per render re-runs the effect, which is harmless (attemptedIds dedupes)
+ * but wasteful. The initial-unread set is captured on the first non-loading
+ * render that has messages, so a thread that opens empty never misclassifies
+ * its first arrivals as "later" arrivals.
  */
 export function useAutoMarkRead(
   messages: EmailSummary[],
   isLoading: boolean,
   markRead: (id: string) => Promise<void>,
+  isFollowingNewest: () => boolean = () => true,
 ) {
+  const initialUnread = useRef<Set<string> | null>(null);
   const attemptedIds = useRef(new Set<string>());
 
   useEffect(() => {
     if (isLoading) return;
+    if (initialUnread.current === null && messages.length > 0) {
+      initialUnread.current = new Set(
+        messages.filter((message) => !message.read).map((message) => message.id),
+      );
+    }
     const unreadIds = messages
-      .filter(
-        (message) => !message.read && !attemptedIds.current.has(message.id),
-      )
+      .filter((message) => {
+        if (message.read || attemptedIds.current.has(message.id)) return false;
+        if (initialUnread.current!.has(message.id)) return true;
+        return isFollowingNewest();
+      })
       .map((message) => message.id);
     if (unreadIds.length === 0) return;
 
@@ -575,7 +602,7 @@ export function useAutoMarkRead(
         console.error("Automatic mark-read failed.");
       });
     }
-  }, [isLoading, messages, markRead]);
+  }, [isLoading, messages, markRead, isFollowingNewest]);
 }
 
 /**
