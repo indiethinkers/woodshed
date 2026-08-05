@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmailFull } from "@/lib/mail-lib/types";
 
-const { sendMail, replyMail, saveDraft } = vi.hoisted(() => ({
+const { sendMail, replyMail, saveDraft, emailFull } = vi.hoisted(() => ({
   sendMail: vi.fn(async () => ({
     messageId: "sent-message@example.test",
     threadId: "sent-message@example.test",
@@ -17,6 +18,7 @@ const { sendMail, replyMail, saveDraft } = vi.hoisted(() => ({
     id: input.id ?? "01SYNTHETICDRAFT0000000000",
     created: "2026-08-01T12:00:00Z",
   })),
+  emailFull: { data: null as EmailFull | null },
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
@@ -35,6 +37,7 @@ vi.mock("@/lib/hooks/use-mail", () => ({
   useReplyMail: () => replyMail,
   useSaveDraft: () => saveDraft,
   useDeleteDraft: () => vi.fn(async () => {}),
+  useEmailFull: () => emailFull,
 }));
 
 import { ComposeDialog } from "./compose-dialog";
@@ -44,6 +47,7 @@ describe("ComposeDialog", () => {
     sendMail.mockClear();
     replyMail.mockClear();
     saveDraft.mockClear();
+    emailFull.data = null;
   });
 
   it("resumes a saved reply draft with its original thread identity", async () => {
@@ -123,6 +127,143 @@ describe("ComposeDialog", () => {
     expect(
       screen.getByText("Cc").parentElement?.querySelector("input"),
     ).toHaveValue("observer@example.test");
+  });
+
+  it("addresses Reply All from the full record when it resolves after mount", () => {
+    // Received messages carry empty to/cc on the summary, and the full
+    // record loads lazily — cold cache means it resolves AFTER the dialog
+    // mounts. The To/Cc fields must reconcile once it lands.
+    const mode = {
+      kind: "replyAll" as const,
+      source: {
+        id: "source-message@example.test",
+        messageId: "source-message@example.test",
+        threadId: "synthetic-thread",
+        from: "Originator",
+        fromEmail: "originator@example.test",
+        to: [],
+        cc: [],
+        subject: "Synthetic discussion",
+        body: "A synthetic message body.",
+        html: null,
+        preview: "A synthetic message body.",
+        date: "2026-07-28T10:00:00Z",
+        read: true,
+        labels: ["inbox", "read"],
+        mentions: [],
+        links: [],
+        inbox: "gmail:sender@example.test",
+        path: "inbox/source.md",
+        attachments: [],
+      },
+    };
+
+    const { rerender } = render(<ComposeDialog open mode={mode} onClose={vi.fn()} />);
+
+    // Before the full record lands, Reply All reaches only the sender.
+    expect(screen.getByPlaceholderText("someone@example.com")).toHaveValue(
+      "originator@example.test",
+    );
+
+    // The full record resolves with the real participant list.
+    emailFull.data = {
+      id: "source-message@example.test",
+      messageId: "source-message@example.test",
+      threadId: "synthetic-thread",
+      from: "Originator",
+      fromEmail: "originator@example.test",
+      to: [
+        "sender@example.test",
+        "collaborator@example.test",
+        "originator@example.test",
+      ],
+      cc: ["observer@example.test", "sender@example.test"],
+      subject: "Synthetic discussion",
+      body: "A synthetic message body.",
+      html: null,
+      preview: "A synthetic message body.",
+      date: "2026-07-28T10:00:00Z",
+      read: true,
+      labels: ["inbox", "read"],
+      mentions: [],
+      links: [],
+      inbox: "gmail:sender@example.test",
+      path: "inbox/source.md",
+      attachments: [],
+    };
+    rerender(<ComposeDialog open mode={mode} onClose={vi.fn()} />);
+
+    // Sender + full to (minus the connected account) land in To; full cc in Cc.
+    expect(screen.getByPlaceholderText("someone@example.com")).toHaveValue(
+      "originator@example.test, collaborator@example.test",
+    );
+    expect(
+      screen.getByText("Cc").parentElement?.querySelector("input"),
+    ).toHaveValue("observer@example.test");
+  });
+
+  it("does not clobber recipients the user already edited when the full record lands", () => {
+    const mode = {
+      kind: "replyAll" as const,
+      source: {
+        id: "source-message@example.test",
+        messageId: "source-message@example.test",
+        threadId: "synthetic-thread",
+        from: "Originator",
+        fromEmail: "originator@example.test",
+        to: [],
+        cc: [],
+        subject: "Synthetic discussion",
+        body: "A synthetic message body.",
+        html: null,
+        preview: "A synthetic message body.",
+        date: "2026-07-28T10:00:00Z",
+        read: true,
+        labels: ["inbox", "read"],
+        mentions: [],
+        links: [],
+        inbox: "gmail:sender@example.test",
+        path: "inbox/source.md",
+        attachments: [],
+      },
+    };
+
+    const { rerender } = render(<ComposeDialog open mode={mode} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText("someone@example.com"), {
+      target: { value: "custom@example.test" },
+    });
+
+    emailFull.data = {
+      id: "source-message@example.test",
+      messageId: "source-message@example.test",
+      threadId: "synthetic-thread",
+      from: "Originator",
+      fromEmail: "originator@example.test",
+      to: [
+        "sender@example.test",
+        "collaborator@example.test",
+        "originator@example.test",
+      ],
+      cc: ["observer@example.test"],
+      subject: "Synthetic discussion",
+      body: "A synthetic message body.",
+      html: null,
+      preview: "A synthetic message body.",
+      date: "2026-07-28T10:00:00Z",
+      read: true,
+      labels: ["inbox", "read"],
+      mentions: [],
+      links: [],
+      inbox: "gmail:sender@example.test",
+      path: "inbox/source.md",
+      attachments: [],
+    };
+    rerender(<ComposeDialog open mode={mode} onClose={vi.fn()} />);
+
+    // The user's manual recipient list wins over the late-arriving full record.
+    expect(screen.getByPlaceholderText("someone@example.com")).toHaveValue(
+      "custom@example.test",
+    );
   });
 
   it("replies to the other participant when the selected message was sent by the user", () => {

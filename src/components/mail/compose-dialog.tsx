@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner";
 import {
   useDeleteDraft,
+  useEmailFull,
   useInboxes,
   useReplyMail,
   useSaveDraft,
@@ -24,6 +25,7 @@ import type {
   ComposeInput,
   DraftDto,
   DraftSaveInput,
+  EmailFull,
   EmailSummary,
   Inbox,
   OutgoingAttachment,
@@ -80,15 +82,55 @@ export function ComposeDialog({
   const saveDraft = useSaveDraft();
   const deleteDraft = useDeleteDraft();
 
+  // Reply modes: received messages don't persist `to`/`cc` on the summary
+  // (only sent records do), so Reply All must merge the lazily-loaded full
+  // record to address every participant — not just the sender.
+  const replyMode = isReplyMode(mode);
+  const replySourceId = "source" in mode ? mode.source.id : null;
+  const replySourceInbox = "source" in mode ? mode.source.inbox : null;
+  const { data: replySourceFull } = useEmailFull(
+    replySourceId,
+    replySourceInbox,
+    replyMode,
+  );
+
   const initial = useMemo(
-    () => buildInitialState(mode, draft, inboxes),
-    [mode, draft, inboxes],
+    () => buildInitialState(mode, draft, inboxes, replySourceFull),
+    [mode, draft, inboxes, replySourceFull],
   );
 
   const [fromInbox, setFromInbox] = useState<string>(initial.fromInbox);
   const [to, setTo] = useState(initial.to);
   const [cc, setCc] = useState(initial.cc);
   const [bcc, setBcc] = useState(initial.bcc);
+
+  // The full record for reply modes loads lazily (useEmailFull) and can
+  // resolve AFTER mount when the thread view hasn't cached it yet — e.g.
+  // opening a cold message and immediately hitting Reply All. Once it
+  // lands, seed To/Cc from the real participant list, but never clobber
+  // recipients the user has already edited.
+  const [recipientsTouched, setRecipientsTouched] = useState(false);
+  useEffect(() => {
+    // A loaded draft's own recipients always win; only reconcile the
+    // late-arriving full record for a fresh reply, and never clobber
+    // recipients the user has already edited this session.
+    if (!replySourceFull || recipientsTouched || !replyMode || draft) return;
+    const recipients = replyRecipients(
+      mode.source,
+      mode.kind === "replyAll",
+      replySourceFull,
+    );
+    setTo(recipients.to.join(", "));
+    setCc(recipients.cc.join(", "));
+    if (recipients.cc.length > 0) setShowCcBcc(true);
+  }, [
+    replySourceFull,
+    recipientsTouched,
+    replyMode,
+    mode.kind,
+    replySourceId,
+    draft,
+  ]);
   const [showCcBcc, setShowCcBcc] = useState(initial.cc.length > 0 || initial.bcc.length > 0);
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
@@ -98,7 +140,6 @@ export function ComposeDialog({
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  const replyMode = isReplyMode(mode);
   const draftKind = draft?.kind ?? (replyMode ? "reply" : "new");
   const draftSourceMessageId =
     draft?.sourceMessageId ?? ("source" in mode ? mode.source.id : undefined);
@@ -450,7 +491,10 @@ export function ComposeDialog({
             <input
               ref={toRef}
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {
+                setRecipientsTouched(true);
+                setTo(e.target.value);
+              }}
               placeholder="someone@example.com"
               className="flex-1 bg-transparent outline-none text-[13px] placeholder:text-muted-foreground/60"
               autoComplete="off"
@@ -471,7 +515,10 @@ export function ComposeDialog({
               <FieldRow label="Cc">
                 <input
                   value={cc}
-                  onChange={(e) => setCc(e.target.value)}
+                  onChange={(e) => {
+                    setRecipientsTouched(true);
+                    setCc(e.target.value);
+                  }}
                   className="flex-1 bg-transparent outline-none text-[13px]"
                   autoComplete="off"
                   spellCheck={false}
@@ -705,6 +752,7 @@ function buildInitialState(
   mode: ComposeMode,
   draft: DraftDto | undefined,
   inboxes: Inbox[],
+  sourceFull?: EmailFull | null,
 ): {
   fromInbox: string;
   to: string;
@@ -730,8 +778,8 @@ function buildInitialState(
       : `Re: ${mode.source.subject}`;
     const recipients =
       mode.kind === "replyAll"
-        ? replyRecipients(mode.source, true)
-        : replyRecipients(mode.source, false);
+        ? replyRecipients(mode.source, true, sourceFull)
+        : replyRecipients(mode.source, false, sourceFull);
     return {
       fromInbox: mode.source.inbox || inboxes[0]?.inboxId || "",
       to: recipients.to.join(", "),

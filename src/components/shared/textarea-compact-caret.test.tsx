@@ -90,4 +90,46 @@ describe("useCompactTextareaCaret", () => {
     expect(caret.style.display).toBe("block");
     expect(caret.style.transform).toBe("translate3d(0px, 0px, 0)");
   });
+
+  it("shrinks the mirror by the scrollbar width so wrapped lines stay aligned", async () => {
+    render(<Harness lineHeight="20px" />);
+    const textarea = screen.getByRole("textbox");
+    giveLayout(textarea);
+    // A scrollbar that consumes layout width makes the textarea's content
+    // box narrower than clientWidth; the mirror must match that narrower
+    // wrap width or caret coordinates drift on wrapped lines.
+    Object.defineProperty(textarea, "offsetWidth", {
+      value: 315,
+      configurable: true,
+    });
+    textarea.focus();
+    await frame();
+
+    const mirror = textarea.parentElement?.querySelector(
+      ".ws-textarea-caret-mirror",
+    ) as HTMLElement;
+    // clientWidth 300 − 15px scrollbar = 285.
+    expect(mirror.style.width).toBe("285px");
+  });
+
+  it("never leaves the mirror font empty when the computed font serializes empty", async () => {
+    // WKWebView can return "" for getComputedStyle().font (seen on the
+    // mail/agent composers); an empty `font:` declaration is dropped and
+    // the mirror falls back to its UA monospace, which renders ~20% wider
+    // and pushes the caret several characters right of the insertion
+    // point. The mirror font must come from longhands with an `inherit`
+    // fallback — never empty. (jsdom's computed font is likewise empty.)
+    render(<Harness lineHeight="20px" />);
+    const textarea = screen.getByRole("textbox");
+    const mirror = textarea.parentElement?.querySelector(
+      ".ws-textarea-caret-mirror",
+    ) as HTMLElement;
+
+    // The mirror's font family/size/line-height must always be populated
+    // from longhands (with an `inherit` fallback) — never left at the UA
+    // default that an empty `font:` shorthand would produce.
+    expect(mirror.style.fontFamily).not.toBe("");
+    expect(mirror.style.fontSize).not.toBe("");
+    expect(mirror.style.lineHeight).not.toBe("");
+  });
 });

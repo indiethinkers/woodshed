@@ -41,6 +41,7 @@ export function useCompactTextareaCaret(
     };
     const borderLeft = px(computed.borderLeftWidth);
     const borderTop = px(computed.borderTopWidth);
+    const borderRight = px(computed.borderRightWidth);
     const parentComputed = getComputedStyle(parent);
     const parentBorderLeft = px(parentComputed.borderLeftWidth);
     const parentBorderTop = px(parentComputed.borderTopWidth);
@@ -65,12 +66,25 @@ export function useCompactTextareaCaret(
       `width:${textarea.clientWidth}px`,
       "height:auto",
       "box-sizing:border-box",
+      "margin:0",
       "visibility:hidden",
       "pointer-events:none",
       "white-space:pre-wrap",
       `overflow-wrap:${computed.overflowWrap}`,
       `word-break:${computed.wordBreak}`,
-      `font:${computed.font}`,
+      // WebKit's getComputedStyle().font can serialize to an EMPTY string
+      // (observed in WKWebView for the mail/agent composers). An empty
+      // `font:` declaration is dropped, leaving the mirror at its UA
+      // defaults — 16px monospace — so the mirror's text renders ~20%
+      // wider than the textarea and the caret lands several characters to
+      // the right of the true insertion point. Build the font from
+      // longhands instead, falling back to `inherit` so the mirror picks
+      // up the same font the textarea renders when it inherits one.
+      `font-family:${computed.fontFamily || "inherit"}`,
+      `font-size:${computed.fontSize || "inherit"}`,
+      `font-weight:${computed.fontWeight || "inherit"}`,
+      `font-style:${computed.fontStyle || "inherit"}`,
+      `line-height:${computed.lineHeight || "inherit"}`,
       `letter-spacing:${computed.letterSpacing}`,
       `word-spacing:${computed.wordSpacing}`,
       `tab-size:${computed.tabSize}`,
@@ -96,8 +110,15 @@ export function useCompactTextareaCaret(
     const measure = () => {
       raf = 0;
       // Keep the mirror's wrap width current (window resize / parent layout
-      // changes) so wrapped-line caret coordinates stay aligned.
-      mirror.style.width = `${textarea.clientWidth}px`;
+      // changes) so wrapped-line caret coordinates stay aligned. When a
+      // scrollbar consumes content width (legacy scrollbars), the textarea
+      // wraps earlier than the mirror would — shrink the mirror by the
+      // scrollbar width so the wrap points match exactly.
+      const scrollbarWidth = Math.max(
+        0,
+        textarea.offsetWidth - textarea.clientWidth - borderLeft - borderRight,
+      );
+      mirror.style.width = `${Math.max(0, textarea.clientWidth - scrollbarWidth)}px`;
       if (disposed || document.activeElement !== textarea) return;
       const caretPos = textarea.selectionEnd ?? textarea.selectionStart ?? 0;
       mirror.textContent = textarea.value.slice(0, caretPos);

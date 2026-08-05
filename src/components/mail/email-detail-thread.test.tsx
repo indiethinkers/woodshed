@@ -1,12 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailSummary } from "@/lib/mail-lib/types";
+import type { EmailSummary, Inbox } from "@/lib/mail-lib/types";
 
 const mocks = vi.hoisted(() => ({
   thread: [] as EmailSummary[],
   isLoading: true,
   navigate: vi.fn(),
   markRead: vi.fn(async () => {}),
+  inboxes: [] as Inbox[],
 }));
 
 // jsdom has no ResizeObserver; the follow logic guards on its presence,
@@ -39,7 +40,7 @@ vi.mock("@/lib/hooks/use-mail", () => ({
   useEmailFull: (id: string) => ({
     data: mocks.thread.find((message) => message.id === id),
   }),
-  useInboxes: () => ({ data: [] }),
+  useInboxes: () => ({ data: mocks.inboxes }),
   useAllMail: () => ({ data: [] }),
   useMarkRead: () => mocks.markRead,
   useThread: () => ({ data: mocks.thread, isLoading: mocks.isLoading }),
@@ -82,6 +83,7 @@ describe("EmailDetail thread", () => {
     mocks.isLoading = true;
     mocks.navigate.mockReset();
     mocks.markRead.mockClear();
+    mocks.inboxes = [];
     Element.prototype.scrollIntoView = vi.fn();
     MockResizeObserver.instances = [];
   });
@@ -465,6 +467,159 @@ describe("EmailDetail thread", () => {
     expect(
       screen.getByRole("dialog", { name: "Synthetic compose" }),
     ).toHaveTextContent("forward:message-1");
+  });
+
+  it("collapses earlier messages in a long thread and expands on click", () => {
+    const messages = [0, 1, 2, 3, 4].map((i) =>
+      email({
+        id: `message-${i}`,
+        body: `Body ${i}`,
+        preview: `Preview ${i}`,
+        date: `2026-07-28T0${i}:00:00Z`,
+      }),
+    );
+    mocks.thread = messages;
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={messages[4]} />);
+
+    // Long thread: the newest message stays expanded while the earlier
+    // responses collapse to a compact header row showing the preview
+    // (Gmail-style) instead of the full body.
+    expect(screen.getByText("Body 4")).toBeInTheDocument();
+    expect(screen.queryByText("Body 0")).not.toBeInTheDocument();
+    expect(screen.queryByText("Body 3")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Expand message from/ }),
+    ).toHaveLength(4);
+
+    // Clicking a collapsed row expands that message.
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Expand message from/ })[0],
+    );
+    expect(screen.getByText("Body 0")).toBeInTheDocument();
+  });
+
+  it("expands a collapsed message when j/k navigation focuses it", () => {
+    const messages = [0, 1, 2, 3, 4].map((i) =>
+      email({
+        id: `message-${i}`,
+        body: `Body ${i}`,
+        preview: `Preview ${i}`,
+        date: `2026-07-28T0${i}:00:00Z`,
+      }),
+    );
+    mocks.thread = messages;
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={messages[4]} />);
+    expect(screen.queryByText("Body 3")).not.toBeInTheDocument();
+
+    // The cursor starts on the newest message; one k press focuses the
+    // message below it, which reveals that collapsed message's body.
+    fireEvent.keyDown(window, { key: "k" });
+
+    expect(screen.getByText("Body 3")).toBeInTheDocument();
+  });
+
+  it("pins a newest message taller than the viewport to its top instead of overshooting", () => {
+    const older = email({ id: "older-message", body: "Older full body" });
+    const newest = email({
+      id: "newest-message",
+      body: "Newest full body",
+      date: "2026-07-28T10:00:00Z",
+    });
+    mocks.thread = [older, newest];
+    mocks.isLoading = false;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { container } = render(
+      <div data-slot="scroll-area-viewport">
+        <EmailDetail email={older} />
+      </div>,
+    );
+    scrollIntoView.mockClear();
+    const messageEls = container.querySelectorAll("[data-mail-thread-message]");
+    // A newest message taller than the viewport (e.g. a long HTML email)
+    // must pin its TOP — its bottom would land the reader at the footer.
+    Object.defineProperty(messageEls[1], "offsetHeight", {
+      value: 900,
+      configurable: true,
+    });
+    Object.defineProperty(container.firstElementChild!, "clientHeight", {
+      value: 400,
+      configurable: true,
+    });
+    const observer = MockResizeObserver.instances.at(-1);
+    observer!.callback([], observer as unknown as ResizeObserver);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+  });
+
+  it("does not yank the view down when a collapsed message expands after a click", () => {
+    const messages = [0, 1, 2, 3, 4].map((i) =>
+      email({
+        id: `message-${i}`,
+        body: `Body ${i}`,
+        preview: `Preview ${i}`,
+        date: `2026-07-28T0${i}:00:00Z`,
+      }),
+    );
+    mocks.thread = messages;
+    mocks.isLoading = false;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { container } = render(<EmailDetail email={messages[4]} />);
+    scrollIntoView.mockClear();
+
+    // The user clicks an earlier collapsed message to expand it: the
+    // pointer interaction disengages the auto-follow.
+    fireEvent.pointerDown(
+      container.querySelector("[data-mail-thread-message]") as HTMLElement,
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Expand message from/ })[0],
+    );
+    expect(screen.getByText("Body 0")).toBeInTheDocument();
+    scrollIntoView.mockClear();
+
+    // The thread growing after that interaction must not re-anchor the
+    // view to the newest message's bottom.
+    const observer = MockResizeObserver.instances.at(-1);
+    observer!.callback([], observer as unknown as ResizeObserver);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("lists the full recipient set on the message line with self as me", () => {
+    mocks.inboxes = [
+      {
+        inboxId: "gmail:reader@example.test",
+        email: "reader@example.test",
+        displayName: null,
+        createdAt: "2026-07-28T00:00:00Z",
+      },
+    ];
+    const message = email({
+      id: "message-1",
+      to: [
+        "reader@example.test",
+        "Meghan <meghan@example.test>",
+        "kelly@example.test",
+        "fourth@example.test",
+      ],
+      cc: ["observer@example.test"],
+    });
+    mocks.thread = [message];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={message} />);
+
+    // Gmail's "to me, Meghan, Kelly" line: named recipients (self → "me")
+    // with a tail, plus the cc suffix (rendered in a child span).
+    expect(screen.getByText(/to me, meghan, kelly and 1 more/i)).toBeInTheDocument();
+    expect(screen.getByText(/cc observer/i)).toBeInTheDocument();
   });
 });
 

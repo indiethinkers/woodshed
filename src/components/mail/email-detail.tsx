@@ -100,8 +100,21 @@ export function EmailDetail({
   );
   const latest = messages[messages.length - 1];
 
+  // The connected accounts' addresses, used to render our own address as
+  // "me" in participant and recipient lines.
+  const ownEmails = useMemo(
+    () => new Set(inboxes.map((i) => i.email.toLowerCase())),
+    [inboxes],
+  );
+
+  // Full recipient list for the newest message (received summaries don't
+  // persist to/cc) — feeds the header participant line. The latest
+  // ThreadMessage reads the same query, so this shares its cache entry.
+  const { data: latestFull } = useEmailFull(latest.id, latest.inbox, true);
+
   // Gmail-style participant line for the header: unique senders across the
-  // thread, with our own messages read as "me". Order = first appearance.
+  // thread plus the newest message's recipients, with our own addresses
+  // read as "me". Order = first appearance.
   const participants = useMemo(() => {
     const seen = new Set<string>();
     const names: string[] = [];
@@ -116,8 +129,21 @@ export function EmailDetail({
         names.push(name);
       }
     }
+    for (const address of [
+      ...(latestFull?.to ?? []),
+      ...(latestFull?.cc ?? []),
+    ]) {
+      const label = ownEmails.has(normalizeEmail(address))
+        ? "me"
+        : recipientLabel(address);
+      const key = label.trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        names.push(label);
+      }
+    }
     return names;
-  }, [messages, people]);
+  }, [messages, people, latestFull, ownEmails]);
   const snoozableMessageIds = useMemo(
     () =>
       mailbox === "inbox"
@@ -215,7 +241,20 @@ export function EmailDetail({
     if (!latestEl) return;
 
     const pinLatestToBottom = () => {
-      latestEl.scrollIntoView({ block: "end" });
+      // A newest message taller than the viewport must NOT pin its bottom
+      // to the viewport bottom — that lands the reader at the message's
+      // footer ("scrolled too far down the page"). Pin its top instead so
+      // the newest message is read from its header; shorter messages pin
+      // their bottom so the reply strip stays in view.
+      const viewport = rootRef.current?.closest(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      const viewportHeight =
+        viewport instanceof HTMLElement ? viewport.clientHeight : 0;
+      const tallerThanViewport = latestEl.offsetHeight > viewportHeight;
+      latestEl.scrollIntoView({
+        block: tallerThanViewport ? "start" : "end",
+      });
     };
     let raf = 0;
     if (followLatestRef.current) {
@@ -261,6 +300,20 @@ export function EmailDetail({
       viewport?.removeEventListener("scroll", onScroll);
     };
   }, [selectedIdx, messages.length, userCursor, lastIdx]);
+
+  // Any pointer interaction inside the conversation (clicking a collapsed
+  // message to expand it, selecting a row, starting a reply) disengages the
+  // auto-follow: the thread growing after that interaction must not yank
+  // the view back down to the newest message.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const disengage = () => {
+      followLatestRef.current = false;
+    };
+    root.addEventListener("pointerdown", disengage);
+    return () => root.removeEventListener("pointerdown", disengage);
+  }, []);
 
   const replyTarget = replyTargetId
     ? (messages.find((m) => m.id === replyTargetId) ?? null)
@@ -505,6 +558,8 @@ export function EmailDetail({
             message={m}
             isFirst={idx === 0}
             isSelected={idx === selectedIdx}
+            defaultCollapsed={messages.length > 3 && idx < messages.length - 1}
+            ownEmails={ownEmails}
             onSelect={() => setUserCursor(idx)}
             onReply={() => setReplyTargetId(m.id)}
             onReplyAll={() => setCompose({ kind: "replyAll", source: m })}
@@ -580,8 +635,12 @@ export function useAutoMarkRead(
 
 /**
  * Single message inside a Gmail-style conversation. Every message is
- * expanded; the header carries the sender avatar, email, a clickable
- * recipient line ("to jordan"), the timestamp, and hover-revealed reply
+ * expanded by default; in a long thread the earlier messages start
+ * collapsed to a compact header row (Gmail collapses older responses so
+ * reading the newest message doesn't mean scrolling a wall of quoted
+ * history) — clicking a row or moving the j/k cursor onto it expands it.
+ * The header carries the sender avatar, email, a clickable recipient line
+ * ("to me, Meghan, Kelly"), the timestamp, and hover-revealed reply
  * actions. Quoted reply history collapses behind "Show trimmed content".
  * Messages sit on one continuous surface separated by faint dividers.
  *
@@ -592,6 +651,8 @@ function ThreadMessage({
   message,
   isFirst,
   isSelected,
+  defaultCollapsed,
+  ownEmails,
   onSelect,
   onReply,
   onReplyAll,
@@ -603,6 +664,10 @@ function ThreadMessage({
   /** First message in the thread — no divider above it. */
   isFirst: boolean;
   isSelected: boolean;
+  /** Start collapsed (header row only) instead of showing the full body. */
+  defaultCollapsed: boolean;
+  /** Connected accounts' addresses, matched to render self as "me". */
+  ownEmails: Set<string>;
   onSelect: () => void;
   onReply: () => void;
   onReplyAll: () => void;
@@ -612,6 +677,13 @@ function ThreadMessage({
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [trimmedOpen, setTrimmedOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  // Gmail: focusing a collapsed message (j/k or click-select) reveals it.
+  useEffect(() => {
+    if (isSelected && collapsed) setCollapsed(false);
+  }, [isSelected, collapsed]);
+
   const senderPerson = findPersonForMailSender(people, message);
   const senderName = senderPerson?.name ?? message.from;
   const senderEmail = senderPerson?.email ?? message.fromEmail;
@@ -624,7 +696,9 @@ function ThreadMessage({
   const { data: full } = useEmailFull(message.id, message.inbox, true);
   const toList = full?.to ?? message.to ?? [];
   const ccList = full?.cc ?? [];
-  const toSummary = recipientSummary(toList);
+  const toSummary = recipientSummary(toList, ownEmails);
+  const ccLabel =
+    ccList.length > 0 ? `cc ${recipientSummary(ccList, ownEmails)}` : "";
   const mailedBy = mailedByDomain(message.fromEmail);
   const { body: visibleBody, quoted } = splitQuotedBody(message.body);
 
@@ -634,7 +708,8 @@ function ThreadMessage({
       data-mail-thread-message
       onClick={onSelect}
       className={cn(
-        "group relative px-5 py-4",
+        "group relative px-5",
+        collapsed ? "py-2" : "py-4",
         // Faint divider between messages — the conversation reads as one
         // continuous surface instead of a stack of separate cards.
         !isFirst && "border-t border-border/80",
@@ -646,7 +721,30 @@ function ThreadMessage({
           className="absolute left-0 top-0 bottom-0 w-[3px] rounded-r-sm bg-violet-500"
         />
       )}
-      {/* Message header: avatar, identity, recipient line, time, actions. */}
+      {collapsed ? (
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          aria-expanded={false}
+          aria-label={`Expand message from ${headerLabel}`}
+          title={message.subject}
+          className="group flex w-full items-center gap-3 text-left"
+        >
+          <Avatar initials={avatar.initials} color={avatar.color} size="md" />
+          <span className="min-w-0 flex-1">
+            <span className="text-sm font-medium">{headerLabel}</span>
+            <span className="ml-2 truncate text-xs text-muted-foreground">
+              {message.preview || message.body || ""}
+            </span>
+          </span>
+          <span className="shrink-0 font-mono text-xs text-muted-foreground">
+            {formatMessageDate(message.date)}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 -rotate-90 shrink-0 text-muted-foreground" />
+        </button>
+      ) : (
+        <>
+          {/* Message header: avatar, identity, recipient line, time, actions. */}
       <div className="flex items-start gap-3">
         <Avatar initials={avatar.initials} color={avatar.color} size="md" />
         <div className="min-w-0 flex-1">
@@ -687,7 +785,10 @@ function ThreadMessage({
                   detailsOpen ? "Hide message details" : "Show message details"
                 }
               >
-                <span>to {toSummary}</span>
+                <span>
+                  to {toSummary}
+                  {ccLabel && <span className="ml-1">· {ccLabel}</span>}
+                </span>
                 <ChevronDown
                   className={`h-3 w-3 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
                 />
@@ -796,6 +897,8 @@ function ThreadMessage({
           </>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -923,11 +1026,40 @@ function recipientLabel(addr: string): string {
   return localPart(addr);
 }
 
-function recipientSummary(addrs: string[]): string {
+// Gmail's "to me, Meghan, Kelly" line: up to three named recipients with
+// our own address read as "me", then "and N more" for the rest. The same
+// shape serves the cc suffix.
+function recipientSummary(addrs: string[], ownEmails: Set<string>): string {
   if (addrs.length === 0) return "";
-  const first = recipientLabel(addrs[0]);
-  if (addrs.length === 1) return first;
-  return `${first} and ${addrs.length - 1} other${addrs.length - 1 === 1 ? "" : "s"}`;
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const addr of addrs) {
+    // Dedupe on the normalized address so two people sharing a first name
+    // both appear; our own address collapses to "me".
+    const normalized = normalizeEmail(addr);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    const label = ownEmails.has(normalized) ? "me" : recipientLabel(addr);
+    labels.push(label);
+  }
+  if (labels.length === 1) return labels[0];
+  if (labels.length <= 3) return labels.join(", ");
+  return `${labels.slice(0, 3).join(", ")} and ${labels.length - 3} more`;
+}
+
+function normalizeEmail(address: string): string {
+  const angle = address.match(/<([^>]+)>/);
+  return (angle?.[1] ?? address).trim().toLowerCase();
+}
+
+function formatMessageDate(date: string): string {
+  return new Date(date).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 function localPart(email: string): string {
