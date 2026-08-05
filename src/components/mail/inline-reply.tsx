@@ -95,7 +95,7 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Type your reply…"
-        className="w-full min-h-[120px] max-h-[40vh] resize-none px-4 py-3 bg-transparent outline-none text-[13.5px] leading-6 placeholder:text-muted-foreground"
+        className="w-full min-h-[120px] max-h-[40vh] resize-none px-4 py-3 bg-transparent outline-none text-[13.5px] leading-5 placeholder:text-muted-foreground"
         spellCheck
         autoComplete="off"
         autoCorrect="off"

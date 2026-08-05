@@ -41,8 +41,14 @@ const STYLES: &str = r#"
     font-size: 15px;
     line-height: 1.55;
     color: #1f2328;
+    /* `break-word`, not `anywhere`: `anywhere` also collapses a word's
+       min-content to a single character, which makes auto-layout tables
+       honor narrow authored column widths by crushing the text inside
+       them — GitHub's 24px-wide "Status" header renders as one vertical
+       letter per line. `break-word` still wraps long tokens (URLs) when
+       they exceed the line box, but leaves intrinsic table sizing alone. */
     word-wrap: break-word;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
     /* Sender colours assume a light canvas, so the document owns one
        explicitly rather than inheriting the app's theme and leaving dark-mode
        readers with #333 text on a dark background. The email's own body tag is
@@ -112,6 +118,16 @@ const BRIDGE: &str = r#"
   }
   document.addEventListener('click', dispatchClick, true);
   document.addEventListener('auxclick', dispatchClick, true);
+  // The body iframe is always sized to its content and never scrolls
+  // internally, so a wheel over an email would die inside the frame.
+  // Forward it to the parent's scroll container so scrolling over an
+  // email behaves like scrolling over any other page.
+  document.addEventListener('wheel', function(e) {
+    if (e.ctrlKey) return;
+    if (e.deltaX === 0 && e.deltaY === 0) return;
+    e.preventDefault();
+    try { parent.postMessage({ type: 'wsmail-wheel', deltaX: e.deltaX, deltaY: e.deltaY }, '*'); } catch (err) {}
+  }, { passive: false });
   function start() {
     try {
       var ro = new ResizeObserver(reportHeight);
@@ -536,6 +552,27 @@ mod tests {
         assert!(!out.contains("alert(2)"));
         assert!(!out.contains("onclick"));
         assert!(out.contains(">hi<"));
+    }
+
+    #[test]
+    fn bridge_forwards_wheels_to_the_parent_scroll_container() {
+        let out = render_email("<p>hi</p>", empty_dims(), false).unwrap();
+        // The body iframe is auto-height and never scrolls internally, so
+        // the bridge must forward wheel deltas to the parent page.
+        assert!(out.contains("wsmail-wheel"));
+        assert!(out.contains("deltaY"));
+    }
+
+    #[test]
+    fn injected_styles_do_not_crush_table_column_min_content() {
+        let out = render_email("<p>hi</p>", empty_dims(), false).unwrap();
+        // `overflow-wrap: anywhere` collapses a word's min-content to one
+        // character, so auto-layout tables honor narrow authored widths by
+        // stacking the text vertically (GitHub's 24px "Status" column).
+        // `break-word` wraps long tokens without that intrinsic-size side
+        // effect.
+        assert!(out.contains("overflow-wrap: break-word"));
+        assert!(!out.contains("overflow-wrap: anywhere"));
     }
 
     #[test]

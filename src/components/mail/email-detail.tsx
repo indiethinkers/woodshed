@@ -3,7 +3,6 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Archive,
   ChevronDown,
-  ChevronRight,
   FileImage,
   FileText,
   Forward,
@@ -25,6 +24,8 @@ import {
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
+import { splitQuotedBody } from "@/lib/mail-lib/trim-quoted";
+import { addressAvatar } from "@/lib/avatars";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { mailOpenAttachment } from "@/lib/mail-lib/mail";
 import {
@@ -33,6 +34,7 @@ import {
   type EmailSummary,
   type Mailbox,
 } from "@/lib/mail-lib/types";
+import { Avatar } from "@/components/shared/avatar";
 import { BacklinksPanel } from "@/components/shared/backlinks-panel";
 import { OutgoingLinksPanel } from "@/components/shared/outgoing-links-panel";
 import {
@@ -55,8 +57,10 @@ interface EmailDetailProps {
 
 /**
  * Thread view: stacks every locally-persisted message that shares
- * `email.threadId` chronologically (oldest first). The latest message is
- * expanded by default; older messages collapse to a one-line summary.
+ * `email.threadId` chronologically (oldest first) as a Gmail-style
+ * conversation — every message expanded, each with a sender avatar,
+ * recipient line, and hover-revealed reply actions. Quoted reply history
+ * is collapsed behind a "Show trimmed content" toggle.
  *
  * Side effects on mount:
  *   - escape returns to /mail (Superhuman behavior)
@@ -95,6 +99,25 @@ export function EmailDetail({
     [thread, email],
   );
   const latest = messages[messages.length - 1];
+
+  // Gmail-style participant line for the header: unique senders across the
+  // thread, with our own messages read as "me". Order = first appearance.
+  const participants = useMemo(() => {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const message of messages) {
+      const isSent = message.labels.some((label) => label.toLowerCase() === "sent");
+      const name = isSent
+        ? "me"
+        : (findPersonForMailSender(people, message)?.name ?? message.from);
+      const key = name.trim().toLowerCase();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        names.push(name);
+      }
+    }
+    return names;
+  }, [messages, people]);
   const snoozableMessageIds = useMemo(
     () =>
       mailbox === "inbox"
@@ -110,28 +133,6 @@ export function EmailDetail({
         : [],
     [mailbox, messages],
   );
-  const [openMessageIds, setOpenMessageIds] = useState<Set<string>>(() =>
-    isLoading ? new Set() : new Set([latest.id]),
-  );
-  const initializedOpenState = useRef(!isLoading);
-  const previousLatestId = useRef(latest.id);
-
-  // The route-level message is only a temporary fallback while the complete
-  // local thread loads. Initialize expansion from the complete result so that
-  // fallback does not remain open next to the actual newest message.
-  useEffect(() => {
-    if (isLoading) return;
-    if (!initializedOpenState.current) {
-      initializedOpenState.current = true;
-      previousLatestId.current = latest.id;
-      setOpenMessageIds(new Set([latest.id]));
-      return;
-    }
-    if (previousLatestId.current !== latest.id) {
-      previousLatestId.current = latest.id;
-      setOpenMessageIds(new Set([latest.id]));
-    }
-  }, [isLoading, latest.id]);
 
   // Cursor for keyboard navigation through the thread. Null = no manual
   // navigation yet, so the cursor tracks the newest message (which is
@@ -163,10 +164,18 @@ export function EmailDetail({
   // is taller than the viewport, `block: "nearest"` aligns the message
   // top with the viewport top, which hides the page header (subject,
   // from row, action buttons). The dedicated scroll-to-top effect above
-  // already lands those emails at the top. Multi-message threads still
-  // scroll to the latest message on mount.
+  // already lands those emails at the top. Multi-message threads scroll
+  // to the latest message when the complete thread loads (and again when
+  // a new message syncs into the open thread).
   useEffect(() => {
     if (messages.length <= 1 && userCursor === null) return;
+    // Release ContentPanel's late-load scroll guard before the
+    // programmatic scroll: the guard only listens for real user input on
+    // the parent window, so without this it snaps the scrollIntoView
+    // back to the top during its settle window. A synthetic wheel is
+    // invisible to every other listener — the guard is the only window
+    // wheel handler.
+    window.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true }));
     messageRefs.current[selectedIdx]?.scrollIntoView({ block: "nearest" });
   }, [selectedIdx, messages.length, userCursor]);
 
@@ -301,20 +310,23 @@ export function EmailDetail({
         return (
           <div className="mb-4">
             <h1 className="text-lg font-semibold">{latest.subject}</h1>
-            <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+            <div className="flex items-baseline gap-2 mt-1 text-sm text-muted-foreground">
               {shouldShowUnreadIndicator(latest) && (
                 <span
                   aria-label="Unread"
                   title="Unread"
-                  className="inline-block h-2 w-2 rounded-full bg-blue-500 shrink-0"
+                  className="inline-block h-2 w-2 rounded-full bg-blue-500 shrink-0 self-center"
                 />
               )}
-              <span>
-                {messages.length > 1
-                  ? `${messages.length} messages`
-                  : latest.from}
+              <span className="truncate font-medium text-foreground/80">
+                {participants.join(", ")}
               </span>
-              <span className="font-mono text-xs">
+              {messages.length > 1 && (
+                <span className="shrink-0 text-xs">
+                  {messages.length} messages
+                </span>
+              )}
+              <span className="font-mono text-xs shrink-0">
                 {new Date(latest.date).toLocaleString("en-US", {
                   month: "short",
                   day: "numeric",
@@ -325,7 +337,7 @@ export function EmailDetail({
               </span>
               {latest.inbox && (
                 <span
-                  className="ml-auto flex items-center gap-1.5 text-xs"
+                  className="ml-auto flex items-center gap-1.5 text-xs shrink-0"
                   title={`Received at ${inboxLabel}`}
                 >
                   <span
@@ -401,20 +413,14 @@ export function EmailDetail({
         </Button>
       </div>
 
-      <div className="space-y-4">
+      {/* One continuous conversation surface (Gmail-style): messages are
+          separated by faint dividers instead of floating as separate cards. */}
+      <div className="overflow-hidden rounded-md border border-border bg-background wd-email-sheet">
         {messages.map((m, idx) => (
           <ThreadMessage
             key={m.id}
             message={m}
-            open={openMessageIds.has(m.id)}
-            onToggle={() => {
-              setOpenMessageIds((current) => {
-                const next = new Set(current);
-                if (next.has(m.id)) next.delete(m.id);
-                else next.add(m.id);
-                return next;
-              });
-            }}
+            isFirst={idx === 0}
             isSelected={idx === selectedIdx}
             onSelect={() => setUserCursor(idx)}
             onReply={() => setReplyTargetId(m.id)}
@@ -428,11 +434,18 @@ export function EmailDetail({
         ))}
       </div>
 
-      {replyTarget && (
+      {/* Reply surface: the expanded inline composer while a reply is
+          targeted, otherwise Gmail's always-present collapsed strip. */}
+      {replyTarget ? (
         <InlineReply
           key={replyTarget.id}
           message={replyTarget}
           onClose={() => setReplyTargetId(null)}
+        />
+      ) : (
+        <CollapsedReplyStrip
+          onReply={() => setReplyTargetId((messages[selectedIdx] ?? latest).id)}
+          onForward={() => setCompose({ kind: "forward", source: latest })}
         />
       )}
 
@@ -483,16 +496,18 @@ export function useAutoMarkRead(
 }
 
 /**
- * Single message inside a thread. The newest message expands by default;
- * older ones collapse to a single-line preview the user can click open.
+ * Single message inside a Gmail-style conversation. Every message is
+ * expanded; the header carries the sender avatar, email, a clickable
+ * recipient line ("to jordan"), the timestamp, and hover-revealed reply
+ * actions. Quoted reply history collapses behind "Show trimmed content".
+ * Messages sit on one continuous surface separated by faint dividers.
  *
- * `isSelected` drives the violet keyboard-cursor border. `onSelect` lets
+ * `isSelected` drives the violet keyboard-cursor bar. `onSelect` lets
  * a click set the cursor without forcing the user to use j/k first.
  */
 function ThreadMessage({
   message,
-  open,
-  onToggle,
+  isFirst,
   isSelected,
   onSelect,
   onReply,
@@ -502,8 +517,8 @@ function ThreadMessage({
   ref,
 }: {
   message: EmailSummary;
-  open: boolean;
-  onToggle: () => void;
+  /** First message in the thread — no divider above it. */
+  isFirst: boolean;
   isSelected: boolean;
   onSelect: () => void;
   onReply: () => void;
@@ -513,63 +528,62 @@ function ThreadMessage({
   ref?: React.Ref<HTMLDivElement>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [trimmedOpen, setTrimmedOpen] = useState(false);
   const senderPerson = findPersonForMailSender(people, message);
   const senderName = senderPerson?.name ?? message.from;
   const senderEmail = senderPerson?.email ?? message.fromEmail;
   const isSent = message.labels.some((l) => l.toLowerCase() === "sent");
   const headerLabel = isSent ? "You" : senderName;
+  const avatar = addressAvatar(senderName, senderEmail);
 
-  // Lazily load to/cc from disk only when the message is expanded — an
-  // open thread can have many older messages and we don't want to read
-  // every one for messages the user hasn't unfolded.
-  const { data: full } = useEmailFull(message.id, message.inbox, open);
-  const toList = full?.to ?? [];
+  // Recipient lists load lazily from disk. Sent records carry `to` on the
+  // summary so their recipient line renders before the full read lands.
+  const { data: full } = useEmailFull(message.id, message.inbox, true);
+  const toList = full?.to ?? message.to ?? [];
   const ccList = full?.cc ?? [];
   const toSummary = recipientSummary(toList);
   const mailedBy = mailedByDomain(message.fromEmail);
+  const { body: visibleBody, quoted } = splitQuotedBody(message.body);
 
   return (
     <div
       ref={ref}
+      data-mail-thread-message
+      onClick={onSelect}
       className={cn(
-        "relative overflow-hidden border border-border rounded-md bg-background transition-shadow duration-200",
-        // The light sheet applies only while the message is open. Sender HTML
-        // forces a light canvas, so an open message is a document either way
-        // and the whole card should agree with it. A collapsed row shows no
-        // sender content at all, so it stays part of the app's themed chrome
-        // rather than turning a thread into a stack of white bars.
-        open && "wd-email-sheet",
-        isSelected &&
-          "shadow-[0_1px_3px_rgba(124,58,237,0.08),0_8px_24px_-12px_rgba(124,58,237,0.22)]",
+        "group relative px-5 py-4",
+        // Faint divider between messages — the conversation reads as one
+        // continuous surface instead of a stack of separate cards.
+        !isFirst && "border-t border-border/80",
       )}
     >
-      <button
-        type="button"
-        onClick={() => {
-          onSelect();
-          onToggle();
-        }}
-        className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-foreground/[0.02] transition-colors"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-1" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-1" />
-        )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2">
+      {isSelected && (
+        <span
+          aria-hidden
+          className="absolute left-0 top-0 bottom-0 w-[3px] rounded-r-sm bg-violet-500"
+        />
+      )}
+      {/* Message header: avatar, identity, recipient line, time, actions. */}
+      <div className="flex items-start gap-3">
+        <Avatar initials={avatar.initials} color={avatar.color} size="md" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
             <span className="text-sm font-medium truncate">{headerLabel}</span>
-            <span className="font-mono text-xs text-muted-foreground truncate">
+            <span className="font-mono text-xs text-muted-foreground truncate hidden sm:inline">
               {senderEmail}
             </span>
+            <span className="ml-auto font-mono text-xs text-muted-foreground shrink-0">
+              {new Date(message.date).toLocaleString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              })}
+            </span>
           </div>
-          {!open && (
-            <div className="text-[13px] text-muted-foreground truncate mt-0.5">
-              {message.preview}
-            </div>
-          )}
-          {open && toSummary && (
-            <div className="mt-0.5">
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+            {toSummary && (
               <span
                 role="button"
                 tabIndex={0}
@@ -595,21 +609,40 @@ function ThreadMessage({
                   className={`h-3 w-3 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
                 />
               </span>
+            )}
+            {/* Gmail reveals reply actions on hover. Keyboard focus reveals
+                them too (focus-within), so tab users aren't left guessing. */}
+            <div className="ml-auto flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <button
+                type="button"
+                onClick={onReply}
+                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+              >
+                <Reply className="h-3 w-3" strokeWidth={1.75} />
+                Reply
+              </button>
+              <button
+                type="button"
+                onClick={onReplyAll}
+                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+              >
+                <ReplyAll className="h-3 w-3" strokeWidth={1.75} />
+                Reply all
+              </button>
+              <button
+                type="button"
+                onClick={onForward}
+                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
+              >
+                <Forward className="h-3 w-3" strokeWidth={1.75} />
+                Forward
+              </button>
             </div>
-          )}
+          </div>
         </div>
-        <span className="font-mono text-xs text-muted-foreground shrink-0 mt-0.5">
-          {new Date(message.date).toLocaleString("en-US", {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
-          })}
-        </span>
-      </button>
-      {open && detailsOpen && (
-        <div className="mx-4 mb-3 rounded-md bg-muted/60 px-3 py-2 text-xs">
+      </div>
+      {detailsOpen && (
+        <div className="mt-2 rounded-md bg-muted/60 px-3 py-2 text-xs">
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <dt className="text-muted-foreground">from:</dt>
             <dd className="break-words">
@@ -650,45 +683,75 @@ function ThreadMessage({
           </dl>
         </div>
       )}
-      {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-border">
-          {message.attachments.length > 0 && (
-            <AttachmentRow
-              messageId={message.id}
-              attachments={message.attachments}
-            />
-          )}
-          {message.html ? (
-            <HtmlBody messageId={message.id} />
-          ) : (
-            <Markdown text={message.body} className="text-base leading-7" />
-          )}
-          <div className="mt-5 flex flex-wrap gap-2 border-t border-border/70 pt-3">
-            <Button type="button" variant="ghost" size="sm" onClick={onReply}>
-              <Reply className="h-3.5 w-3.5 mr-1.5" />
-              Reply
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onReplyAll}
-            >
-              <ReplyAll className="h-3.5 w-3.5 mr-1.5" />
-              Reply all
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onForward}
-            >
-              <Forward className="h-3.5 w-3.5 mr-1.5" />
-              Forward
-            </Button>
-          </div>
-        </div>
-      )}
+      <div className="pt-2">
+        {message.attachments.length > 0 && (
+          <AttachmentRow
+            messageId={message.id}
+            attachments={message.attachments}
+          />
+        )}
+        {message.html ? (
+          <HtmlBody messageId={message.id} />
+        ) : (
+          <>
+            <Markdown text={visibleBody} className="text-base leading-7" />
+            {quoted && !trimmedOpen && (
+              <button
+                type="button"
+                onClick={() => setTrimmedOpen(true)}
+                className="mt-3 inline-flex items-center gap-1 rounded-sm px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] transition-colors"
+              >
+                <ChevronDown className="h-3 w-3" strokeWidth={1.75} />
+                Show trimmed content
+              </button>
+            )}
+            {quoted && trimmedOpen && (
+              <div className="mt-3 border-t border-border/70 pt-3 opacity-70">
+                <Markdown text={quoted} className="text-[13px] leading-6" />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Gmail's collapsed reply affordance: a one-line "Click here to Reply or
+ * Forward" strip that is always present at the bottom of a conversation.
+ * Clicking Reply expands the inline composer (targeting the focused
+ * message); Forward opens the full composer. Replaced by the expanded
+ * InlineReply while a reply is open.
+ */
+function CollapsedReplyStrip({
+  onReply,
+  onForward,
+}: {
+  onReply: () => void;
+  onForward: () => void;
+}) {
+  return (
+    <div className="mt-3 flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.02]">
+      <Reply className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+      <span>Click here to</span>
+      <button
+        type="button"
+        onClick={onReply}
+        aria-label="Reply to this thread"
+        className="font-medium text-foreground/80 hover:text-foreground hover:underline underline-offset-2 transition-colors"
+      >
+        Reply
+      </button>
+      <span>or</span>
+      <button
+        type="button"
+        onClick={onForward}
+        aria-label="Forward this thread"
+        className="font-medium text-foreground/80 hover:text-foreground hover:underline underline-offset-2 transition-colors"
+      >
+        Forward
+      </button>
     </div>
   );
 }

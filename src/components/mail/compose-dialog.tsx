@@ -533,7 +533,7 @@ export function ComposeDialog({
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Write your message…"
-          className={`flex-1 min-h-[260px] w-full resize-none border-t border-border bg-transparent px-5 py-4 text-[14px] leading-[22px] outline-none placeholder:text-muted-foreground/60 ${
+          className={`flex-1 min-h-[260px] w-full resize-none border-t border-border bg-transparent px-5 py-4 text-[14px] leading-[20px] outline-none placeholder:text-muted-foreground/60 ${
             expanded ? "max-h-none" : "max-h-[50vh]"
           }`}
           spellCheck
