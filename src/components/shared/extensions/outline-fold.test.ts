@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { OutlineListItem, parseCollapsedMarkers } from "./outline-fold";
 import { DailyTimestamp } from "./daily-timestamp";
+import { ImageMd } from "./image-md";
 import {
   deleteEmptyListItem,
   deleteListItemTextBeforeCursor,
@@ -26,6 +27,9 @@ function makeEditor(content = "") {
       }),
       OutlineListItem,
       DailyTimestamp,
+      // The listItem content expression references `image` (a bare image
+      // row is a valid list item); the app schema always registers this.
+      ImageMd,
       Markdown.configure({
         html: false,
         linkify: true,

@@ -6,6 +6,7 @@ import { TextSelection } from "@tiptap/pm/state";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
 import { DailyTimestamp } from "./extensions/daily-timestamp";
 import { OutlineListItem } from "./extensions/outline-fold";
+import { ImageMd } from "./extensions/image-md";
 import { insertTimestampedHorizontalRule } from "./timestamped-list-enter";
 
 function typeText(editor: Editor, text: string) {
@@ -48,6 +49,9 @@ describe("outline horizontal-rule shortcut", () => {
         OutlineListItem,
         Typography,
         DailyTimestamp,
+        // The listItem content expression references `image`; the app
+        // schema always registers it.
+        ImageMd,
         Markdown.configure({ bulletListMarker: "-" }),
       ],
       content: "<ul><li><p></p></li></ul>",

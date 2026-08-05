@@ -555,8 +555,8 @@ function EmailRow({
       <div
         className={`w-[160px] shrink-0 truncate text-sm ${
           isUnread
-            ? "font-semibold text-foreground"
-            : "font-medium text-muted-foreground"
+            ? "font-bold text-foreground"
+            : "font-normal text-muted-foreground"
         }`}
       >
         {correspondent}
@@ -565,8 +565,8 @@ function EmailRow({
         <span
           className={`text-sm truncate shrink-0 max-w-[45%] ${
             isUnread
-              ? "font-semibold text-foreground"
-              : "font-medium text-muted-foreground"
+              ? "font-bold text-foreground"
+              : "font-normal text-muted-foreground"
           }`}
         >
           {email.subject}

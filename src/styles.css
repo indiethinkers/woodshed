@@ -450,6 +450,7 @@
   > p
   > [data-daily-timestamp] {
   position: absolute;
+  z-index: -1;
   top: 0.25rem;
   right: calc(100% + 1.75rem);
   width: 3rem;
@@ -475,6 +476,7 @@
 .tiptap-content[data-daily-timestamps] ul ul > li::before {
   content: "•";
   position: absolute;
+  z-index: -1;
   left: 2px;
   top: 0;
   color: var(--muted-foreground);

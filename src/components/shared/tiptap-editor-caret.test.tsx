@@ -47,6 +47,129 @@ async function unmountAndDrainEditorTimers(unmount: () => void) {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
+describe("TiptapEditor image rows", () => {
+  it("keeps a bare image row as one list item with a stable markdown roundtrip", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const VALUE =
+      "- [13:50] Sarah and Bowen was a sight to behold. Pure joy.\n" +
+      "- ![IMG_2744.HEIC](attachments/01KZ9V59JKGHPN52Q4ZTDRWBA7.heic)\n";
+    const { container, unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <TiptapEditor
+          value={VALUE}
+          onCommit={vi.fn()}
+          mode="outline"
+          timestampedListItems
+        />
+      </QueryClientProvider>,
+    );
+
+    const content = await waitFor(() => {
+      const element = container.querySelector<
+        HTMLElement & {
+          editor?: {
+            getJSON: () => unknown;
+            storage?: { markdown?: { getMarkdown?: () => string } };
+          };
+        }
+      >(".tiptap-content");
+      expect(element?.editor).toBeTruthy();
+      return element!;
+    });
+
+    // A bare image row must parse as a SINGLE list item holding the image —
+    // not as an empty item followed by an image item (the empty item
+    // rendered as a gap above the image and the roundtrip wrote a `- ` row
+    // back to the file, pushing the image down on every commit).
+    const json = content.editor!.getJSON() as {
+      content?: {
+        content?: { content?: { type: string }[] }[];
+      }[];
+    };
+    const items = json.content?.[0]?.content ?? [];
+    expect(items.length).toBe(2);
+    expect(items[1].content?.[0]?.type).toBe("image");
+
+    // The markdown roundtrip must not introduce an empty row above the image.
+    const roundtrip =
+      content.editor!.storage?.markdown?.getMarkdown?.() ?? "";
+    expect(roundtrip + "\n").toBe(VALUE);
+    expect(roundtrip).not.toContain("\n- \n");
+
+    await unmountAndDrainEditorTimers(unmount);
+  });
+});
+
+describe("TiptapEditor slash command", () => {
+  it("commits the selected command on Enter in timestamped mode instead of splitting a new row", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { container, unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <TiptapEditor
+          value=""
+          onCommit={vi.fn()}
+          mode="outline"
+          timestampedListItems
+        />
+      </QueryClientProvider>,
+    );
+
+    const content = await waitFor(() => {
+      const element = container.querySelector<
+        HTMLElement & {
+          editor?: {
+            commands: { insertContent: (value: string) => void };
+            getJSON: () => unknown;
+          };
+        }
+      >(".tiptap-content");
+      expect(element?.editor).toBeTruthy();
+      return element!;
+    });
+
+    // Type "/" to open the slash menu (the Suggestion plugin activates
+    // when the trigger char lands), then "he" to filter the items — the
+    // same two keystrokes a user types.
+    act(() => {
+      content.editor!.commands.insertContent("/");
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector("[data-slash-command-menu]")).toBeTruthy();
+    });
+
+    act(() => {
+      content.editor!.commands.insertContent("he");
+    });
+
+    await waitFor(() => {
+      expect(
+        document.querySelectorAll("[data-slash-command-menu] button").length,
+      ).toBeGreaterThan(0);
+    });
+
+    // Enter must run the highlighted command — the timestamped-list
+    // Enter handler used to split a new row before the suggestion
+    // plugin's keymap ever saw the key.
+    fireEvent.keyDown(content, { key: "Enter" });
+
+    await waitFor(() => {
+      const json = JSON.stringify(content.editor!.getJSON());
+      expect(json).not.toContain("/he");
+    });
+
+    const jsonText = JSON.stringify(content.editor!.getJSON());
+    expect(jsonText).toContain("\"type\":\"heading\"");
+    expect(jsonText).toContain("\"level\":1");
+
+    await unmountAndDrainEditorTimers(unmount);
+  });
+});
+
 describe("TiptapEditor caret cadence", () => {
   it("installs Woodshed's controlled caret instead of relying on WebKit timing", async () => {
     const queryClient = new QueryClient({

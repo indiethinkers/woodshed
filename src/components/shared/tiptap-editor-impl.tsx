@@ -280,6 +280,9 @@ export function TiptapEditor({
     null,
   );
   const slashMenuRef = useRef<SlashCommandMenuHandle | null>(null);
+  // Mirrors slashState for the view-level keydown handler, which captures
+  // values only once at editor creation (state would be stale there).
+  const slashStateRef = useRef<SlashCommandMenuState | null>(null);
   const [wikilinkState, setWikilinkStateInner] =
     useState<WikilinkPickerState | null>(null);
   const wikilinkStateRef = useRef<WikilinkPickerState | null>(null);
@@ -755,22 +758,25 @@ export function TiptapEditor({
         suggestion: {
           render: () => ({
             onStart: (props) => {
-              setSlashState({
+              slashStateRef.current = {
                 items: props.items,
                 query: props.query,
                 command: (item) => props.command(item),
                 clientRect: props.clientRect ?? null,
-              });
+              };
+              setSlashState(slashStateRef.current);
             },
             onUpdate: (props) => {
-              setSlashState({
+              slashStateRef.current = {
                 items: props.items,
                 query: props.query,
                 command: (item) => props.command(item),
                 clientRect: props.clientRect ?? null,
-              });
+              };
+              setSlashState(slashStateRef.current);
             },
             onExit: () => {
+              slashStateRef.current = null;
               setSlashState(null);
             },
             // Forward keyboard events to the React menu so it can drive
@@ -820,6 +826,20 @@ export function TiptapEditor({
       // picker path lives in WikilinkSuggestion and triggers when `[[` is
       // typed at an empty selection.)
       handleKeyDown(view, event) {
+        // While the slash-command menu is open its keys belong to the
+        // suggestion plugin's keymap, which runs AFTER this view handler.
+        // Let everything fall through untouched except Escape (close the
+        // menu here) — the timestamped-list / outline handlers below would
+        // otherwise turn Enter into a new row instead of committing the
+        // selected command.
+        if (slashStateRef.current) {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setSlashState(null);
+            return true;
+          }
+          return false;
+        }
         if (wikilinkStateRef.current) {
           if (event.key === "Escape") {
             event.preventDefault();

@@ -47,6 +47,15 @@ function hasChildList(node: PMNode): boolean {
 }
 
 export const OutlineListItem = ListItem.extend({
+  // A list item may start with a block image (`- ![alt](src)` parses the
+  // image out of its paragraph via tiptap-markdown's block normalization).
+  // The default `paragraph block*` rejects a block-first item, which
+  // degraded every bare image row into an empty item + image item — an
+  // empty row rendered above the image, and the markdown roundtrip wrote
+  // that empty row back to the file, pushing the image further down on
+  // every commit.
+  content: "(paragraph | image) block*",
+
   addAttributes() {
     return {
       ...this.parent?.(),
