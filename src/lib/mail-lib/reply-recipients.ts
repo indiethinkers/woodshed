@@ -1,9 +1,16 @@
 import type { EmailSummary } from "@/lib/mail-lib/types";
 
-/** Resolve reply recipients without ever addressing the connected account. */
+/**
+ * Resolve reply recipients without ever addressing the connected account.
+ *
+ * Received messages carry empty `to`/`cc` on the summary (only sent records
+ * persist them); pass the lazily-loaded full message (`EmailFull`) so Reply
+ * All addresses every participant of a received email, not just the sender.
+ */
 export function replyRecipients(
-  source: EmailSummary,
+  source: Pick<EmailSummary, "inbox" | "fromEmail" | "to" | "cc">,
   includeAll: boolean,
+  full?: Pick<EmailSummary, "to" | "cc"> | null,
 ): { to: string[]; cc: string[] } {
   const ownAddress = source.inbox.startsWith("gmail:")
     ? source.inbox.slice("gmail:".length)
@@ -28,15 +35,17 @@ export function replyRecipients(
 
   const senderIsSelf =
     normalizedAddress(source.fromEmail) === normalizedAddress(ownAddress);
+  const toList = full?.to?.length ? full.to : (source.to ?? []);
+  const ccList = full?.cc?.length ? full.cc : (source.cc ?? []);
   const toCandidates = includeAll
-    ? [source.fromEmail, ...(source.to ?? [])]
+    ? [source.fromEmail, ...toList]
     : senderIsSelf
-      ? (source.to ?? [])
+      ? toList
       : [source.fromEmail];
 
   return {
     to: unique(toCandidates),
-    cc: includeAll ? unique(source.cc ?? []) : [],
+    cc: includeAll ? unique(ccList) : [],
   };
 }
 
