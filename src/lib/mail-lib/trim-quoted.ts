@@ -16,15 +16,30 @@
  *   - `____________` (Gmail's plaintext separator)
  *   - `-----Original Message-----` / `---------- Forwarded message ----------`
  *     (Outlook / Gmail forwarded)
- *   - `From: ...` / `Sent: ...` blocks (Outlook replies)
+ *
+ * Outlook header blocks (`From:` / `Sent:` / …) are deliberately NOT in
+ * this single-line set — see `isHeaderLine` and the two-consecutive-line
+ * rule in `splitQuotedBody`.
  */
 const QUOTE_START_RE =
-  /^(?:>\s?|On\s+.+wrote:\s*$|_+\s*$|=+\s*$|-{3,}\s*$|--+ (?:Original|Forwarded) message --+\s*$|(?:From|Sent|To|Subject|Date|Cc):\s)/i;
+  /^(?:>\s?|On[ \t].+wrote:[ \t]*$|_+\s*$|=+\s*$|-{3,}\s*$|--+ (?:Original|Forwarded) message --+\s*$)/i;
+
+/**
+ * An RFC 5322-style header field ("From: Jordan", "Sent: Tuesday …").
+ * A lone header-like line can be legitimate body content ("To: all
+ * staff"), so these only start a quoted section in pairs — a real
+ * Outlook/forwarded block is always several consecutive header lines.
+ */
+const HEADER_LINE_RE = /^(?:From|Sent|To|Subject|Date|Cc):\s/i;
 
 const MIN_QUOTED_LINES = 4;
 
 function isQuoteStartLine(line: string): boolean {
   return QUOTE_START_RE.test(line);
+}
+
+function isHeaderLine(line: string): boolean {
+  return HEADER_LINE_RE.test(line);
 }
 
 export interface SplitBody {
@@ -38,10 +53,20 @@ export interface SplitBody {
 }
 
 export function splitQuotedBody(rawBody: string): SplitBody {
-  const lines = rawBody.split("\n");
+  // Normalize CRLF so the line-based heuristics see clean lines regardless
+  // of which client wrote the message.
+  const text = rawBody.replace(/\r\n/g, "\n");
+  const lines = text.split("\n");
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
     if (isQuoteStartLine(lines[i]!)) {
+      start = i;
+      break;
+    }
+    // Outlook/forwarded header blocks only count when they form a real
+    // block — two consecutive header fields — so a body that legitimately
+    // opens with a single "To: all staff" line isn't trimmed.
+    if (isHeaderLine(lines[i]!) && isHeaderLine(lines[i + 1] ?? "")) {
       start = i;
       break;
     }

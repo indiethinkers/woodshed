@@ -68,4 +68,48 @@ describe("splitQuotedBody", () => {
     expect(visible).toBe("");
     expect(quoted).toContain("> one more thing");
   });
+
+  it("trims quoted content in CRLF bodies", () => {
+    const body = [
+      "Fresh reply.",
+      "",
+      "On Tue, Jul 28, 2026 at 9:00 AM Jordan <jordan@example.test> wrote:",
+      "",
+      "> Sounds good. I will review the pull request tonight and leave",
+      "> inline comments where the design needs another pass first.",
+      "> Keep it up — the demo on Friday should go smoothly.",
+      "> We can ship on Monday if nothing else surfaces.",
+      "> Talk soon.",
+    ].join("\r\n");
+    const { body: visible, quoted } = splitQuotedBody(body);
+
+    expect(visible).toBe("Fresh reply.");
+    expect(quoted).toContain("> Talk soon.");
+  });
+
+  it("trims an Outlook-style header block when it forms a real block", () => {
+    const body = [
+      "Reply text",
+      "",
+      "From: Jordan Hoffman",
+      "Sent: Tuesday, July 28, 2026 9:00 AM",
+      "To: me",
+      "Subject: RE: Project update",
+      "",
+      "> Original message body",
+      "> More quoted lines",
+      "> More quoted lines 2",
+      "> More quoted lines 3",
+      "> More quoted lines 4",
+    ].join("\n");
+    const { body: visible, quoted } = splitQuotedBody(body);
+
+    expect(visible).toBe("Reply text");
+    expect(quoted).toContain("From: Jordan Hoffman");
+  });
+
+  it("does not treat a lone header-like line as a quoted block", () => {
+    const body = "To: all staff\n\nWe are announcing the new office hours.";
+    expect(splitQuotedBody(body).quoted).toBeNull();
+  });
 });
