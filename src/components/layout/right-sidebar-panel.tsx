@@ -30,7 +30,7 @@ import { useAreas } from "@/lib/hooks/use-areas";
 import { useEvent, useIcalEvent } from "@/lib/hooks/use-events";
 import { useEmail } from "@/lib/hooks/use-mail";
 import { useNote } from "@/lib/hooks/use-notes";
-import { usePerson } from "@/lib/hooks/use-people";
+import { useAllPeople, usePerson, type PersonDto } from "@/lib/hooks/use-people";
 import { useResource } from "@/lib/hooks/use-resources";
 import { useRow, useTable, type CellValue } from "@/lib/hooks/use-tables";
 import { useTask } from "@/lib/hooks/use-tasks";
@@ -299,10 +299,27 @@ function NoteReference({ id, href }: { id: string; href: string }) {
   );
 }
 
+/** Best-effort name for a resource people-list entry: match the linked
+ *  person's id, else an exact name match (legacy freeform bylines), else
+ *  fall back to the raw entry. */
+function personLabelForResource(entry: string, people: PersonDto[]): string {
+  const byId = people.find((person) => person.id === entry);
+  if (byId) return byId.name;
+  const byName = people.find(
+    (person) => person.name.toLocaleLowerCase() === entry.toLocaleLowerCase(),
+  );
+  return byName?.name ?? entry;
+}
+
 function ResourceReference({ id, href }: { id: string; href: string }) {
   const { data: resource, isLoading } = useResource(id);
+  const { data: people = [] } = useAllPeople();
   if (isLoading) return <ReferenceLoading />;
   if (!resource) return <ReferenceMissing label="Resource not found." href={href} />;
+
+  const peopleLabel = resource.people
+    .map((entry) => personLabelForResource(entry, people))
+    .join(", ");
 
   return (
     <ReferenceDocument href={href}>
@@ -319,8 +336,8 @@ function ResourceReference({ id, href }: { id: string; href: string }) {
           </ReferenceField>
         )}
         <ReferenceField label="Saved">{formatDate(resource.saved)}</ReferenceField>
-        {resource.author && (
-          <ReferenceField label="Author">{resource.author}</ReferenceField>
+        {peopleLabel && (
+          <ReferenceField label="People">{peopleLabel}</ReferenceField>
         )}
         {resource.tags.length > 0 && (
           <ReferenceField label="Tags">{resource.tags.join(", ")}</ReferenceField>

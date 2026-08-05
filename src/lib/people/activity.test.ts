@@ -138,7 +138,7 @@ describe("buildPersonActivity", () => {
     expect(items).toEqual([]);
   });
 
-  it("includes resources whose author is linked to the person", () => {
+  it("includes resources whose people include the person", () => {
     const items = buildPersonActivity({
       person,
       emails: [],
@@ -149,13 +149,13 @@ describe("buildPersonActivity", () => {
         resource({
           id: "by-author",
           title: "On Difference Engines",
-          author: "ada-lovelace",
+          people: ["ada-lovelace"],
           capturedAt: "2026-06-08T09:00:00Z",
         }),
         resource({
           id: "by-name",
           title: "Notes on the Analytical Engine",
-          author: "Ada Lovelace",
+          people: ["Ada Lovelace"],
           capturedAt: "2026-06-07T09:00:00Z",
         }),
         resource({
@@ -164,7 +164,11 @@ describe("buildPersonActivity", () => {
           body: "Quotes [[ada-lovelace]] at length.",
           capturedAt: "2026-06-06T09:00:00Z",
         }),
-        resource({ id: "unrelated", title: "Unrelated", author: "someone-else" }),
+        resource({
+          id: "unrelated",
+          title: "Unrelated",
+          people: ["someone-else"],
+        }),
       ],
     });
 
@@ -299,6 +303,7 @@ function resource(overrides: Partial<ResourceDto> = {}): ResourceDto {
     url: "https://example.com/resource",
     source: "example.com",
     saved: "2026-06-07T08:00:00Z",
+    people: [],
     tags: [],
     highlights: [],
     favorite: false,

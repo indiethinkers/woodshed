@@ -159,14 +159,34 @@ export function EmailDetail({
     }
   }, []);
 
-  // Scroll the focused message into view as the cursor moves. Skip on
-  // the initial render of a single-message email — when the message body
-  // is taller than the viewport, `block: "nearest"` aligns the message
-  // top with the viewport top, which hides the page header (subject,
-  // from row, action buttons). The dedicated scroll-to-top effect above
-  // already lands those emails at the top. Multi-message threads scroll
-  // to the latest message when the complete thread loads (and again when
-  // a new message syncs into the open thread).
+  // Whether the conversation is still "following" the newest message.
+  // Auto-follow starts true and stays true while the newest message's
+  // bottom sits at the viewport bottom (or the viewport is at the very
+  // end of the thread). The scroll listener below flips it off the
+  // moment the user scrolls away, so late-loading email bodies never
+  // yank the view back down while they're reading an earlier part —
+  // and scrolling back to the newest position re-engages it.
+  const followLatestRef = useRef(true);
+
+  // Scroll the focused message into view as the cursor moves, or land
+  // on the newest message when a thread opens. Two modes:
+  //
+  //  - Auto-follow (userCursor === null): multi-message threads open at
+  //    the BOTTOM of the newest message. `block: "end"` pins the
+  //    message's bottom edge to the viewport's bottom edge no matter how
+  //    tall the message is — the previous `block: "nearest"` aligned the
+  //    message TOP with the viewport bottom, so a newest message taller
+  //    than the viewport hid its own newest content below the fold. The
+  //    view keeps following while content loads asynchronously — email
+  //    bodies are auto-height iframes that resize via postMessage, and
+  //    images resolve late — via a ResizeObserver on the whole thread.
+  //    A second rAF re-pin beats ContentPanel's one-shot restore rAF,
+  //    which can otherwise yank the view back to the top a frame later.
+  //  - Cursor mode (userCursor !== null): j/k navigation brings the
+  //    focused message into view with a minimal scroll.
+  //
+  // Single-message emails skip auto-follow: they land at the top so the
+  // page header (subject, from row, action buttons) stays visible.
   useEffect(() => {
     if (messages.length <= 1 && userCursor === null) return;
     // Release ContentPanel's late-load scroll guard before the
@@ -176,8 +196,71 @@ export function EmailDetail({
     // invisible to every other listener — the guard is the only window
     // wheel handler.
     window.dispatchEvent(new WheelEvent("wheel", { deltaY: 1, bubbles: true }));
-    messageRefs.current[selectedIdx]?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx, messages.length, userCursor]);
+
+    if (userCursor !== null) {
+      messageRefs.current[selectedIdx]?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+
+    // Auto-follow: only re-anchor now while the user is still riding
+    // the newest message — they may have scrolled away while a reply
+    // synced in. The listener and observer below attach regardless, so
+    // a re-run while disengaged (e.g. a new message syncs) keeps the
+    // machinery alive and scrolling back to the newest position
+    // re-engages the follow.
+    const latestEl = messageRefs.current[lastIdx];
+    const viewport = rootRef.current?.closest(
+      '[data-slot="scroll-area-viewport"]',
+    );
+    if (!latestEl) return;
+
+    const pinLatestToBottom = () => {
+      latestEl.scrollIntoView({ block: "end" });
+    };
+    let raf = 0;
+    if (followLatestRef.current) {
+      pinLatestToBottom();
+      // The guard's restore rAF (content-panel.tsx) fires a frame after
+      // mount and scrolls back to the remembered top; this rAF is
+      // registered later, so it runs after and wins the frame. It must
+      // stay UNGUARDED by followLatestRef: the yank's scroll event
+      // disengages the follow a frame earlier, and this pin's own scroll
+      // event re-engages it via the position check below.
+      raf = window.requestAnimationFrame(pinLatestToBottom);
+    }
+
+    // While following, re-pin whenever the thread grows — an email
+    // body's iframe auto-sizes via postMessage and images resolve
+    // late — so the newest content stays anchored at the bottom.
+    const observer =
+      typeof ResizeObserver !== "undefined" && rootRef.current
+        ? new ResizeObserver(() => {
+            if (followLatestRef.current) pinLatestToBottom();
+          })
+        : null;
+    if (observer && rootRef.current) observer.observe(rootRef.current);
+
+    // Track whether the user is still at the newest position. Any scroll
+    // that isn't our own pin moves the newest message away from the
+    // viewport bottom (or the viewport away from the thread's end),
+    // which disengages the follow; scrolling back re-engages it.
+    const onScroll = () => {
+      const msgBottom = latestEl.getBoundingClientRect().bottom;
+      const vpBottom = viewport?.getBoundingClientRect().bottom ?? msgBottom;
+      const atThreadEnd =
+        viewport instanceof HTMLElement &&
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 1;
+      followLatestRef.current =
+        Math.abs(msgBottom - vpBottom) <= 1 || atThreadEnd;
+    };
+    viewport?.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      observer?.disconnect();
+      viewport?.removeEventListener("scroll", onScroll);
+    };
+  }, [selectedIdx, messages.length, userCursor, lastIdx]);
 
   const replyTarget = replyTargetId
     ? (messages.find((m) => m.id === replyTargetId) ?? null)

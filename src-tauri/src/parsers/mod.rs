@@ -180,7 +180,10 @@ pub struct Resource {
     pub area: Option<String>,
     /// ISO 8601 timestamp marking when this resource was saved.
     pub saved: String,
-    pub author: Option<String>,
+    /// Linked person ids for the authors/creators of this resource. Legacy
+    /// files store a single freeform `author` value; it is parsed and folded
+    /// in here, then shed on the next write (see `serialize_resource`).
+    pub people: Vec<String>,
     pub published: Option<String>,
     pub captured_at: Option<String>,
     pub content_hash: Option<String>,
@@ -556,8 +559,13 @@ struct ResourceFrontmatter {
     #[serde(alias = "space", default, skip_serializing_if = "Option::is_none")]
     area: Option<String>,
     saved: String,
+    /// Legacy single-value author. Parsed for backward compatibility and
+    /// folded into `people` at read time; never written (see
+    /// `serialize_resource`), mirroring the `area` key's shed-on-write rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     author: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    people: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     published: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -964,7 +972,11 @@ pub fn parse_resource(content: &str) -> Result<Resource> {
         source: fm.source,
         area: fm.area,
         saved: fm.saved,
-        author: fm.author,
+        people: if fm.people.is_empty() {
+            fm.author.into_iter().collect()
+        } else {
+            fm.people
+        },
         published: fm.published,
         captured_at: fm.captured_at,
         content_hash: fm.content_hash,
@@ -988,10 +1000,13 @@ pub fn serialize_resource(resource: &Resource) -> Result<String> {
         // the one documented exception to the invariant at the top of this
         // module. `Resource::area` exists only to keep parsing legacy files
         // that still carry the key. Pinned by
-        // `resource_legacy_area_is_dropped_on_write`.
+        // `resource_legacy_area_is_dropped_on_write`. The legacy `author` key
+        // follows the same shed-on-write rule: `people` is canonical, and any
+        // legacy author value was already folded into it by `parse_resource`.
         area: None,
         saved: resource.saved.clone(),
-        author: resource.author.clone(),
+        author: None,
+        people: resource.people.clone(),
         published: resource.published.clone(),
         captured_at: resource.captured_at.clone(),
         content_hash: resource.content_hash.clone(),
@@ -1219,7 +1234,7 @@ mod tests {
             source: "inkandswitch.com".to_string(),
             area: None,
             saved: "2026-04-10T09:15:00".to_string(),
-            author: Some("Ink & Switch".to_string()),
+            people: vec!["ink-and-switch".to_string()],
             published: Some("2019-04-30".to_string()),
             captured_at: Some("2026-04-10T09:15:03".to_string()),
             content_hash: Some("sha256:sample".to_string()),
@@ -1664,6 +1679,27 @@ mod tests {
         parsed.area = None;
         let reparsed = parse_resource(&serialized).unwrap();
         assert_eq!(reparsed, parsed);
+    }
+
+    #[test]
+    fn resource_legacy_author_is_folded_into_people_and_dropped_on_write() {
+        let raw = "---\ntype: resource\nid: x\ntitle: Y\nurl: https://example.com\nsource: example.com\nauthor: Ada Lovelace\nsaved: 2026-04-10T09:15:00\n---\n";
+        let parsed = parse_resource(raw).unwrap();
+        assert_eq!(parsed.people, vec!["Ada Lovelace".to_string()]);
+        let serialized = serialize_resource(&parsed).unwrap();
+        assert!(!serialized.contains("author:"), "got: {serialized}");
+        assert!(serialized.contains("people:"), "got: {serialized}");
+        let reparsed = parse_resource(&serialized).unwrap();
+        assert_eq!(reparsed.people, vec!["Ada Lovelace".to_string()]);
+    }
+
+    #[test]
+    fn resource_people_list_roundtrips() {
+        let mut resource = sample_resource();
+        resource.people = vec!["ada-lovelace".to_string(), "grace-hopper".to_string()];
+        let serialized = serialize_resource(&resource).unwrap();
+        let parsed = parse_resource(&serialized).unwrap();
+        assert_eq!(parsed, resource);
     }
 
     #[test]

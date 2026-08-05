@@ -16,6 +16,7 @@ function renderEmbed(preview?: string) {
       url: TWEET_URL,
       source: "x.com",
       saved: "2026-07-31T00:00:00Z",
+      people: [],
       tags: ["twitter"],
       highlights: [],
       favorite: false,

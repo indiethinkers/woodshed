@@ -16,7 +16,8 @@ export interface ResourceDto {
   url: string;
   source: string;
   saved: string;
-  author?: string;
+  /** Linked person ids (authors/creators). Empty when unset. */
+  people: string[];
   published?: string;
   capturedAt?: string;
   contentHash?: string;
@@ -39,7 +40,8 @@ export interface ResourceUpdateInput {
   title?: string;
   url?: string;
   source?: string;
-  author?: string;
+  /** Full replacement list of linked person ids. */
+  people?: string[];
   published?: string;
   capturedAt?: string;
   contentHash?: string;
@@ -241,7 +243,7 @@ function applyOptimisticPatch(
   if (update.title !== undefined) next.title = update.title;
   if (update.url !== undefined) next.url = update.url;
   if (update.source !== undefined) next.source = update.source;
-  if (update.author !== undefined) next.author = update.author;
+  if (update.people !== undefined) next.people = update.people;
   if (update.published !== undefined) next.published = update.published;
   if (update.capturedAt !== undefined) next.capturedAt = update.capturedAt;
   if (update.contentHash !== undefined) next.contentHash = update.contentHash;

@@ -25,6 +25,7 @@ function makeResource(over: Partial<ResourceDto> = {}): ResourceDto {
     url: "https://example.com/local-first",
     source: "example.com",
     saved: "2026-04-10T09:15:00-04:00",
+    people: [],
     tags: [],
     highlights: [],
     favorite: false,
@@ -201,7 +202,7 @@ describe("useResourceMutations.capture", () => {
     const captured = makeResource({
       id: "article",
       title: "Article",
-      author: "jasmine-sun",
+      people: ["jasmine-sun"],
     });
     invokeMock.mockResolvedValueOnce(captured);
 
