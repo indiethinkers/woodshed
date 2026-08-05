@@ -259,11 +259,36 @@ describe("MailInbox", () => {
     const { container } = render(<MailInbox />);
     const row = container.querySelector("[data-mail-thread-row]")!;
 
-    expect(row.querySelector(".bg-blue-500")).toBeNull();
     expect(screen.queryByLabelText("Unread")).toBeNull();
 
     fireEvent.click(row);
     await waitFor(() => expect(mocks.markRead).toHaveBeenCalledTimes(1));
+  });
+
+  it("styles unread rows bold and read rows normal", () => {
+    mocks.emails = [
+      email({ id: "message-1", read: false, labels: ["inbox", "unread"] }),
+      email({
+        id: "message-2",
+        threadId: "other-thread",
+        read: true,
+        labels: ["inbox", "read"],
+      }),
+    ];
+    const { container } = render(<MailInbox />);
+    const rows = Array.from(
+      container.querySelectorAll("[data-mail-thread-row]"),
+    );
+    const unreadRow = rows.find(
+      (row) => row.getAttribute("href") === "/mail/message-1",
+    )!;
+    const readRow = rows.find(
+      (row) => row.getAttribute("href") === "/mail/message-2",
+    )!;
+
+    expect(unreadRow.querySelector(".font-bold")).not.toBeNull();
+    expect(readRow.querySelector(".font-bold")).toBeNull();
+    expect(readRow.querySelector(".font-normal")).not.toBeNull();
   });
 
   it("archives every inbox message represented by a thread row", async () => {
