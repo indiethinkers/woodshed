@@ -525,6 +525,7 @@ function EmailRow({
       : "hover:bg-foreground/[0.025]";
   const senderPerson = findPersonForMailSender(people, email);
   const senderName = senderPerson?.name ?? email.from;
+  const isUnread = shouldShowUnreadIndicator(email);
   const correspondent =
     mailbox === "sent" && email.to?.length
       ? email.to.join(", ")
@@ -551,16 +552,23 @@ function EmailRow({
           className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-violet-500/40"
         />
       )}
-      <div className="w-2 shrink-0 flex items-center justify-center">
-        {shouldShowUnreadIndicator(email) && (
-          <span className="block h-1.5 w-1.5 rounded-full bg-blue-500" />
-        )}
-      </div>
-      <div className="w-[160px] shrink-0 truncate text-sm font-medium">
+      <div
+        className={`w-[160px] shrink-0 truncate text-sm ${
+          isUnread
+            ? "font-semibold text-foreground"
+            : "font-medium text-muted-foreground"
+        }`}
+      >
         {correspondent}
       </div>
       <div className="flex-1 min-w-0 flex items-baseline gap-2 overflow-hidden">
-        <span className="text-sm font-medium truncate shrink-0 max-w-[45%]">
+        <span
+          className={`text-sm truncate shrink-0 max-w-[45%] ${
+            isUnread
+              ? "font-semibold text-foreground"
+              : "font-medium text-muted-foreground"
+          }`}
+        >
           {email.subject}
         </span>
         {messageCount > 1 && (
@@ -568,11 +576,19 @@ function EmailRow({
             {messageCount}
           </span>
         )}
-        <span className="text-sm text-muted-foreground truncate">
+        <span
+          className={`text-sm truncate ${
+            isUnread ? "text-foreground/70" : "text-muted-foreground"
+          }`}
+        >
           {email.preview}
         </span>
       </div>
-      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
+      <span
+        className={`text-xs shrink-0 tabular-nums ${
+          isUnread ? "text-foreground/70" : "text-muted-foreground"
+        }`}
+      >
         {formatRelativeDate(email.date)}
       </span>
     </Link>

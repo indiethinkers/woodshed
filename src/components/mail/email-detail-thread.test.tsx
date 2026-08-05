@@ -43,7 +43,11 @@ vi.mock("@/components/shared/outgoing-links-panel", () => ({
 }));
 
 vi.mock("@/components/mail/html-body", () => ({ HtmlBody: () => null }));
-vi.mock("@/components/mail/inline-reply", () => ({ InlineReply: () => null }));
+vi.mock("@/components/mail/inline-reply", () => ({
+  InlineReply: ({ message }: { message: EmailSummary }) => (
+    <div data-testid="inline-reply">{message.id}</div>
+  ),
+}));
 vi.mock("@/components/mail/snooze-button", () => ({
   SnoozeButton: () => <button type="button">Snooze</button>,
 }));
@@ -66,7 +70,7 @@ describe("EmailDetail thread", () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
 
-  it("opens only the newest message after the complete thread loads", () => {
+  it("expands every message in the thread once it loads", () => {
     const older = email({
       id: "older-message",
       body: "Older full body",
@@ -85,11 +89,13 @@ describe("EmailDetail thread", () => {
     mocks.isLoading = false;
     rerender(<EmailDetail email={older} />);
 
-    expect(screen.queryByText("Older full body")).not.toBeInTheDocument();
+    // Gmail conversation view: the whole thread reads top to bottom —
+    // no collapsed rows, no expand-to-read step for older messages.
+    expect(screen.getByText("Older full body")).toBeInTheDocument();
     expect(screen.getByText("Newest full body")).toBeInTheDocument();
   });
 
-  it("opens a newly synchronized reply and collapses the previous latest message", () => {
+  it("keeps a newly synchronized reply expanded next to the rest of the thread", () => {
     const original = email({ id: "original-message", body: "Original body" });
     const previousLatest = email({
       id: "previous-latest",
@@ -109,11 +115,47 @@ describe("EmailDetail thread", () => {
     mocks.thread = [original, previousLatest, synchronizedReply];
     rerender(<EmailDetail email={previousLatest} />);
 
-    expect(screen.queryByText("Previous latest body")).not.toBeInTheDocument();
+    expect(screen.getByText("Previous latest body")).toBeInTheDocument();
     expect(screen.getByText("Synchronized reply body")).toBeInTheDocument();
   });
 
-  it("offers Reply All for the thread and reply controls on the expanded message", () => {
+  it("scrolls the newest message into view when a thread loads", () => {
+    const older = email({ id: "older-message", body: "Older full body" });
+    const newest = email({
+      id: "newest-message",
+      body: "Newest full body",
+      date: "2026-07-28T10:00:00Z",
+    });
+    mocks.thread = [older, newest];
+    mocks.isLoading = false;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { container } = render(<EmailDetail email={older} />);
+
+    // Opening a thread lands on the latest message, not the top.
+    const messageEls = container.querySelectorAll("[data-mail-thread-message]");
+    expect(messageEls).toHaveLength(2);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrollIntoView.mock.instances[0]).toBe(messageEls[1]);
+  });
+
+  it("renders a sender avatar with initials for every message", () => {
+    const older = email({ id: "older-message" });
+    const newest = email({
+      id: "newest-message",
+      date: "2026-07-28T10:00:00Z",
+    });
+    mocks.thread = [older, newest];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={newest} />);
+
+    // "Synthetic Sender" → "SS", one avatar per expanded message.
+    expect(screen.getAllByText("SS")).toHaveLength(2);
+  });
+
+  it("offers Reply All for the thread and hover reply controls per message", () => {
     const older = email({ id: "older-message" });
     const newest = email({
       id: "newest-message",
@@ -125,17 +167,98 @@ describe("EmailDetail thread", () => {
 
     render(<EmailDetail email={newest} />);
 
-    const replyAllButtons = screen.getAllByRole("button", {
-      name: "Reply all",
-    });
-    expect(replyAllButtons).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Reply" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Forward" })).toHaveLength(2);
+    // One set in the header action bar + one hover set per message.
+    expect(screen.getAllByRole("button", { name: "Reply" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Reply all" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: "Forward" })).toHaveLength(3);
 
+    // The older message's hover Reply all targets that message.
+    const replyAllButtons = screen.getAllByRole("button", { name: "Reply all" });
     fireEvent.click(replyAllButtons[1]);
     expect(
       screen.getByRole("dialog", { name: "Synthetic compose" }),
-    ).toHaveTextContent("replyAll:newest-message");
+    ).toHaveTextContent("replyAll:older-message");
+  });
+
+  it("hides quoted reply history behind a Show trimmed content toggle", () => {
+    const message = email({
+      id: "message-1",
+      body: [
+        "Fresh reply.",
+        "",
+        "On Tue, Jul 28, 2026 at 9:00 AM Jordan <jordan@example.test> wrote:",
+        "",
+        "> Sounds good. I will review the pull request tonight and leave",
+        "> inline comments where the design needs another pass first.",
+        "> Keep it up — the demo on Friday should go smoothly.",
+        "> We can ship on Monday if nothing else surfaces.",
+        "> Talk soon.",
+      ].join("\n"),
+    });
+    mocks.thread = [message];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={message} />);
+
+    expect(screen.getByText("Fresh reply.")).toBeInTheDocument();
+    expect(screen.queryByText(/Sounds good/)).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show trimmed content" }),
+    );
+    expect(screen.getByText(/Sounds good/)).toBeInTheDocument();
+  });
+
+  it("always shows the collapsed reply strip at the bottom of the thread", () => {
+    const message = email({ id: "message-1" });
+    mocks.thread = [message];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={message} />);
+
+    expect(screen.getByText("Click here to")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Reply to this thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Forward this thread" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("inline-reply")).not.toBeInTheDocument();
+  });
+
+  it("expands the strip into an inline reply for the focused message", () => {
+    const older = email({ id: "older-message" });
+    const newest = email({
+      id: "newest-message",
+      date: "2026-07-28T10:00:00Z",
+    });
+    mocks.thread = [older, newest];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={newest} />);
+
+    // The cursor starts on the newest message, so the strip replies to it.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reply to this thread" }),
+    );
+    expect(screen.getByTestId("inline-reply")).toHaveTextContent(
+      "newest-message",
+    );
+  });
+
+  it("forwards the latest message from the strip", () => {
+    const message = email({ id: "message-1" });
+    mocks.thread = [message];
+    mocks.isLoading = false;
+
+    render(<EmailDetail email={message} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forward this thread" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Synthetic compose" }),
+    ).toHaveTextContent("forward:message-1");
   });
 });
 

@@ -147,7 +147,13 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
       const iframe = iframeRef.current;
       if (!iframe || e.source !== iframe.contentWindow) return;
       const data = e.data as
-        | { type?: string; href?: unknown; height?: unknown }
+        | {
+            type?: string;
+            href?: unknown;
+            height?: unknown;
+            deltaX?: unknown;
+            deltaY?: unknown;
+          }
         | undefined;
       if (!data || typeof data !== "object") return;
 
@@ -166,6 +172,32 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
         const next = Math.round(data.height);
         setHeight((prev) => (prev === next ? prev : next));
         rememberHeight(messageId, next);
+      } else if (
+        data.type === "wsmail-wheel" &&
+        typeof data.deltaY === "number" &&
+        Number.isFinite(data.deltaY)
+      ) {
+        // The email iframe is auto-height and never scrolls internally, so
+        // the bridge forwards wheels here. Scroll the page's own scroll
+        // container — this is the same container EmailDetail resets on mount.
+        const viewport = iframe.closest(
+          '[data-woodshed-content-scroll], [data-slot="scroll-area-viewport"]',
+        );
+        if (!(viewport instanceof HTMLElement)) return;
+        // Release ContentPanel's late-load scroll guard: it only sees wheel
+        // events on the parent window, so without this it would snap the
+        // forwarded scroll back to the top during the settle window.
+        window.dispatchEvent(
+          new WheelEvent("wheel", { deltaY: data.deltaY, bubbles: true }),
+        );
+        viewport.scrollTop += data.deltaY;
+        if (
+          typeof data.deltaX === "number" &&
+          Number.isFinite(data.deltaX) &&
+          data.deltaX !== 0
+        ) {
+          viewport.scrollLeft += data.deltaX;
+        }
       }
     }
     window.addEventListener("message", onMessage);
