@@ -1247,13 +1247,13 @@ pub fn event_ical_save_notes(
     // no-op commit (empty body, no field overrides) used to materialize
     // `events/<occurrence_id>.md` for every event the user merely opened.
     // Only a real edit — body content or a field override — creates one.
-    let body_is_blank = body.as_deref().map_or(true, |b| b.trim().is_empty());
+    let body_is_blank = body.as_deref().is_none_or(|b| b.trim().is_empty());
     if base.is_none()
         && body_is_blank
         && title.is_none()
         && date.is_none()
         && duration.is_none()
-        && area.as_deref().map_or(true, |a| a.trim().is_empty())
+        && area.as_deref().is_none_or(|a| a.trim().is_empty())
     {
         return event_ical_get(app, state, account_id, external_id, occurrence_date)?
             .ok_or_else(|| "event vanished from cache".to_string());

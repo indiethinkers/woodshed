@@ -418,7 +418,7 @@ describe("AgentSurface voice controls", () => {
       expect(await screen.findByText("reference.png")).toBeInTheDocument();
       expect(
         screen.queryByText(
-          "Agent attachments support images, PDF, and text files.",
+          "Agent attachments support images, PDF, Office documents, and text files.",
         ),
       ).not.toBeInTheDocument();
     } finally {
