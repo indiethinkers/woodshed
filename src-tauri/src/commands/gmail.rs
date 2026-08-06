@@ -444,28 +444,58 @@ pub async fn gmail_sync_recent(
     // Gmail's conversation id is unavailable, so subject-based grouping fills
     // the gap for messages with no reply headers. Seed from what's already on
     // disk for this account so a burst spanning two syncs still converges.
+    let existing_records = account_inbox_records(&vault, &inbox);
     let mut conversations = ConversationThreads::default();
-    conversations.seed(&account_inbox_records(&vault, &inbox));
+    conversations.seed(&existing_records);
 
-    for raw in &batch.messages {
-        let parsed = parse::parse(raw);
+    // Parse the batch once, indexing each Message-ID's References anchor so a
+    // truncated chain (direct parent only) can be walked to the thread root
+    // instead of stranding the reply in its own thread. Known records seed
+    // the walk, so a burst spanning two syncs still converges.
+    let parsed_batch: Vec<(String, u32, String, parse::ParsedMessage)> = batch
+        .messages
+        .iter()
+        .map(|raw| {
+            let parsed = parse::parse(raw);
+            let id = imap_client::canonical_uid_id(&email, batch.uid_validity, raw.uid);
+            (id, raw.uid, parsed.message_id.clone(), parsed)
+        })
+        .collect();
+    let mut batch_anchors: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (_, _, message_id, parsed) in &parsed_batch {
+        if let Some(anchor) = parsed.thread_root_message_id.as_deref() {
+            batch_anchors.insert(strip_brackets(message_id), strip_brackets(anchor));
+        }
+    }
+    let mut known_threads: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for record in &existing_records {
+        let message_id = record.message_id.trim();
+        let thread_id = record.thread_id.trim();
+        if !message_id.is_empty() && !thread_id.is_empty() {
+            known_threads.insert(message_id.to_string(), thread_id.to_string());
+        }
+    }
 
+    for (id, uid, wire_message_id, parsed) in &parsed_batch {
         // IMAP UID is only meaningful together with account + UIDVALIDITY.
         // Persist all three so later archive/read mutations address exactly
         // one remote message and cannot collide across Gmail accounts.
-        let canonical_uid = imap_client::canonical_uid_id(&email, batch.uid_validity, raw.uid);
-        let legacy_uid = format!("gmail-uid-{}", raw.uid);
+        let legacy_uid = format!("gmail-uid-{uid}");
         // Local identity is always account + UIDVALIDITY + UID. RFC Message-ID
         // and X-GM-MSGID are not account-scoped: the same delivered message can
         // legitimately exist in two configured inboxes.
-        let id = canonical_uid.clone();
-        let wire_message_id = parsed.message_id.clone();
-        let proposed_thread_id = thread_id_for_parsed(&email, &id, &parsed);
+        let proposed_thread_id = thread_id_for_parsed(&email, id, parsed);
         // Only messages with no reply headers need subject grouping. A real
         // References chain is authoritative and must never be overridden by a
-        // subject match.
-        let thread_id = if parsed.gm_thrid != 0 || parsed.thread_root_message_id.is_some() {
+        // subject match — but its anchor is walked to the chain root, so a
+        // reply whose References lists only the direct parent still joins the
+        // thread its siblings resolved to.
+        let thread_id = if parsed.gm_thrid != 0 {
             proposed_thread_id
+        } else if let Some(anchor) = parsed.thread_root_message_id.as_deref() {
+            resolve_thread_anchor(anchor, &batch_anchors, &known_threads, &email)
         } else {
             conversations.resolve(
                 &parsed.from_email,
@@ -486,13 +516,13 @@ pub async fn gmail_sync_recent(
         // from IMAP, so writing to `attachments/mail/<id>/` here avoids
         // a re-IMAP roundtrip on click. A failure to write any one
         // attachment is logged and skipped; the email itself still lands.
-        let attachments = save_parsed_attachments(&state, &vault, &id, &parsed);
+        let attachments = save_parsed_attachments(&state, &vault, id, parsed);
         let summary = build_summary_from_parsed(
             id.clone(),
-            wire_message_id,
+            wire_message_id.clone(),
             thread_id,
             inbox.clone(),
-            &parsed,
+            parsed,
             labels,
             attachments,
         );
@@ -523,7 +553,7 @@ pub async fn gmail_sync_recent(
                 if is_new {
                     new_messages += 1;
                 }
-                written.push(id)
+                written.push(id.clone())
             }
             Ok(None) => {}
             Err(e) => eprintln!("gmail: failed to persist {id}: {e}"),
@@ -1020,6 +1050,41 @@ fn thread_id_for_parsed(
         )
     };
     account_scoped_thread_id(account_email, &raw_thread_id)
+}
+
+/// Resolve a message's References anchor to the root of the known chain.
+///
+/// Gmail's X-GM-THRID is unavailable (imap-proto chokes on the extension
+/// header), so sync keys threads on the oldest ancestor in References.
+/// Clients that send a truncated References chain (the direct parent only)
+/// would otherwise strand a reply in its own thread while its siblings key
+/// on the true root. Walk the anchor through the current batch's anchors
+/// and the account's known records until it settles:
+///   - an anchor matching a known record adopts that record's thread id,
+///     so a burst spanning two syncs still converges;
+///   - an anchor that resolves no further is the root of the known set and
+///     becomes the scoped thread key itself.
+fn resolve_thread_anchor(
+    anchor: &str,
+    batch_anchors: &std::collections::HashMap<String, String>,
+    known_threads: &std::collections::HashMap<String, String>,
+    account_email: &str,
+) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut current = strip_brackets(anchor).to_string();
+    loop {
+        if !seen.insert(current.clone()) {
+            break;
+        }
+        if let Some(thread) = known_threads.get(&current) {
+            return thread.clone();
+        }
+        match batch_anchors.get(&current) {
+            Some(next) => current = strip_brackets(next).to_string(),
+            None => break,
+        }
+    }
+    account_scoped_thread_id(account_email, &current)
 }
 
 fn sent_thread_id_for_parsed(
@@ -1546,6 +1611,75 @@ mod credential_metadata_tests {
             ),
             existing.thread_id,
         );
+    }
+
+    #[test]
+    fn resolves_truncated_references_to_the_thread_root() {
+        // parent@example.test references the thread root; reply@example.test's
+        // References lists only its direct parent (truncated chain). Both must
+        // settle on the root's scoped thread id.
+        let mut batch_anchors = std::collections::HashMap::new();
+        batch_anchors.insert(
+            "parent@example.test".to_string(),
+            "root@example.test".to_string(),
+        );
+        batch_anchors.insert(
+            "reply@example.test".to_string(),
+            "parent@example.test".to_string(),
+        );
+        let known = std::collections::HashMap::new();
+
+        let reply = resolve_thread_anchor(
+            "reply@example.test",
+            &batch_anchors,
+            &known,
+            "owner@example.test",
+        );
+        let parent = resolve_thread_anchor(
+            "parent@example.test",
+            &batch_anchors,
+            &known,
+            "owner@example.test",
+        );
+        assert_eq!(reply, parent);
+        assert_eq!(
+            reply,
+            account_scoped_thread_id("owner@example.test", "root@example.test")
+        );
+    }
+
+    #[test]
+    fn adopts_a_known_records_thread_id_when_its_anchor_matches() {
+        // The direct parent is not in this batch but exists on disk with a
+        // canonical thread — a burst spanning two syncs converges instead of
+        // stranding the reply.
+        let mut known = std::collections::HashMap::new();
+        known.insert(
+            "parent@example.test".to_string(),
+            "gmail-thread-abc:root@example.test".to_string(),
+        );
+        let reply = resolve_thread_anchor(
+            "parent@example.test",
+            &std::collections::HashMap::new(),
+            &known,
+            "owner@example.test",
+        );
+        assert_eq!(reply, "gmail-thread-abc:root@example.test");
+    }
+
+    #[test]
+    fn reference_cycles_terminate() {
+        let mut batch_anchors = std::collections::HashMap::new();
+        batch_anchors.insert("a@example.test".to_string(), "b@example.test".to_string());
+        batch_anchors.insert("b@example.test".to_string(), "a@example.test".to_string());
+        let reply = resolve_thread_anchor(
+            "a@example.test",
+            &batch_anchors,
+            &std::collections::HashMap::new(),
+            "owner@example.test",
+        );
+        // Terminates; the key is one of the cycle members, scoped.
+        assert!(reply.contains("example.test"));
     }
 
     #[test]
