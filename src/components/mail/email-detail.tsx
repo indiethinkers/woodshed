@@ -449,9 +449,15 @@ export function EmailDetail({
         const inbox = inboxes.find((i) => i.inboxId === latest.inbox);
         const inboxLabel = inbox?.displayName || inbox?.email || latest.inbox;
         return (
-          <div className="mb-4">
-            <h1 className="text-lg font-semibold">{latest.subject}</h1>
-            <div className="flex items-baseline gap-2 mt-1 text-sm text-muted-foreground">
+          <div className="mb-5">
+            {/* Superhuman-style reading header: the subject is the pane's
+                title; the meta row below stays one quiet line. The message's
+                own sender/time row lives inside the card, so the page header
+                doesn't repeat a timestamp. */}
+            <h1 className="text-2xl font-semibold tracking-tight leading-tight">
+              {latest.subject}
+            </h1>
+            <div className="mt-1.5 flex items-baseline gap-2 text-sm text-muted-foreground">
               {shouldShowUnreadIndicator(latest) && (
                 <span
                   aria-label="Unread"
@@ -467,15 +473,6 @@ export function EmailDetail({
                   {messages.length} messages
                 </span>
               )}
-              <span className="font-mono text-xs shrink-0">
-                {new Date(latest.date).toLocaleString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                })}
-              </span>
               {latest.inbox && (
                 <span
                   className="ml-auto flex items-center gap-1.5 text-xs shrink-0"
@@ -554,9 +551,10 @@ export function EmailDetail({
         </Button>
       </div>
 
-      {/* One continuous conversation surface (Gmail-style): messages are
-          separated by faint dividers instead of floating as separate cards. */}
-      <div className="overflow-hidden rounded-md border border-border bg-background wd-email-sheet">
+      {/* Reading card (Superhuman-style): one continuous conversation
+          surface raised off the panel canvas — messages separated by faint
+          dividers, the reply affordance as the card's footer. */}
+      <div className="overflow-hidden rounded-lg border border-border/90 bg-background shadow-sm wd-email-sheet">
         {messages.map((m, idx) => (
           <ThreadMessage
             key={m.id}
@@ -575,22 +573,22 @@ export function EmailDetail({
             }}
           />
         ))}
-      </div>
 
-      {/* Reply surface: the expanded inline composer while a reply is
-          targeted, otherwise Gmail's always-present collapsed strip. */}
-      {replyTarget ? (
-        <InlineReply
-          key={replyTarget.id}
-          message={replyTarget}
-          onClose={() => setReplyTargetId(null)}
-        />
-      ) : (
-        <CollapsedReplyStrip
-          onReply={() => setReplyTargetId((messages[selectedIdx] ?? latest).id)}
-          onForward={() => setCompose({ kind: "forward", source: latest })}
-        />
-      )}
+        {/* Reply surface: the expanded inline composer while a reply is
+            targeted, otherwise Gmail's always-present collapsed strip. */}
+        {replyTarget ? (
+          <InlineReply
+            key={replyTarget.id}
+            message={replyTarget}
+            onClose={() => setReplyTargetId(null)}
+          />
+        ) : (
+          <CollapsedReplyStrip
+            onReply={() => setReplyTargetId((messages[selectedIdx] ?? latest).id)}
+            onForward={() => setCompose({ kind: "forward", source: latest })}
+          />
+        )}
+      </div>
 
       <OutgoingLinksPanel sourceId={latest.id} />
       <BacklinksPanel targetId={latest.id} />
@@ -736,7 +734,7 @@ function ThreadMessage({
       onClick={onSelect}
       className={cn(
         "group relative px-5",
-        collapsed ? "py-2" : "py-4",
+        collapsed ? "py-2.5" : "py-5",
         // Faint divider between messages — the conversation reads as one
         // continuous surface instead of a stack of separate cards.
         !isFirst && "border-t border-border/80",
@@ -945,7 +943,7 @@ function CollapsedReplyStrip({
   onForward: () => void;
 }) {
   return (
-    <div className="mt-3 flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.02]">
+    <div className="flex items-center gap-1.5 border-t border-border/80 bg-background px-5 py-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.02]">
       <Reply className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
       <span>Click here to</span>
       <button
