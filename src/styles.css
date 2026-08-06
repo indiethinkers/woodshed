@@ -441,6 +441,14 @@
 .tiptap-content[data-daily-timestamps] > ul > li::before {
   content: none;
 }
+/* The gutter timestamps (and nested bullets) paint at z-index: -1 so they can
+   never bleed above the sticky day header. That only stays visible while the
+   nearest stacking context is the editor root: without this isolation the
+   negative layer falls through to the page-level context and paints behind
+   the content panel's opaque background, hiding the timestamps entirely. */
+.tiptap-content[data-daily-timestamps] {
+  isolation: isolate;
+}
 /* Capture time is durable Markdown metadata, rendered out of flow so the
    journal prose keeps the same measure and wrapping. The restrained mono type
    reads as a gutter annotation rather than another bullet or badge. */
