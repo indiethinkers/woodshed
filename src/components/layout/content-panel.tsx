@@ -38,6 +38,7 @@ export function ContentPanel({
   footer,
   pinToBottom = false,
   flush = false,
+  comfortable = false,
 }: {
   children: React.ReactNode;
   /** Skip the centered Cadence-width column. Use for table-heavy views that need
@@ -59,6 +60,9 @@ export function ContentPanel({
   pinToBottom?: boolean;
   /** Remove the default content gutters for intentionally full-bleed views. */
   flush?: boolean;
+  /** Reading-pane surfaces (mail detail): extra vertical inset so the
+   *  document doesn't crowd the viewport's top and bottom edges. */
+  comfortable?: boolean;
 }) {
   const href = useRouterState({ select: (s) => s.location.href });
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -237,10 +241,10 @@ export function ContentPanel({
               // pt-6 (24px) here adds the rest — 40px total at first paint, so
               // the large detail-page title doesn't crowd the sticky breadcrumb.
               // Without a Topbar (Cadence/mail own their headers) pt-4 stands.
-              !flush && (renderTopbar ? "pt-6" : "pt-4"),
+              !flush && (renderTopbar ? "pt-6" : comfortable ? "pt-10" : "pt-4"),
               // With a floating footer, the last line of content needs to be
               // able to scroll clear of the bar.
-              flush ? "pb-0" : footer ? "pb-32" : "pb-8",
+              flush ? "pb-0" : footer ? "pb-32" : comfortable ? "pb-12" : "pb-8",
             )}
           >
             {wide ? children : (
