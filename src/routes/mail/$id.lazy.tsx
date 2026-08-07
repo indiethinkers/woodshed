@@ -29,7 +29,7 @@ function EmailView() {
   }
 
   return (
-    <ContentPanel showTopbar={false}>
+    <ContentPanel showTopbar={false} comfortable>
       {/* key on the message id so EmailDetail remounts on route change —
           state (cursor, inline-reply target, expanded messages) resets
           without needing a setState-in-effect inside the component. */}

@@ -12,6 +12,7 @@ import { DailyTasks } from "./task-sidebar";
 import { CalendarGrid } from "./date-picker";
 import { addMonths, monthStart } from "./date-utils";
 import { dailyEditorValue } from "./daily-editor-value";
+import { supportsViewTransition } from "@/lib/view-transition";
 import { TiptapEditor } from "@/components/shared/tiptap-editor";
 import { useDailyJournalMutation } from "@/lib/hooks/use-daily-journal";
 import { useToday } from "@/lib/hooks/use-today";
@@ -156,7 +157,7 @@ function CadenceDayHeader({ date }: { date: string }) {
 
   function navigateTo(nextDate: string) {
     setOpen(false);
-    void navigate({ href: dayHrefFor(nextDate, today), viewTransition: true });
+    void navigate({ href: dayHrefFor(nextDate, today), viewTransition: supportsViewTransition() });
   }
 
   const previousDate = addDays(date, -1);

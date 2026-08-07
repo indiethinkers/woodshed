@@ -5,6 +5,7 @@ import { Popover } from "@base-ui/react/popover";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToday } from "@/lib/hooks/use-today";
 import { monthStart, addMonths } from "./date-utils";
+import { supportsViewTransition } from "@/lib/view-transition";
 
 export function DatePicker({ showDayNav = true }: { showDayNav?: boolean } = {}) {
   const navigate = useNavigate();
@@ -29,7 +30,7 @@ export function DatePicker({ showDayNav = true }: { showDayNav?: boolean } = {})
     // dayHrefFor returns either "/" or "/cadence/<date>" — a runtime
     // string, not a route-registry literal. Use `href` so the router
     // parses the pathname instead of trying to match a typed `to`.
-    void navigate({ href: dayHrefFor(date, today), viewTransition: true });
+    void navigate({ href: dayHrefFor(date, today), viewTransition: supportsViewTransition() });
   }
 
   const prevDate = addDays(selected, -1);
@@ -40,7 +41,7 @@ export function DatePicker({ showDayNav = true }: { showDayNav?: boolean } = {})
       {showDayNav && (
         <Link
           {...dayLinkProps(prevDate, today)}
-          viewTransition
+          viewTransition={supportsViewTransition()}
           aria-label="Previous day"
           className="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >
@@ -49,7 +50,7 @@ export function DatePicker({ showDayNav = true }: { showDayNav?: boolean } = {})
       )}
       <Link
         {...dayLinkProps(selected, today)}
-        viewTransition
+        viewTransition={supportsViewTransition()}
         // When there are no day-nav arrows the date is the leading element, so
         // -ml-2 cancels its px-2 hover padding and lands the text on the column
         // edge — aligning the breadcrumb with the page title and content below.
@@ -83,7 +84,7 @@ export function DatePicker({ showDayNav = true }: { showDayNav?: boolean } = {})
       {showDayNav && (
         <Link
           {...dayLinkProps(nextDate, today)}
-          viewTransition
+          viewTransition={supportsViewTransition()}
           aria-label="Next day"
           className="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >

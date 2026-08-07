@@ -22,6 +22,7 @@ import {
 import { useTabs } from "./tabs-context-internal";
 import { IndexingIndicator } from "./indexing-indicator";
 import { cn } from "@/lib/utils";
+import { supportsViewTransition } from "@/lib/view-transition";
 import { useHasUnreadMail } from "@/lib/hooks/use-mail";
 
 // Per-icon optical sizing: lucide glyphs sit on equal 32px boxes, but dense/
@@ -73,7 +74,7 @@ export function Sidebar({
         const item = navItems[navIndex];
         if (item) {
           e.preventDefault();
-          void navigate({ to: item.href, viewTransition: true });
+          void navigate({ to: item.href, viewTransition: supportsViewTransition() });
         }
         return;
       }
@@ -104,7 +105,7 @@ export function Sidebar({
       // ⌘, — settings
       if (!e.shiftKey && e.key === ",") {
         e.preventDefault();
-        void navigate({ to: "/settings", viewTransition: true });
+        void navigate({ to: "/settings", viewTransition: supportsViewTransition() });
         return;
       }
     }
@@ -133,7 +134,7 @@ export function Sidebar({
         )}
       >
         {/* Brand mark */}
-        <Link to="/" viewTransition className="mb-1 block" aria-label="Woodshed home">
+        <Link to="/" viewTransition={supportsViewTransition()} className="mb-1 block" aria-label="Woodshed home">
           <BrandMark className="h-10 w-10 text-foreground" title="Woodshed" />
         </Link>
 
@@ -155,7 +156,7 @@ export function Sidebar({
                   render={
                     <Link
                       to={item.href}
-                      viewTransition
+                      viewTransition={supportsViewTransition()}
                       aria-label={
                         showsUnreadMail
                           ? `${item.label}, unread messages`
@@ -205,7 +206,7 @@ export function Sidebar({
               render={
                 <Link
                   to="/settings"
-                  viewTransition
+                  viewTransition={supportsViewTransition()}
                   aria-label="Settings"
                   data-woodshed-action="navigate:settings"
                   className={`${railButtonClass} ${

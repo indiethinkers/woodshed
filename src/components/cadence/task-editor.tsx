@@ -121,6 +121,11 @@ function TaskEditorInner({ task, date }: { task: TaskDto; date: string }) {
     update.mutate({ id: task.id, update: { content: next } });
   }
 
+  function cancelTitle() {
+    setTitleDraft(task.content);
+    setTitleEditing(false);
+  }
+
   function commitBody(next: string) {
     if (next === task.body) return;
     update.mutate({ id: task.id, update: { body: next } });
@@ -173,6 +178,7 @@ function TaskEditorInner({ task, date }: { task: TaskDto; date: string }) {
             onChange={setTitleDraft}
             onStartEdit={() => setTitleEditing(true)}
             onCommit={commitTitle}
+            onCancel={cancelTitle}
           />
           <FilePathLine className="mt-1.5" />
         </div>
@@ -461,6 +467,7 @@ function TitleField({
   onChange,
   onStartEdit,
   onCommit,
+  onCancel,
 }: {
   value: string;
   editing: boolean;
@@ -468,6 +475,7 @@ function TitleField({
   onChange: (v: string) => void;
   onStartEdit: () => void;
   onCommit: () => void;
+  onCancel: () => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -495,9 +503,12 @@ function TitleField({
         }}
         onBlur={onCommit}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === "Escape") {
+          if (e.key === "Enter") {
             e.preventDefault();
             onCommit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
           }
         }}
         // `block w-full`, not `flex-1`: the parent is a plain block, so

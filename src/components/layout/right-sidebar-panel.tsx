@@ -149,7 +149,12 @@ export function RightSidebarPanel() {
 
       <ScrollArea className="min-h-0 flex-1">
         {entries.length === 0 ? (
-          <div aria-hidden className="h-full" />
+          <div className="px-4 py-6 text-[13px] leading-relaxed text-muted-foreground">
+            <p>Pin supporting pages here while you work.</p>
+            <p className="mt-2">
+              Shift-click any link to add it, or use the + button above.
+            </p>
+          </div>
         ) : (
           <div className="pb-6">
             {entries.map((entry) => (

@@ -49,6 +49,16 @@ import { CalendarView } from "./calendar-view";
 import { GalleryView, ListView } from "./gallery-list-views";
 import { FilterControl, SortControl, ViewTabs } from "./view-controls";
 import { isEditableElement } from "@/lib/dom/is-editable";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const CALC_FNS: { value: CalcFn; label: string }[] = [
   { value: "sum", label: "Sum" },
@@ -147,6 +157,7 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
   );
   // Multi-row selection. Set of row ids — bulk edit/delete operate on these.
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const bulkDeleteSelected = useCallback(() => {
     const ids = Array.from(selectedRowIds);
     Promise.all(ids.map((rowId) => removeRow.mutateAsync({ rowId }))).catch(
@@ -155,7 +166,13 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
       },
     );
     setSelectedRowIds(new Set());
+    setDeleteConfirmOpen(false);
   }, [removeRow, selectedRowIds]);
+
+  const requestBulkDelete = useCallback(() => {
+    if (selectedRowIds.size === 0) return;
+    setDeleteConfirmOpen(true);
+  }, [selectedRowIds.size]);
 
   useEffect(() => {
     function deleteSelectedRows(event: KeyboardEvent) {
@@ -167,12 +184,12 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
         return;
       }
       event.preventDefault();
-      bulkDeleteSelected();
+      requestBulkDelete();
     }
     window.addEventListener("keydown", deleteSelectedRows, { capture: true });
     return () =>
       window.removeEventListener("keydown", deleteSelectedRows, { capture: true });
-  }, [bulkDeleteSelected, selectedRowIds.size]);
+  }, [requestBulkDelete, selectedRowIds.size]);
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!titleEditing) setTitleDraft(table.name);
@@ -471,7 +488,7 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
               count={selectedRowIds.size}
               columns={table.columns}
               onClear={clearSelection}
-              onDelete={bulkDeleteSelected}
+              onDelete={requestBulkDelete}
               onSetCell={bulkSetCell}
             />
           )}
@@ -547,6 +564,27 @@ function TableViewInner({ table, rows }: { table: TableDto; rows: RowDto[] }) {
           No rows match the current filter.
         </p>
       )}
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedRowIds.size}{" "}
+              {selectedRowIds.size === 1 ? "row" : "rows"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the selected rows from the database. They move to
+              recoverable trash.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => bulkDeleteSelected()}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1704,7 +1742,6 @@ function BulkActionBar({
   onDelete: () => void;
   onSetCell: (columnId: string, value: CellValue) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex items-center gap-2 -mx-1 px-2 h-9 rounded-md bg-accent/50 border border-border/60 text-[13px]">
       <span className="font-medium">
@@ -1712,37 +1749,14 @@ function BulkActionBar({
       </span>
       <div className="h-4 w-px bg-border/60" />
       <BulkEditMenu columns={columns} onSetCell={onSetCell} />
-      {confirming ? (
-        <div className="flex items-center gap-1.5 ml-auto">
-          <span className="text-muted-foreground">Delete {count}?</span>
-          <button
-            type="button"
-            onClick={() => {
-              setConfirming(false);
-              onDelete();
-            }}
-            className="h-7 px-2 rounded-sm bg-foreground text-background text-[12px]"
-          >
-            Yes, delete
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirming(false)}
-            className="h-7 px-2 rounded-sm border border-border text-[12px] hover:bg-muted"
-          >
-            Cancel
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setConfirming(true)}
-          className="ml-auto h-7 px-2 inline-flex items-center gap-1 text-[12px] text-foreground hover:bg-foreground/[0.05] rounded-sm transition-colors"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Delete
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onDelete}
+        className="ml-auto h-7 px-2 inline-flex items-center gap-1 text-[12px] text-foreground hover:bg-foreground/[0.05] rounded-sm transition-colors"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Delete
+      </button>
       <button
         type="button"
         onClick={onClear}

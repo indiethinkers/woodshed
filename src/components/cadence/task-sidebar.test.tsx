@@ -87,6 +87,10 @@ vi.mock("@/lib/hooks/use-today", () => ({
   useToday: () => "2026-05-18",
 }));
 
+vi.mock("@/lib/cadence/use-cadence-sidebar-date", () => ({
+  useCadenceSidebarDate: () => "2026-05-18",
+}));
+
 vi.mock("@/lib/hooks/use-areas", () => ({
   useAreas: () => ({
     data: [

@@ -34,7 +34,7 @@ export function NotebookIndexSidebar() {
   const favorites = (data ?? []).filter((note) => note.favorite).slice(0, 5);
 
   return (
-    <ListSidebar title="Notebook" count={data?.length ?? 0}>
+    <ListSidebar>
       <NewNoteAction />
       <ListSidebarSectionHeader label="Folders" count={folders.length} />
       <div className="space-y-0.5">

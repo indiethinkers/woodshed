@@ -10,6 +10,7 @@ import {
   type RightSidebarEntry,
   type RightSidebarTarget,
 } from "./right-sidebar-context-internal";
+import { isEditableElement } from "@/lib/dom/is-editable";
 import { isRightSidebarToggleShortcut } from "./right-sidebar-shortcut";
 
 const MAX_REFERENCE_PAGES = 12;
@@ -71,6 +72,7 @@ export function RightSidebarProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!isRightSidebarToggleShortcut(event)) return;
+      if (isEditableElement(event.target)) return;
       event.preventDefault();
       setOpen((current) => !current);
     }

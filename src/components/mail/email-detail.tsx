@@ -25,6 +25,7 @@ import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { splitQuotedBody } from "@/lib/mail-lib/trim-quoted";
+import { toastMutationError } from "@/lib/mutation-toast";
 import { addressAvatar } from "@/lib/avatars";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { mailOpenAttachment } from "@/lib/mail-lib/mail";
@@ -46,6 +47,16 @@ import { InlineReply } from "@/components/mail/inline-reply";
 import { SnoozeButton } from "@/components/mail/snooze-button";
 import { Markdown } from "@/components/shared/markdown";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
 interface EmailDetailProps {
@@ -57,8 +68,8 @@ interface EmailDetailProps {
 
 /**
  * Thread view: stacks every locally-persisted message that shares
- * `email.threadId` chronologically (oldest first) as a Gmail-style
- * conversation — every message expanded, each with a sender avatar,
+ * `email.threadId` chronologically (oldest first), each as its own card
+ * (Superhuman-style) — every message expanded, each with a sender avatar,
  * recipient line, and hover-revealed reply actions. Quoted reply history
  * is collapsed behind a "Show trimmed content" toggle.
  *
@@ -86,6 +97,7 @@ export function EmailDetail({
   const archiveOne = useArchiveOne();
   const deleteOne = useDeleteOne();
   const [compose, setCompose] = useState<ComposeMode | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
 
   // Render the thread we have on disk; fall back to the single message
@@ -366,7 +378,7 @@ export function EmailDetail({
     // network call in the background — don't await, so the next email
     // opens immediately.
     for (const m of messages) {
-      archiveOne(m.id).catch((e) => console.error("archive failed", e));
+      archiveOne(m.id).catch((e) => toastMutationError("archive message", e));
     }
     openAfterAction(nextId);
   }, [mailbox, messages, archiveOne, nextEmailIdAfter, openAfterAction]);
@@ -374,7 +386,7 @@ export function EmailDetail({
   const handleDelete = useCallback(() => {
     const nextId = nextEmailIdAfter();
     for (const m of messages) {
-      deleteOne(m.id).catch((e) => console.error("delete failed", e));
+      deleteOne(m.id).catch((e) => toastMutationError("remove message", e));
     }
     openAfterAction(nextId);
   }, [messages, deleteOne, nextEmailIdAfter, openAfterAction]);
@@ -387,6 +399,7 @@ export function EmailDetail({
       if (target && isEditableElement(target)) return;
 
       if (e.key === "Escape") {
+        if (compose) return;
         e.preventDefault();
         if (onBack) {
           onBack();
@@ -440,6 +453,7 @@ export function EmailDetail({
     latest,
     messages,
     selectedIdx,
+    compose,
   ]);
 
   return (
@@ -449,9 +463,15 @@ export function EmailDetail({
         const inbox = inboxes.find((i) => i.inboxId === latest.inbox);
         const inboxLabel = inbox?.displayName || inbox?.email || latest.inbox;
         return (
-          <div className="mb-4">
-            <h1 className="text-lg font-semibold">{latest.subject}</h1>
-            <div className="flex items-baseline gap-2 mt-1 text-sm text-muted-foreground">
+          <div className="mb-5">
+            {/* Superhuman-style reading header: the subject is the pane's
+                title; the meta row below stays one quiet line. The message's
+                own sender/time row lives inside the card, so the page header
+                doesn't repeat a timestamp. */}
+            <h1 className="text-2xl font-semibold tracking-tight leading-tight">
+              {latest.subject}
+            </h1>
+            <div className="mt-1.5 flex items-baseline gap-2 text-sm text-muted-foreground">
               {shouldShowUnreadIndicator(latest) && (
                 <span
                   aria-label="Unread"
@@ -467,15 +487,6 @@ export function EmailDetail({
                   {messages.length} messages
                 </span>
               )}
-              <span className="font-mono text-xs shrink-0">
-                {new Date(latest.date).toLocaleString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                })}
-              </span>
               {latest.inbox && (
                 <span
                   className="ml-auto flex items-center gap-1.5 text-xs shrink-0"
@@ -546,7 +557,7 @@ export function EmailDetail({
         <Button
           variant="outline"
           size="sm"
-          onClick={handleDelete}
+          onClick={() => setDeleteConfirmOpen(true)}
           className="text-muted-foreground hover:text-red-500"
         >
           <Trash2 className="h-3.5 w-3.5 mr-1.5" />
@@ -554,14 +565,15 @@ export function EmailDetail({
         </Button>
       </div>
 
-      {/* One continuous conversation surface (Gmail-style): messages are
-          separated by faint dividers instead of floating as separate cards. */}
-      <div className="overflow-hidden rounded-md border border-border bg-background wd-email-sheet">
+      {/* Reading stack (Superhuman-style): every message is its own card,
+          raised off the panel canvas and separated by a small gap. The reply
+          affordance is a card footer — on the targeted message while a reply
+          is open, otherwise on the newest card. */}
+      <div className="space-y-3">
         {messages.map((m, idx) => (
           <ThreadMessage
             key={m.id}
             message={m}
-            isFirst={idx === 0}
             isSelected={idx === selectedIdx}
             defaultCollapsed={messages.length > 3 && idx < messages.length - 1}
             ownEmails={ownEmails}
@@ -570,27 +582,28 @@ export function EmailDetail({
             onReplyAll={() => setCompose({ kind: "replyAll", source: m })}
             onForward={() => setCompose({ kind: "forward", source: m })}
             people={people}
+            footer={
+              replyTarget && replyTarget.id === m.id ? (
+                <InlineReply
+                  key={replyTarget.id}
+                  message={replyTarget}
+                  onClose={() => setReplyTargetId(null)}
+                />
+              ) : !replyTarget && idx === messages.length - 1 ? (
+                <CollapsedReplyStrip
+                  onReply={() =>
+                    setReplyTargetId((messages[selectedIdx] ?? latest).id)
+                  }
+                  onForward={() => setCompose({ kind: "forward", source: latest })}
+                />
+              ) : undefined
+            }
             ref={(el) => {
               messageRefs.current[idx] = el;
             }}
           />
         ))}
       </div>
-
-      {/* Reply surface: the expanded inline composer while a reply is
-          targeted, otherwise Gmail's always-present collapsed strip. */}
-      {replyTarget ? (
-        <InlineReply
-          key={replyTarget.id}
-          message={replyTarget}
-          onClose={() => setReplyTargetId(null)}
-        />
-      ) : (
-        <CollapsedReplyStrip
-          onReply={() => setReplyTargetId((messages[selectedIdx] ?? latest).id)}
-          onForward={() => setCompose({ kind: "forward", source: latest })}
-        />
-      )}
 
       <OutgoingLinksPanel sourceId={latest.id} />
       <BacklinksPanel targetId={latest.id} />
@@ -603,6 +616,30 @@ export function EmailDetail({
           onClose={() => setCompose(null)}
         />
       )}
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from Woodshed?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the message from your vault (recoverable in trash).
+              Gmail is not updated — the message may still exist in your inbox
+              online.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                handleDelete();
+              }}
+            >
+              Remove locally
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -661,22 +698,22 @@ export function useAutoMarkRead(
 }
 
 /**
- * Single message inside a Gmail-style conversation. Every message is
- * expanded by default; in a long thread the earlier messages start
- * collapsed to a compact header row (Gmail collapses older responses so
- * reading the newest message doesn't mean scrolling a wall of quoted
- * history) — clicking a row or moving the j/k cursor onto it expands it.
- * The header carries the sender avatar, email, a clickable recipient line
+ * Single message inside a Superhuman-style thread: every message is its
+ * own rounded card raised off the canvas, separated from its siblings by
+ * a small gap. In a long thread the earlier messages start collapsed to a
+ * compact header row (Gmail collapses older responses so reading the
+ * newest message doesn't mean scrolling a wall of quoted history) —
+ * clicking a row or moving the j/k cursor onto it expands it. The header
+ * carries the sender avatar, email, a clickable recipient line
  * ("to me, Meghan, Kelly"), the timestamp, and hover-revealed reply
  * actions. Quoted reply history collapses behind "Show trimmed content".
- * Messages sit on one continuous surface separated by faint dividers.
+ * The reply affordance renders as the card's flush footer.
  *
  * `isSelected` drives the violet keyboard-cursor bar. `onSelect` lets
  * a click set the cursor without forcing the user to use j/k first.
  */
 function ThreadMessage({
   message,
-  isFirst,
   isSelected,
   defaultCollapsed,
   ownEmails,
@@ -685,11 +722,10 @@ function ThreadMessage({
   onReplyAll,
   onForward,
   people,
+  footer,
   ref,
 }: {
   message: EmailSummary;
-  /** First message in the thread — no divider above it. */
-  isFirst: boolean;
   isSelected: boolean;
   /** Start collapsed (header row only) instead of showing the full body. */
   defaultCollapsed: boolean;
@@ -700,6 +736,10 @@ function ThreadMessage({
   onReplyAll: () => void;
   onForward: () => void;
   people: PersonDto[];
+  /** Rendered flush at the card's bottom edge (e.g. the reply strip on the
+   *  newest message, or the inline composer under the message being replied
+   *  to). Skipped while the row is collapsed. */
+  footer?: React.ReactNode;
   ref?: React.Ref<HTMLDivElement>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -735,11 +775,11 @@ function ThreadMessage({
       data-mail-thread-message
       onClick={onSelect}
       className={cn(
-        "group relative px-5",
-        collapsed ? "py-2" : "py-4",
-        // Faint divider between messages — the conversation reads as one
-        // continuous surface instead of a stack of separate cards.
-        !isFirst && "border-t border-border/80",
+        // Each message is its own card (Superhuman-style thread): rounded,
+        // raised off the canvas, `overflow-hidden` keeps the flush footer
+        // inside the rounded corners. The light-sheet vars make HTML bodies
+        // render light in dark mode.
+        "group relative overflow-hidden rounded-lg border border-border/90 bg-background shadow-sm wd-email-sheet",
       )}
     >
       {isSelected && (
@@ -755,7 +795,7 @@ function ThreadMessage({
           aria-expanded={false}
           aria-label={`Expand message from ${headerLabel}`}
           title={message.subject}
-          className="group flex w-full items-center gap-3 text-left"
+          className="group flex w-full items-center gap-3 px-5 py-2.5 text-left"
         >
           <Avatar initials={avatar.initials} color={avatar.color} size="md" />
           <span className="min-w-0 flex-1">
@@ -770,7 +810,7 @@ function ThreadMessage({
           <ChevronDown className="h-3.5 w-3.5 -rotate-90 shrink-0 text-muted-foreground" />
         </button>
       ) : (
-        <>
+        <div className="px-5 py-5">
           {/* Message header: avatar, identity, recipient line, time, actions. */}
       <div className="flex items-start gap-3">
         <Avatar initials={avatar.initials} color={avatar.color} size="md" />
@@ -924,8 +964,9 @@ function ThreadMessage({
           </>
         )}
       </div>
-        </>
+        </div>
       )}
+      {!collapsed && footer}
     </div>
   );
 }
@@ -945,7 +986,7 @@ function CollapsedReplyStrip({
   onForward: () => void;
 }) {
   return (
-    <div className="mt-3 flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.02]">
+    <div className="flex items-center gap-1.5 border-t border-border/80 bg-background px-5 py-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.02]">
       <Reply className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
       <span>Click here to</span>
       <button
