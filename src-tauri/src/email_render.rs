@@ -482,7 +482,7 @@ fn normalize_remote_image_url(src: &str) -> Option<String> {
 
 fn first_remote_url_from_srcset(srcset: &str) -> Option<String> {
     for candidate in srcset.split(',') {
-        let url = candidate.trim().split_whitespace().next()?.trim();
+        let url = candidate.split_whitespace().next()?.trim();
         if let Some(normalized) = normalize_remote_image_url(url) {
             return Some(normalized);
         }
