@@ -198,6 +198,17 @@ function HtmlBodyInner({ messageId }: HtmlBodyProps) {
         ) {
           viewport.scrollLeft += data.deltaX;
         }
+      } else if (data.type === "wsmail-interaction") {
+        // A user interaction happened inside the email (e.g. the
+        // "Show trimmed content" toggle). The click lives in the
+        // sandboxed iframe so it never reaches EmailDetail's
+        // pointerdown listener; forward it as a pointerdown on the
+        // iframe element so the thread's auto-follow disengages and
+        // the height change doesn't yank the view back to the newest
+        // message.
+        iframe.dispatchEvent(
+          new MouseEvent("pointerdown", { bubbles: true }),
+        );
       }
     }
     window.addEventListener("message", onMessage);
