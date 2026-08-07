@@ -29,6 +29,10 @@ vi.mock("./indexing-indicator", () => ({
   IndexingIndicator: () => null,
 }));
 
+vi.mock("./agent-working-indicator", () => ({
+  AgentWorkingIndicator: () => null,
+}));
+
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => children,
   Tooltip: ({ children }: { children: React.ReactNode }) => children,
