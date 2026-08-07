@@ -571,6 +571,20 @@ fn ensure_directory_components(
     Ok(directory)
 }
 
+/// True when `path` canonicalizes to a real file inside the canonicalized
+/// `vault`, compared component-wise. Fail-closed: any canonicalize error
+/// (missing file, symlink loop, permissions, NUL bytes) yields false, so
+/// IPC-supplied paths can never drive a read outside the vault.
+pub fn path_confined_to_vault(vault: &Path, path: &Path) -> bool {
+    let Ok(canon_vault) = vault.canonicalize() else {
+        return false;
+    };
+    let Ok(canon_path) = path.canonicalize() else {
+        return false;
+    };
+    canon_path.starts_with(&canon_vault)
+}
+
 /// Construct a single regular-file child beneath an already validated vault
 /// directory without following a pre-existing symlink at the destination.
 pub fn confined_file_path(
@@ -907,6 +921,50 @@ pub fn is_icloud_path(path: &Path) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn path_confined_to_vault_accepts_in_vault_files() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("woodshed");
+        ensure_dirs(&vault).unwrap();
+        let person = vault.join("people").join("alex.md");
+        std::fs::write(&person, "x").unwrap();
+        assert!(path_confined_to_vault(&vault, &person));
+    }
+
+    #[test]
+    fn path_confined_to_vault_rejects_dotdot_and_absolute_escapes() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("woodshed");
+        ensure_dirs(&vault).unwrap();
+        // `..` segment resolving outside the vault.
+        let escape = vault.join("people").join("..").join("..").join("secret.md");
+        std::fs::create_dir_all(escape.parent().unwrap()).unwrap();
+        std::fs::write(&escape, "x").unwrap();
+        assert!(!path_confined_to_vault(&vault, &escape));
+        // Absolute path outside the vault entirely.
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "x").unwrap();
+        assert!(!path_confined_to_vault(&vault, &outside));
+    }
+
+    #[test]
+    fn path_confined_to_vault_rejects_symlink_out_of_vault_and_missing_files() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path().join("woodshed");
+        ensure_dirs(&vault).unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "x").unwrap();
+        let link = vault.join("people").join("linked.md");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        // A symlinked person file pointing outside the vault is rejected.
+        assert!(!path_confined_to_vault(&vault, &link));
+        // Missing files fail closed.
+        assert!(!path_confined_to_vault(
+            &vault,
+            &vault.join("people").join("ghost.md")
+        ));
+    }
 
     #[test]
     fn ensure_dirs_creates_all_subdirs() {

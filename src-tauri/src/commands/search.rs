@@ -133,19 +133,17 @@ pub fn record_edges_incoming(
     if kind == "person" {
         // The person's email lives in the vault file, not the index; a
         // single bounded read keeps attendee-by-email edges resolvable.
-        // The IPC-supplied path is untrusted: canonicalize the resolved
-        // file and require containment inside the vault before reading
-        // (mirrors vault::confined_file_path's containment rule, and also
-        // rejects symlinked person files pointing outside the vault).
+        // The IPC-supplied path is untrusted: require canonical
+        // containment inside the vault, and read the canonicalized path
+        // so the checked file and the read file are the same object
+        // (rejects `..`/absolute escapes and symlinks out of the vault).
         let abs = vault.join(&path);
-        let inside_vault = vault
+        if let Some(canon) = abs
             .canonicalize()
             .ok()
-            .zip(abs.canonicalize().ok())
-            .map(|(canon_vault, canon_path)| canon_path.starts_with(&canon_vault))
-            .unwrap_or(false);
-        if inside_vault {
-            if let Ok(content) = crate::vault::read_record(&abs) {
+            .filter(|_| crate::vault::path_confined_to_vault(&vault, &abs))
+        {
+            if let Ok(content) = crate::vault::read_record(&canon) {
                 if let Ok(person) = crate::parsers::parse_person(&content) {
                     let email = person.email.trim().to_string();
                     if !email.is_empty() {
