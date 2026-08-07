@@ -692,16 +692,8 @@ function AgentSurfaceInner({
         ) {
           retitledRunIdRef.current = activeRun.id;
           const candidate = conversationAutoTitle(chat.messages);
-          const currentTitle = chat.title?.trim() ?? "";
-          const firstUserTitle = titleFromText(
-            chat.messages.find((message) => message.role === "user")?.content ??
-              "",
-          );
-          const titleIsAuto =
-            currentTitle === "" ||
-            currentTitle === "New chat" ||
-            (firstUserTitle !== "New chat" && currentTitle === firstUserTitle);
-          if (candidate && titleIsAuto && currentTitle !== candidate) {
+          const titleIsAuto = isAutoDerivedTitle(chat.title ?? "", chat.messages);
+          if (candidate && titleIsAuto && chat.title?.trim() !== candidate) {
             void tauriInvoke<AgentChatRecord>("agent_chat_update", {
               input: {
                 id: chat.id,
@@ -3539,6 +3531,22 @@ function titleFromText(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (!collapsed) return "New chat";
   return collapsed.length > 58 ? `${collapsed.slice(0, 55)}...` : collapsed;
+}
+
+/// True when `title` is still the auto-derived state for the conversation:
+/// the generic "New chat" placeholder, empty, or the create-time
+/// first-message title. A manual rename never matches unless the user
+/// coincidentally typed the same text — an inherent heuristic ambiguity.
+export function isAutoDerivedTitle(
+  title: string,
+  messages: AgentVaultMessage[],
+): boolean {
+  const current = title.trim();
+  if (current === "" || current === "New chat") return true;
+  const firstUserTitle = titleFromText(
+    messages.find((message) => message.role === "user")?.content ?? "",
+  );
+  return current === firstUserTitle;
 }
 
 /// True when a user message is a meaningful title source — skips bare

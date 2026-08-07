@@ -89,6 +89,7 @@ import {
   AgentThoughtTool,
   AgentWorkIndicator,
   conversationAutoTitle,
+  isAutoDerivedTitle,
   mergeHydratedConversationMessages,
   modelForAgentChatUpdate,
   sortChatsByCreatedAt,
@@ -1594,6 +1595,10 @@ describe("conversationAutoTitle", () => {
         userMessage("can we leverage gbrain for woodshed?"),
       ]),
     ).toBe("can we leverage gbrain for woodshed?");
+    // Punctuation variants of a greeting are skipped too.
+    expect(
+      conversationAutoTitle([userMessage("good evening!"), userMessage("what's on the roadmap?")]),
+    ).toBe("what's on the roadmap?");
   });
 
   it("falls back to the first user message when everything is trivial", () => {
@@ -1620,5 +1625,35 @@ describe("conversationAutoTitle", () => {
       ]),
     ).toBeNull();
     expect(conversationAutoTitle([])).toBeNull();
+  });
+});
+
+describe("isAutoDerivedTitle", () => {
+  const messages = [
+    {
+      id: "m1",
+      role: "user" as const,
+      content: "can we leverage gbrain for woodshed?",
+      createdAt: "2026-08-06T20:00:00.000Z",
+      agentRunId: null,
+    },
+  ];
+
+  it("treats the placeholder, empty, and first-message titles as auto", () => {
+    expect(isAutoDerivedTitle("New chat", messages)).toBe(true);
+    expect(isAutoDerivedTitle("", messages)).toBe(true);
+    expect(
+      isAutoDerivedTitle("can we leverage gbrain for woodshed?", messages),
+    ).toBe(true);
+  });
+
+  it("never treats a manual rename as auto-derived", () => {
+    expect(isAutoDerivedTitle("Woodshed architecture notes", messages)).toBe(
+      false,
+    );
+    // Attachment-derived titles (≠ first-message text) are preserved too.
+    expect(isAutoDerivedTitle("Screenshot-2026-08-06.png", messages)).toBe(
+      false,
+    );
   });
 });
