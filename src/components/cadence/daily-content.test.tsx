@@ -224,6 +224,7 @@ describe("DailyContent notes editor", () => {
     expect(stickyHeader?.classList.contains("top-4")).toBe(true);
     expect(scrollShield?.classList.contains("h-4")).toBe(true);
     expect(scrollShield?.classList.contains("bg-content")).toBe(true);
+    expect(scrollShield?.classList.contains("w-screen")).toBe(true);
   });
 
   it("renders markdown list markers as list structure after prose", async () => {
