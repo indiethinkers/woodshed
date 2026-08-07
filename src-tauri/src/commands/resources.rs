@@ -480,14 +480,65 @@ fn published_from_url_path(url: &reqwest::Url) -> Option<String> {
     None
 }
 
+/// The 11-char YouTube video id for a URL, when it is a YouTube video
+/// link. Covers `watch?v=` (with arbitrary params before `v=`), `/embed/`,
+/// `/shorts/`, `/live/`, and `youtu.be` short links across the www/m/music/
+/// youtube-nocookie hosts. Query params (`list`, `t`, `si`) are ignored —
+/// the video id is the resource's identity, not the URL spelling.
+fn youtube_video_id(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    let id = match host.as_str() {
+        "youtu.be" => parsed
+            .path()
+            .trim_start_matches('/')
+            .split('/')
+            .next()?
+            .to_string(),
+        "youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtube-nocookie.com" => {
+            let path = parsed.path();
+            if path.starts_with("/watch") {
+                parsed
+                    .query_pairs()
+                    .find(|(key, _)| key == "v")
+                    .map(|(_, value)| value.to_string())?
+            } else {
+                // /embed/<id>, /shorts/<id>, /live/<id>
+                path.trim_start_matches('/').split('/').nth(1)?.to_string()
+            }
+        }
+        _ => return None,
+    };
+    let id = id.trim();
+    (id.len() == 11
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    .then(|| id.to_string())
+}
+
+/// Canonical URL for a resource. YouTube videos map to the canonical watch
+/// URL (`https://www.youtube.com/watch?v=<id>`) so every spelling of the
+/// same video dedupes to one record; everything else is unchanged.
+fn canonical_resource_url(url: &str) -> String {
+    match youtube_video_id(url) {
+        Some(id) => format!("https://www.youtube.com/watch?v={id}"),
+        None => url.to_string(),
+    }
+}
+
 fn url_key(url: &str) -> String {
-    match reqwest::Url::parse(url) {
+    let canonical = canonical_resource_url(url);
+    match reqwest::Url::parse(&canonical) {
         Ok(mut parsed) => {
             parsed.set_fragment(None);
             let s = parsed.to_string();
             s.trim_end_matches('/').to_ascii_lowercase()
         }
-        Err(_) => url.trim().trim_end_matches('/').to_ascii_lowercase(),
+        Err(_) => canonical.trim().trim_end_matches('/').to_ascii_lowercase(),
     }
 }
 
@@ -940,6 +991,15 @@ pub fn resource_create(
     let vault = vault_root(&app)?;
     std::fs::create_dir_all(vault.join(vault_lib::RESOURCES_DIR)).map_err(|e| e.to_string())?;
 
+    // Manual creation must not duplicate an existing canonical URL. The
+    // key collapses URL spellings (YouTube video ids, fragments, case,
+    // trailing slashes), so re-saving a video in any form returns the
+    // saved resource instead of minting a -2 / -3 sibling. Mirrors the
+    // capture path's dedupe.
+    if let Some((existing, path)) = find_resource_by_url(&vault, &input.url)? {
+        return Ok(ResourceDto::from_parsed(existing, &vault, &path));
+    }
+
     let id = unique_id(&vault, &slugify_title(&input.title))?;
     let path = resource_path(&vault, &id)?;
 
@@ -1033,10 +1093,25 @@ pub async fn resource_capture_url(
 
     merge_url_fallbacks(&mut article, &final_url);
 
+    // Re-check for an existing record now that the metadata fetch is done.
+    // The pre-fetch lookup above can miss a record whose capture is still
+    // in flight (concurrent pastes of the same video), which would
+    // otherwise mint -2 / -3 siblings; the canonical key makes any
+    // spelling of the same URL land on the same record.
+    if let Some((resource, path)) = find_resource_by_url(&vault, &requested_url_string)? {
+        if !input.refresh {
+            return Ok(ResourceDto::from_parsed(resource, &vault, &path));
+        }
+    }
+
     let canonical = article
         .canonical_url
         .clone()
         .unwrap_or_else(|| final_url.to_string());
+    // Store the canonical spelling (YouTube videos collapse to the watch
+    // URL) so the record's url matches the dedupe identity in url_key —
+    // re-capturing any spelling of the same video finds this record.
+    let canonical = canonical_resource_url(&canonical);
     let source = clean_optional(input.source.clone())
         .or(article.source.clone())
         .unwrap_or_else(|| host_from_url(&canonical));
@@ -1543,6 +1618,130 @@ mod tests {
         );
         assert_eq!(host_from_url("foo.com/bar"), "foo.com");
         assert_eq!(host_from_url(""), "");
+    }
+
+    #[test]
+    fn youtube_video_id_extracts_id_from_every_url_shape() {
+        for url in [
+            "https://www.youtube.com/watch?v=bd5ABsobEqU",
+            "https://www.youtube.com/watch?v=bd5ABsobEqU&list=WL&index=2",
+            "https://www.youtube.com/watch?app=desktop&v=bd5ABsobEqU&t=60s",
+            "http://youtube.com/watch?v=bd5ABsobEqU",
+            "https://m.youtube.com/watch?v=bd5ABsobEqU",
+            "https://music.youtube.com/watch?v=bd5ABsobEqU",
+            "https://youtu.be/bd5ABsobEqU",
+            "https://youtu.be/bd5ABsobEqU?si=abc123",
+            "https://www.youtube.com/shorts/bd5ABsobEqU",
+            "https://www.youtube.com/embed/bd5ABsobEqU",
+            "https://www.youtube.com/live/bd5ABsobEqU",
+            "https://www.youtube-nocookie.com/embed/bd5ABsobEqU",
+        ] {
+            assert_eq!(
+                youtube_video_id(url).as_deref(),
+                Some("bd5ABsobEqU"),
+                "url: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn youtube_video_id_rejects_non_youtube_and_bad_ids() {
+        assert_eq!(
+            youtube_video_id("https://example.com/watch?v=bd5ABsobEqU"),
+            None
+        );
+        assert_eq!(
+            youtube_video_id("https://www.nytimes.com/2026/04/30/opinion/x.html"),
+            None
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/watch?v=short"),
+            None
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/playlist?list=WL"),
+            None
+        );
+        assert_eq!(youtube_video_id("not a url"), None);
+    }
+
+    #[test]
+    fn url_key_collapses_every_spelling_of_the_same_video() {
+        let variants = [
+            "https://www.youtube.com/watch?v=bd5ABsobEqU",
+            "https://www.youtube.com/watch?v=bd5ABsobEqU&list=WL&index=2",
+            "http://youtube.com/watch?v=bd5ABsobEqU",
+            "https://youtu.be/bd5ABsobEqU",
+        ];
+        let key = url_key(variants[0]);
+        for variant in variants {
+            assert_eq!(url_key(variant), key, "variant: {variant}");
+        }
+        assert_eq!(
+            key, "https://www.youtube.com/watch?v=bd5absobequ",
+            "canonical watch URL, lowercased"
+        );
+        // Distinct videos and non-youtube URLs keep distinct keys.
+        assert_ne!(
+            url_key(variants[0]),
+            url_key("https://www.youtube.com/watch?v=HQXi4snP36I")
+        );
+        assert_ne!(
+            url_key(variants[0]),
+            url_key("https://www.nytimes.com/2026/04/30/opinion/silicon-valley-ai.html")
+        );
+    }
+
+    #[test]
+    fn find_resource_by_url_matches_every_spelling_of_the_same_video() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join("resources")).unwrap();
+        // A saved resource whose URL is the canonical watch link.
+        let resource = crate::parsers::Resource {
+            id: "economy-video".to_string(),
+            title: "What A.I. Is Actually Doing to the Economy".to_string(),
+            url: "https://www.youtube.com/watch?v=bd5ABsobEqU".to_string(),
+            source: "youtube.com".to_string(),
+            area: None,
+            saved: "2026-08-06T19:34:05.242350-07:00".to_string(),
+            people: vec![],
+            published: None,
+            captured_at: None,
+            content_hash: None,
+            agent_status: Default::default(),
+            tags: vec![],
+            highlights: vec![],
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join("resources").join("economy-video.md"),
+            crate::parsers::serialize_resource(&resource).unwrap(),
+        )
+        .unwrap();
+
+        // Any spelling of the same video resolves to the saved record —
+        // the regression that produced -2 / -3 duplicates.
+        let variants = [
+            "https://www.youtube.com/watch?v=bd5ABsobEqU",
+            "https://www.youtube.com/watch?v=bd5ABsobEqU&list=WL&index=2",
+            "http://youtube.com/watch?v=bd5ABsobEqU",
+            "https://youtu.be/bd5ABsobEqU",
+        ];
+        for variant in variants {
+            let found = find_resource_by_url(vault, variant).unwrap();
+            assert!(
+                found.is_some(),
+                "spelling not deduped to the saved record: {variant}"
+            );
+        }
+        // A different video stays distinct.
+        assert!(
+            find_resource_by_url(vault, "https://www.youtube.com/watch?v=HQXi4snP36I")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
