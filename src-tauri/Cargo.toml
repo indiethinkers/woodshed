@@ -31,7 +31,7 @@ thiserror = "1"
 libc = "0.2"
 
 # Vault foundation (Phase 0)
-gray_matter = "0.2"
+gray_matter = "0.3"
 ulid = { version = "1", features = ["serde"] }
 notify = "6"
 notify-debouncer-mini = "0.4"
