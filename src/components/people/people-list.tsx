@@ -22,6 +22,7 @@ import {
   type PersonDto,
 } from "@/lib/hooks/use-people";
 import type { ViewSort } from "@/lib/hooks/use-tables";
+import { ListLoadError } from "@/components/shared/list-load-error";
 import { NewPersonForm } from "./new-person-form";
 
 const DEFAULT_SORTS: ViewSort[] = [{ column: "created", direction: "desc" }];
@@ -95,7 +96,7 @@ const COLUMNS: RecordColumn<PersonDto>[] = [
 ];
 
 export function PeopleList() {
-  const { data, isLoading } = useAllPeople();
+  const { data, isLoading, isError, refetch } = useAllPeople();
   // Coerce explicitly: destructure-default only catches `undefined`, but
   // TanStack Query observers can briefly surface `null` (e.g. mid-refetch
   // with a query that select-projects to a nullable value on the same key —
@@ -139,6 +140,11 @@ export function PeopleList() {
           }),
       }}
       emptyMessage="No people yet. Click + to add one."
+      errorState={
+        isError && people.length === 0 ? (
+          <ListLoadError surface="people" onRetry={() => void refetch()} />
+        ) : undefined
+      }
       action={
         !adding && (
           <button

@@ -15,6 +15,7 @@ import {
   useTableMutations,
   type ViewSort,
 } from "@/lib/hooks/use-tables";
+import { ListLoadError } from "@/components/shared/list-load-error";
 import { useTagsWithCounts } from "@/lib/hooks/use-tag-table";
 
 // Shared row projection for two separate inline databases: user-created
@@ -75,9 +76,18 @@ const GENERATED_COLUMNS: RecordColumn<DatabaseRowItem>[] = [
 
 export function DatabasesList() {
   const navigate = useNavigate();
-  const { data: customTables = [], isLoading } = useAllTables();
-  const { data: generatedTables = [], isLoading: isLoadingGenerated } =
-    useTagsWithCounts();
+  const {
+    data: customTables = [],
+    isLoading,
+    isError: customError,
+    refetch: refetchCustom,
+  } = useAllTables();
+  const {
+    data: generatedTables = [],
+    isLoading: isLoadingGenerated,
+    isError: generatedError,
+    refetch: refetchGenerated,
+  } = useTagsWithCounts();
   const { data: tagFavorites = [] } = useDatabaseTagFavorites();
   const { create } = useTableMutations();
   const { setTableFavorite, setTagFavorite } = useDatabaseFavoriteMutations();
@@ -171,6 +181,14 @@ export function DatabasesList() {
           hasActiveView={customView.isDirty}
           onResetView={customView.reset}
           emptyMessage="No custom databases yet. Click + to create one."
+          errorState={
+            customError && customTables.length === 0 ? (
+              <ListLoadError
+                surface="custom databases"
+                onRetry={() => void refetchCustom()}
+              />
+            ) : undefined
+          }
           action={
             !creating && (
               <button
@@ -249,6 +267,14 @@ export function DatabasesList() {
           hasActiveView={generatedView.isDirty}
           onResetView={generatedView.reset}
           emptyMessage="No generated databases yet. Add a #tag to any record to create one."
+          errorState={
+            generatedError && generatedTables.length === 0 ? (
+              <ListLoadError
+                surface="generated databases"
+                onRetry={() => void refetchGenerated()}
+              />
+            ) : undefined
+          }
         />
       </div>
     </div>

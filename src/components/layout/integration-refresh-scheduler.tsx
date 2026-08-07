@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { describeIntegrationRefreshFailures } from "@/lib/integration-refresh-failures";
 import { useGcalSync } from "@/lib/hooks/use-gcal";
 import { useIntegrationRefreshSettings } from "@/lib/hooks/use-integration-refresh";
 import {
   useRefreshMail,
   useRestoreDueSnoozes,
 } from "@/lib/hooks/use-mail";
+
+const REFRESH_ERROR_TOAST_COOLDOWN_MS = 5 * 60 * 1000;
+let lastScheduledRefreshErrorToastAt = 0;
 
 export function IntegrationRefreshScheduler() {
   const { data: settings } = useIntegrationRefreshSettings();
@@ -59,10 +63,23 @@ export function IntegrationRefreshScheduler() {
       running.current = true;
       lastStartedAt = Date.now();
       try {
-        await Promise.allSettled([
+        const [calendarResult, mailResult] = await Promise.allSettled([
           refreshCalendarRef.current(),
           refreshMailRef.current(),
         ]);
+        const failures = describeIntegrationRefreshFailures(
+          calendarResult,
+          mailResult,
+        );
+        if (failures.length > 0) {
+          const now = Date.now();
+          if (now - lastScheduledRefreshErrorToastAt >= REFRESH_ERROR_TOAST_COOLDOWN_MS) {
+            lastScheduledRefreshErrorToastAt = now;
+            toast.error("Background refresh incomplete", {
+              description: failures.join(" "),
+            });
+          }
+        }
       } finally {
         running.current = false;
       }

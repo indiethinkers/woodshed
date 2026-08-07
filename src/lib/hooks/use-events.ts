@@ -7,6 +7,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { tauriInvoke } from "@/lib/tauri";
+import { toastMutationError } from "@/lib/mutation-toast";
 import type { RecurringRule, AreaId } from "@/lib/types";
 
 /** Origin of an event. `undefined` on legacy vault-local records; explicit
@@ -266,6 +267,9 @@ export function useIcalEventSaveNotes() {
       qc.invalidateQueries({ queryKey: ["events", day] });
       return saved;
     },
+    onError: (err) => {
+      toastMutationError("save event notes", err);
+    },
   });
 }
 
@@ -314,11 +318,12 @@ export function useEventMutations() {
 
       return { snapshots };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (!context) return;
       for (const [key, value] of context.snapshots.entries()) {
         qc.setQueryData(key, value);
       }
+      toastMutationError("save event", err);
     },
   });
 
@@ -355,11 +360,12 @@ export function useEventMutations() {
 
       return { snapshots };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (!context) return;
       for (const [key, value] of context.snapshots.entries()) {
         qc.setQueryData(key, value);
       }
+      toastMutationError("delete event", err);
     },
   });
 

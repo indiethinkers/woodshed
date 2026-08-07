@@ -22,6 +22,7 @@ import {
 } from "@/lib/hooks/use-resources";
 import type { ViewSort } from "@/lib/hooks/use-tables";
 import { NewResourceForm } from "./new-resource-form";
+import { ListLoadError } from "@/components/shared/list-load-error";
 
 const DEFAULT_SORTS: ViewSort[] = [{ column: "saved", direction: "desc" }];
 
@@ -67,7 +68,7 @@ const COLUMNS: RecordColumn<ResourceDto>[] = [
 
 export function ClippingList() {
   const navigate = useNavigate();
-  const { data: resources = [], isLoading } = useAllResources();
+  const { data: resources = [], isLoading, isError, refetch } = useAllResources();
   const { capture, update, remove } = useResourceMutations();
   const [adding, setAdding] = useState(false);
   const [captureUrl, setCaptureUrl] = useState("");
@@ -120,6 +121,11 @@ export function ClippingList() {
           }),
       }}
       emptyMessage="No resources yet — capture a URL above to save one."
+      errorState={
+        isError && resources.length === 0 ? (
+          <ListLoadError surface="resources" onRetry={() => void refetch()} />
+        ) : undefined
+      }
       action={
         !adding && (
           <button

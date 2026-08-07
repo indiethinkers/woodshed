@@ -8,7 +8,7 @@ import {
   ListSidebarRow,
   ListSidebarRows,
 } from "@/components/shared/list-sidebar";
-import { defaultAreas, UNASSIGNED_AREA_ID } from "@/lib/areas";
+import { UNASSIGNED_AREA_ID } from "@/lib/areas";
 import { useAreas } from "@/lib/hooks/use-areas";
 import { useAllNotes } from "@/lib/hooks/use-notes";
 import { useAllPeople } from "@/lib/hooks/use-people";
@@ -26,7 +26,7 @@ import { NewAreaForm } from "./new-area-form";
 export function AreasSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: liveAreas } = useAreas();
-  const areas = liveAreas ?? defaultAreas;
+  const areas = liveAreas ?? [];
   const unassignedHref = `/areas/${UNASSIGNED_AREA_ID}`;
 
   return (

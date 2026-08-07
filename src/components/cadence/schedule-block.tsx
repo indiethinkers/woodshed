@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { DaybookSectionHeader } from "./daybook-section-header";
-import { extractDate } from "./task-sidebar";
+import { useCadenceSidebarDate } from "@/lib/cadence/use-cadence-sidebar-date";
+import { formatScheduleDayLabel } from "@/lib/cadence/sidebar-date";
 import { RichText } from "@/components/shared/rich-text";
 import { useEvents, type EventDto } from "@/lib/hooks/use-events";
 import { useGcalAccounts, useGcalSync } from "@/lib/hooks/use-gcal";
@@ -24,19 +25,25 @@ type ScheduleVariant = "page" | "sidebar";
  * `/cadence/<date>`, today on an event/task detail page).
  */
 export function SidebarSchedule() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const date = useCadenceSidebarDate();
   const today = useToday();
-  const date = extractDate(pathname) ?? today;
-  return <ScheduleBlock date={date} variant="sidebar" />;
+  return <ScheduleBlock date={date} today={today} variant="sidebar" />;
 }
 
 interface ScheduleBlockProps {
   /** YYYY-MM-DD; events on this date render in the timeline rail. */
   date: string;
+  today?: string;
   variant?: ScheduleVariant;
 }
 
-export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
+export function ScheduleBlock({
+  date,
+  today: todayOverride,
+  variant = "page",
+}: ScheduleBlockProps) {
+  const todayFromHook = useToday();
+  const today = todayOverride ?? todayFromHook;
   const { data: eventsData, isLoading } = useEvents(date);
   const events = eventsData ?? EMPTY_EVENTS;
   const { data: gcalAccounts = [] } = useGcalAccounts();
@@ -138,7 +145,7 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
 
       <div className={listClass}>
         {events.length === 0 ? (
-          <NoEventsRow />
+          <NoEventsRow date={date} today={today} />
         ) : collapsed ? (
           <WrappedSummary
             events={events}
@@ -166,9 +173,7 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
                 />
               ))}
             </ul>
-            {/* The sidebar omits the manual collapse link — it's a persistent
-                reference panel; only the page variant offers re-collapsing. */}
-            {variant === "page" && (
+            {(variant === "page" || variant === "sidebar") && !collapsed && (
               <CollapseToggle onCollapse={() => setCollapsedPreference(true)} />
             )}
           </>
@@ -179,7 +184,11 @@ export function ScheduleBlock({ date, variant = "page" }: ScheduleBlockProps) {
 }
 
 /** Empty-day rail row — a single muted line in the timeline grid. */
-function NoEventsRow() {
+function NoEventsRow({ date, today }: { date: string; today: string }) {
+  const label =
+    date === today
+      ? "No events scheduled today."
+      : `No events scheduled for ${formatScheduleDayLabel(date, today)}.`;
   return (
     <div className="grid min-h-[26px] grid-cols-[auto_3px_minmax(0,1fr)] items-center gap-3 text-muted-foreground">
       <div className="font-mono text-[12px] tabular-nums">--:--</div>
@@ -187,7 +196,7 @@ function NoEventsRow() {
         aria-hidden
         className="h-3 w-[3px] rounded-full bg-muted-foreground/30"
       />
-      <p className="min-w-0 text-[13.5px] italic">No events scheduled today.</p>
+      <p className="min-w-0 text-[13.5px] italic">{label}</p>
     </div>
   );
 }

@@ -671,16 +671,15 @@ export function TiptapEditor({
         ...(mode === "outline" ? { listItem: false as const } : {}),
       }),
       ...(mode === "outline" ? [OutlineListItem] : []),
-      // Smart punctuation as INPUT RULES, replacing at the keystroke.
-      // Without this, macOS's own smart-quote substitution (active in
-      // WKWebView contenteditables) rewrites `'` → `'` only when the word
-      // commits on space — a late glyph swap that visibly shifts the text.
-      // With the input rule the curly quote is there from the first frame,
-      // so the OS pass finds nothing to replace. Only the rules that
-      // preempt macOS substitutions are enabled; the exotic conversions
-      // ((c) → ©, 1/2 → ½, etc.) stay off so notes aren't rewritten in
-      // ways the user never typed.
+      // Straight quotes stay as typed. Editor attrs suppress macOS smart
+      // substitution; we do not convert punctuation at keystroke time.
       Typography.configure({
+        openSingleQuote: false,
+        closeSingleQuote: false,
+        openDoubleQuote: false,
+        closeDoubleQuote: false,
+        emDash: false,
+        ellipsis: false,
         leftArrow: false,
         rightArrow: false,
         copyright: false,
@@ -803,6 +802,9 @@ export function TiptapEditor({
       handleScrollToSelection: handleScrollToVisibleSelection,
       attributes: {
         class: `tiptap-content focus:outline-none ${className ?? ""}`,
+        autocorrect: "off",
+        autocomplete: "off",
+        spellcheck: "false",
         ...(placeholder ? { "data-placeholder": placeholder } : {}),
         // Outline mode opts in to Roam-style indent rails (vertical guide
         // lines connecting bullet dots through their children). The rails

@@ -143,7 +143,7 @@ export function TitleBar() {
           data-tauri-drag-region="false"
           type="button"
           onClick={newTab}
-          title="New tab (⌘T)"
+          title="New tab"
           aria-label="New tab"
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >

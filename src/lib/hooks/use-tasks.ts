@@ -7,6 +7,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { tauriInvoke } from "@/lib/tauri";
+import { toastMutationError } from "@/lib/mutation-toast";
 import type { TaskStatus, AreaId } from "@/lib/types";
 
 export interface TaskDto {
@@ -110,6 +111,9 @@ export function useTaskMutations() {
       qc.setQueryData(["task", created.id], created);
       return created;
     },
+    onError: (err) => {
+      toastMutationError("create task", err);
+    },
   });
 
   const update = useMutation<
@@ -157,11 +161,12 @@ export function useTaskMutations() {
 
       return { snapshots };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (!context) return;
       for (const [key, value] of context.snapshots.entries()) {
         qc.setQueryData(key, value);
       }
+      toastMutationError("save task", err);
     },
   });
 
@@ -183,8 +188,9 @@ export function useTaskMutations() {
     onMutate: async ({ id }) => {
       return patchTaskEverywhere(qc, id, pauseTaskOptimistically);
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       restoreSnapshots(qc, context?.snapshots);
+      toastMutationError("pause task timer", err);
     },
   });
 
@@ -211,8 +217,9 @@ export function useTaskMutations() {
         inProgressStartedAt: task.inProgressStartedAt ?? now,
       }));
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       restoreSnapshots(qc, context?.snapshots);
+      toastMutationError("resume task timer", err);
     },
   });
 
@@ -257,11 +264,12 @@ export function useTaskMutations() {
 
       return { snapshots };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (!context) return;
       for (const [key, value] of context.snapshots.entries()) {
         qc.setQueryData(key, value);
       }
+      toastMutationError("reorder task", err);
     },
   });
 
@@ -303,11 +311,12 @@ export function useTaskMutations() {
 
       return { snapshots };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (!context) return;
       for (const [key, value] of context.snapshots.entries()) {
         qc.setQueryData(key, value);
       }
+      toastMutationError("delete task", err);
     },
   });
 

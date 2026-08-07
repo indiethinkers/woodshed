@@ -25,6 +25,7 @@ import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
 import { splitQuotedBody } from "@/lib/mail-lib/trim-quoted";
+import { toastMutationError } from "@/lib/mutation-toast";
 import { addressAvatar } from "@/lib/avatars";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { mailOpenAttachment } from "@/lib/mail-lib/mail";
@@ -46,6 +47,16 @@ import { InlineReply } from "@/components/mail/inline-reply";
 import { SnoozeButton } from "@/components/mail/snooze-button";
 import { Markdown } from "@/components/shared/markdown";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
 interface EmailDetailProps {
@@ -86,6 +97,7 @@ export function EmailDetail({
   const archiveOne = useArchiveOne();
   const deleteOne = useDeleteOne();
   const [compose, setCompose] = useState<ComposeMode | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
 
   // Render the thread we have on disk; fall back to the single message
@@ -366,7 +378,7 @@ export function EmailDetail({
     // network call in the background — don't await, so the next email
     // opens immediately.
     for (const m of messages) {
-      archiveOne(m.id).catch((e) => console.error("archive failed", e));
+      archiveOne(m.id).catch((e) => toastMutationError("archive message", e));
     }
     openAfterAction(nextId);
   }, [mailbox, messages, archiveOne, nextEmailIdAfter, openAfterAction]);
@@ -374,7 +386,7 @@ export function EmailDetail({
   const handleDelete = useCallback(() => {
     const nextId = nextEmailIdAfter();
     for (const m of messages) {
-      deleteOne(m.id).catch((e) => console.error("delete failed", e));
+      deleteOne(m.id).catch((e) => toastMutationError("remove message", e));
     }
     openAfterAction(nextId);
   }, [messages, deleteOne, nextEmailIdAfter, openAfterAction]);
@@ -387,6 +399,7 @@ export function EmailDetail({
       if (target && isEditableElement(target)) return;
 
       if (e.key === "Escape") {
+        if (compose) return;
         e.preventDefault();
         if (onBack) {
           onBack();
@@ -440,6 +453,7 @@ export function EmailDetail({
     latest,
     messages,
     selectedIdx,
+    compose,
   ]);
 
   return (
@@ -543,7 +557,7 @@ export function EmailDetail({
         <Button
           variant="outline"
           size="sm"
-          onClick={handleDelete}
+          onClick={() => setDeleteConfirmOpen(true)}
           className="text-muted-foreground hover:text-red-500"
         >
           <Trash2 className="h-3.5 w-3.5 mr-1.5" />
@@ -602,6 +616,30 @@ export function EmailDetail({
           onClose={() => setCompose(null)}
         />
       )}
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from Woodshed?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the message from your vault (recoverable in trash).
+              Gmail is not updated — the message may still exist in your inbox
+              online.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                handleDelete();
+              }}
+            >
+              Remove locally
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
