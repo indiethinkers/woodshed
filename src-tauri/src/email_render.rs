@@ -74,6 +74,29 @@ const STYLES: &str = r#"
      costs a few extra ms on first paint and keeps scroll position
      and content rock-stable across every open — the way Gmail
      handles it. */
+
+  /* Gmail-style quoted-history toggle ("Show trimmed content"),
+     injected by QUOTE_TRIM for HTML bodies. Matches the app's
+     plaintext trim toggle: small, muted, chevron, hover fill. */
+  .ws-trim-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 12px 0 4px;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    font-family: inherit;
+    font-size: 12px;
+    color: #6b7280;
+    cursor: pointer;
+  }
+  .ws-trim-toggle:hover {
+    color: #111827;
+    background: rgba(17, 24, 39, 0.06);
+  }
+  .ws-trim-chevron { font-size: 10px; line-height: 1; }
 "#;
 
 // Inline bridge that runs inside the iframe (sandbox="allow-scripts").
@@ -141,6 +164,108 @@ const BRIDGE: &str = r#"
   } else {
     start();
   }
+})();
+"#;
+
+// Gmail-style "Show trimmed content" for HTML bodies. Replies almost
+// always carry the full conversation quoted below the new text; the
+// plaintext path trims it in the React tree (splitQuotedBody), but HTML
+// bodies render inside this iframe, so the collapse lives here. The
+// script finds where the quoted section starts (Gmail's gmail_quote
+// wrapper, Apple Mail's blockquote, or a "wrote:" attribution line),
+// hides it, and inserts a toggle that reveals it. Every message with a
+// quoted tail trims by default — even when the quote dwarfs the reply
+// (a one-line "I agree!" over a wall of history still reads as just
+// "I agree!"). Only two exceptions stay fully visible: a quoted tail
+// too short to be real history (signature footer, "Sent from my
+// iPhone"), and a message whose body IS the quoted history with no
+// text of its own above it (a forward — nothing would remain to read).
+//
+// IMPORTANT: this string is embedded inside `<script>...</script>`. It
+// must not contain the literal sequence `</script>` anywhere.
+const QUOTE_TRIM: &str = r#"
+(function(){
+  function visibleText(node) {
+    return node && node.textContent ? node.textContent.replace(/\s+/g, ' ').trim() : '';
+  }
+  function findQuoteStart() {
+    // Gmail wraps the quoted history in a div.gmail_quote (the
+    // "On ... wrote:" attribution lives just inside it).
+    var gq = document.querySelector('.gmail_quote');
+    if (gq) return gq;
+    // Apple Mail wraps it in a blockquote with type="cite".
+    var bq = document.querySelector('blockquote[type="cite"], blockquote[cite]');
+    if (bq) return bq;
+    // Fallback: the first block-level element whose text opens with a
+    // "wrote:" attribution line or a classic quote separator.
+    var kids = document.body ? document.body.children : [];
+    for (var i = 0; i < kids.length; i++) {
+      var t = visibleText(kids[i]);
+      if (/^(On\s+.+wrote:|-----Original Message-----|---------- Forwarded message ----------|>)/i.test(t)) {
+        return kids[i];
+      }
+    }
+    return null;
+  }
+  function hasTextBefore(node) {
+    // Walk the node's previous siblings — and, at each ancestor level,
+    // that ancestor's previous siblings — looking for any visible text.
+    // A reply has its own text above the quote; a forward does not.
+    var cur = node;
+    while (cur && cur.parentNode) {
+      var sib = cur.previousSibling;
+      while (sib) {
+        if (sib.nodeType === 1) {
+          if (visibleText(sib).length > 0) return true;
+        } else if (sib.nodeType === 3) {
+          if ((sib.textContent || '').trim().length > 0) return true;
+        }
+        sib = sib.previousSibling;
+      }
+      cur = cur.parentNode;
+    }
+    return false;
+  }
+  function reportHeight() {
+    var docEl = document.documentElement;
+    var body = document.body;
+    var h = Math.max(docEl ? docEl.scrollHeight : 0, body ? body.scrollHeight : 0);
+    try { parent.postMessage({ type: 'wsmail-height', height: h }, '*'); } catch (e) {}
+  }
+  var quote = findQuoteStart();
+  if (!quote) return;
+  var quotedText = visibleText(quote);
+  // Too short to be real history — a signature tail or a one-line
+  // "Sent from my iPhone" reads better in place than behind a toggle.
+  if (quotedText.length < 120) return;
+  // A forward (body IS the quoted history, no text above it) must not
+  // collapse to nothing — there'd be no message left to read.
+  if (!hasTextBefore(quote)) return;
+
+  var open = false;
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ws-trim-toggle';
+  btn.setAttribute('aria-expanded', 'false');
+  btn.innerHTML = '<span class="ws-trim-chevron">\u25BE</span> Show trimmed content';
+  btn.addEventListener('click', function() {
+    open = !open;
+    quote.style.display = open ? '' : 'none';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.innerHTML = open
+      ? '<span class="ws-trim-chevron">\u25B4</span> Hide trimmed content'
+      : '<span class="ws-trim-chevron">\u25BE</span> Show trimmed content';
+    // Tell the parent this was a user interaction: the click happens
+    // inside the sandboxed iframe, so it never reaches EmailDetail's
+    // pointerdown listener. Without this, expanding trimmed content on
+    // the newest message grows the thread and the ResizeObserver yanks
+    // the view back down to the reply strip.
+    try { parent.postMessage({ type: 'wsmail-interaction' }, '*'); } catch (e) {}
+    reportHeight();
+  });
+  quote.parentNode.insertBefore(btn, quote);
+  quote.style.display = 'none';
+  reportHeight();
 })();
 "#;
 
@@ -571,6 +696,7 @@ pub fn render_email(
     out.push_str(&sanitized);
     out.push_str("\n<script>");
     out.push_str(BRIDGE);
+    out.push_str(QUOTE_TRIM);
     out.push_str("</script>\n</body>\n</html>");
     Ok(out)
 }
@@ -600,6 +726,45 @@ mod tests {
         // the bridge must forward wheel deltas to the parent page.
         assert!(out.contains("wsmail-wheel"));
         assert!(out.contains("deltaY"));
+    }
+
+    #[test]
+    fn html_bodies_carry_the_quoted_history_collapse_script() {
+        let out = render_email("<p>hi</p>", empty_dims(), false).unwrap();
+        // HTML bodies skip the React-side splitQuotedBody trim, so the
+        // iframe gets the Gmail-style "Show trimmed content" collapse.
+        assert!(out.contains("ws-trim-toggle"));
+        assert!(out.contains("Show trimmed content"));
+        assert!(out.contains("gmail_quote"));
+        assert!(out.contains("blockquote"));
+        // Every message with a quoted tail trims by default; only a
+        // forward (no text above the quote) and tiny signature tails
+        // stay fully visible. The hasTextBefore guard is what keeps a
+        // short reply over a huge quoted wall trimmed.
+        assert!(out.contains("hasTextBefore"));
+    }
+
+    #[test]
+    fn quote_trim_script_never_contains_a_closing_script_tag() {
+        let out = render_email("<p>hi</p>", empty_dims(), false).unwrap();
+        // The BRIDGE + QUOTE_TRIM are embedded inside one <script>
+        // element; the literal "</script>" would terminate it early and
+        // leave the rest of the string as raw HTML.
+        let script_start = out.find("<script>").unwrap();
+        let script_end = out.find("</script>").unwrap();
+        let script_body = &out[script_start + "<script>".len()..script_end];
+        assert!(!script_body.contains("</script>"));
+    }
+
+    #[test]
+    fn gmail_quote_wrappers_survive_sanitization() {
+        let raw = r#"<div dir="ltr">real content</div><div class="gmail_quote"><div>On Tue, Jan 5, 2027 at 9:00 AM X <x@example.com> wrote:</div><blockquote type="cite">quoted history</blockquote></div>"#;
+        let out = render_email(raw, empty_dims(), false).unwrap();
+        // The collapse script needs the structural markers intact to find
+        // where the quoted history starts.
+        assert!(out.contains("gmail_quote"));
+        assert!(out.contains("<blockquote type=\"cite\">"), "in {out}");
+        assert!(out.contains("real content"));
     }
 
     #[test]
