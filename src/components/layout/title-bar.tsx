@@ -24,6 +24,7 @@ import { isEditableElement } from "@/lib/dom/is-editable";
 import { useTabs, tabPath, type OpenTab } from "./tabs-context-internal";
 import { TitleBarActions } from "./title-bar-actions";
 import { useResolvedRouteTitle } from "@/lib/route-title";
+import { supportsViewTransition } from "@/lib/view-transition";
 import { useVaultPath } from "@/lib/hooks/use-vault-path";
 import { isTauriRuntime } from "@/lib/runtime";
 import { cn } from "@/lib/utils";
@@ -248,7 +249,7 @@ function VaultPathControl({ compact = false }: { compact?: boolean }) {
     <button
       data-tauri-drag-region="false"
       type="button"
-      onClick={() => void navigate({ to: "/settings/vault", viewTransition: true })}
+      onClick={() => void navigate({ to: "/settings/vault", viewTransition: supportsViewTransition() })}
       title={vaultPath ?? "Choose vault"}
       aria-label={`Vault path: ${label}`}
       className={cn(
