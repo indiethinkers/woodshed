@@ -82,4 +82,32 @@ describe("HtmlBody", () => {
 
     expect(scrollContainerRef.current?.scrollTop).toBe(120);
   });
+
+  it("forwards in-iframe interactions as a pointerdown on the iframe element", async () => {
+    const { container } = render(<HtmlBody messageId="message-1" />, {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("iframe")).not.toBeNull();
+    });
+
+    const iframe = container.querySelector("iframe")!;
+    // EmailDetail disengages the thread auto-follow on any pointerdown
+    // inside the conversation. Clicks in the sandboxed email iframe
+    // never reach that listener, so the bridge posts an interaction
+    // message and the parent re-dispatches it on the iframe element.
+    const onPointerDown = vi.fn();
+    iframe.addEventListener("pointerdown", onPointerDown);
+
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { type: "wsmail-interaction" },
+        source: iframe.contentWindow,
+      }),
+    );
+
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
 });
