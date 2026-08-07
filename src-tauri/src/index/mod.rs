@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS document_tags (
 CREATE INDEX IF NOT EXISTS idx_document_tags_tag
     ON document_tags(tag COLLATE NOCASE);
 
+CREATE TABLE IF NOT EXISTS document_edges (
+    source_path TEXT NOT NULL,
+    edge_type   TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    ordinal     INTEGER NOT NULL,
+    PRIMARY KEY (source_path, edge_type, target)
+);
+CREATE INDEX IF NOT EXISTS idx_document_edges_target
+    ON document_edges(target COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_document_edges_type
+    ON document_edges(edge_type);
+
 CREATE TABLE IF NOT EXISTS mail_summaries (
     path         TEXT PRIMARY KEY,
     thread_id    TEXT NOT NULL,
@@ -117,6 +129,20 @@ pub struct IndexedDoc {
     /// are extracted from `body` during upsert for taggable record kinds.
     pub tags: Vec<String>,
     pub updated_at: i64,
+    /// Typed relations declared in record frontmatter (resource `people`,
+    /// event `attendees`, record `area`). Targets are raw values — ids,
+    /// names, or emails — resolved to records at query time so the index
+    /// stays a disposable derivative of the vault.
+    pub edges: Vec<RecordEdge>,
+}
+
+/// One typed relation extracted from frontmatter. `edge_type` is one of
+/// `people` (resource → person), `attended` (event → person), or `area`
+/// (record → area). `target` is the raw frontmatter value, unresolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordEdge {
+    pub edge_type: &'static str,
+    pub target: String,
 }
 
 /// One entry in the wikilink resolution map. The frontend keys these by
@@ -168,6 +194,46 @@ pub struct OutgoingLinkEntry {
     pub type_: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// A record resolved from a typed-edge target. `kind`/`doc_id`/`title`/
+/// `href` mirror the `documents` row the target matched.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedEdgeTarget {
+    pub kind: String,
+    pub doc_id: String,
+    pub title: String,
+    pub href: String,
+}
+
+/// One outgoing typed edge of a record: the raw frontmatter target plus
+/// the record it resolves to (when one exists). Unresolved targets stay
+/// stored as valid placeholders.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordEdgeRow {
+    pub edge_type: String,
+    pub target: String,
+    pub ordinal: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<ResolvedEdgeTarget>,
+}
+
+/// One incoming typed edge pointing at a record: the source record's own
+/// row plus the edge that references it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncomingEdgeRow {
+    pub source_path: String,
+    pub edge_type: String,
+    pub ordinal: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_href: Option<String>,
 }
 
 /// Node in the vault wikilink graph. `id` is the record path, or a synthetic
@@ -256,6 +322,11 @@ impl IndexHandle {
             params![path],
         )
         .context("delete document tags by path")?;
+        tx.execute(
+            "DELETE FROM document_edges WHERE source_path = ?1",
+            params![path],
+        )
+        .context("delete document edges by path")?;
         tx.execute("DELETE FROM mail_summaries WHERE path = ?1", params![path])
             .context("delete mail summary by path")?;
         tx.execute("DELETE FROM documents WHERE path = ?1", params![path])
@@ -273,6 +344,10 @@ impl IndexHandle {
         )?;
         tx.execute(
             "DELETE FROM document_tags WHERE substr(source_path, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        tx.execute(
+            "DELETE FROM document_edges WHERE substr(source_path, 1, length(?1)) = ?1",
             params![prefix],
         )?;
         tx.execute(
@@ -441,10 +516,18 @@ impl IndexHandle {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
+        let typed_edges_value = conn
+            .query_row(
+                "SELECT value FROM index_metadata WHERE key = 'typed_edges_v1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
         Ok(value.as_deref() != Some("1")
             || mail_value.as_deref() != Some("1")
             || created_value.as_deref() != Some("1")
-            || custom_tables_value.as_deref() != Some("1"))
+            || custom_tables_value.as_deref() != Some("1")
+            || typed_edges_value.as_deref() != Some("1"))
     }
 
     /// Return only the vault-relative paths carrying `tag`. Tag-table
@@ -568,6 +651,97 @@ impl IndexHandle {
                 type_: kind,
                 preview: wikilink_preview(&body, &labels),
             });
+        }
+        Ok(out)
+    }
+
+    /// The kind, canonical id, and title of the indexed record at `path`.
+    /// Used to build incoming-edge match keys (plus the person email, which
+    /// lives in the vault file, not the index).
+    pub fn record_identity(&self, path: &str) -> Result<Option<(String, String, String)>> {
+        let conn = self.conn.lock_recover();
+        let row = conn
+            .query_row(
+                "SELECT kind, doc_id, title FROM documents WHERE path = ?1",
+                params![path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Outgoing typed edges for a record path, in frontmatter order. Each
+    /// raw target is resolved to a record when one matches by id or title
+    /// (kind derived from the edge type); unresolved targets remain valid
+    /// placeholders.
+    pub fn edges_for_path(&self, path: &str) -> Result<Vec<RecordEdgeRow>> {
+        let conn = self.conn.lock_recover();
+        let mut stmt = conn.prepare(
+            "SELECT edge_type, target, ordinal FROM document_edges \
+                          WHERE source_path = ?1 ORDER BY ordinal",
+        )?;
+        let rows = stmt.query_map(params![path], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (edge_type, target, ordinal) = row?;
+            let resolved = resolve_edge_target(&conn, &edge_type, &target)?;
+            out.push(RecordEdgeRow {
+                edge_type,
+                target,
+                ordinal,
+                resolved,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Incoming typed edges whose raw target matches any of `match_keys`
+    /// (a record's id, title, and — for people — email), case-insensitive.
+    /// Each row carries the source record's kind/title/href so the UI can
+    /// render "everything this record is linked from" without re-reading
+    /// vault files. Note: folding here is SQLite's ASCII-only `COLLATE
+    /// NOCASE`, while `edges_from` dedupes with Rust's Unicode
+    /// `to_lowercase`; non-ASCII targets may therefore dedupe in memory
+    /// yet not match here — consistent with the app's wikilink handling.
+    pub fn incoming_edges(&self, match_keys: &[String]) -> Result<Vec<IncomingEdgeRow>> {
+        let conn = self.conn.lock_recover();
+        let keys = match_keys
+            .iter()
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; keys.len()].join(", ");
+        let sql = format!(
+            "SELECT e.source_path, e.edge_type, e.ordinal, \
+                    d.kind, d.title, d.href \
+             FROM document_edges e \
+             LEFT JOIN documents d ON d.path = e.source_path \
+             WHERE (e.target COLLATE NOCASE) IN ({placeholders}) \
+             ORDER BY e.edge_type, e.ordinal"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+            Ok(IncomingEdgeRow {
+                source_path: row.get(0)?,
+                edge_type: row.get(1)?,
+                ordinal: row.get(2)?,
+                source_kind: row.get(3)?,
+                source_title: row.get(4)?,
+                source_href: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
         }
         Ok(out)
     }
@@ -838,6 +1012,11 @@ impl IndexHandle {
         )?;
         tx.execute(
             "INSERT INTO index_metadata (key, value) VALUES ('custom_tables_v1', '1') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO index_metadata (key, value) VALUES ('typed_edges_v1', '1') \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [],
         )?;
@@ -1130,6 +1309,41 @@ fn scan_tables(vault_root: &Path, tx: &rusqlite::Transaction, count: &mut usize)
     Ok(())
 }
 
+/// Resolve a raw typed-edge target to a record row by kind-appropriate
+/// id/title match (case-insensitive). `people`/`attended` targets resolve
+/// to person records; `area` targets to area records. An exact doc_id match
+/// wins over a title match. `None` keeps the target as an unresolved
+/// placeholder.
+fn resolve_edge_target(
+    conn: &Connection,
+    edge_type: &str,
+    target: &str,
+) -> Result<Option<ResolvedEdgeTarget>> {
+    let target_kind = match edge_type {
+        "people" | "attended" => "person",
+        "area" => "area",
+        _ => return Ok(None),
+    };
+    let resolved = conn
+        .query_row(
+            "SELECT kind, doc_id, title, href FROM documents \
+             WHERE kind = ?1 AND (lower(doc_id) = lower(?2) OR lower(title) = lower(?2)) \
+             ORDER BY (lower(doc_id) = lower(?2)) DESC \
+             LIMIT 1",
+            params![target_kind, target],
+            |row| {
+                Ok(ResolvedEdgeTarget {
+                    kind: row.get(0)?,
+                    doc_id: row.get(1)?,
+                    title: row.get(2)?,
+                    href: row.get(3)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(resolved)
+}
+
 fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
     conn.execute(
         "INSERT INTO documents (kind, doc_id, path, title, body, hint, href, area, created_at, updated_at) \
@@ -1188,6 +1402,20 @@ fn upsert_with(conn: &Connection, doc: &IndexedDoc) -> Result<()> {
                 params![doc.path, tag],
             )?;
         }
+    }
+    conn.execute(
+        "DELETE FROM document_edges WHERE source_path = ?1",
+        params![doc.path],
+    )?;
+    // PK is (source_path, edge_type, target) — case-sensitive, while
+    // `edges_from`/`area_edge` already dedupe case-insensitively, so no
+    // INSERT OR IGNORE collision is expected from current callers.
+    for (ordinal, edge) in doc.edges.iter().enumerate() {
+        conn.execute(
+            "INSERT OR IGNORE INTO document_edges (source_path, edge_type, target, ordinal) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![doc.path, edge.edge_type, edge.target, ordinal as i64],
+        )?;
     }
     Ok(())
 }
@@ -1620,6 +1848,34 @@ fn local_time_ms(date: chrono::NaiveDateTime) -> Option<i64> {
     }
 }
 
+/// Build a deduplicated typed-edge list from raw frontmatter targets,
+/// preserving first-seen order. Blank targets are dropped; a repeated
+/// target (case-insensitive) contributes only its first occurrence.
+fn edges_from(
+    edge_type: &'static str,
+    targets: impl IntoIterator<Item = String>,
+) -> Vec<RecordEdge> {
+    let mut seen = std::collections::HashSet::new();
+    targets
+        .into_iter()
+        .map(|target| target.trim().to_string())
+        .filter(|target| !target.is_empty() && seen.insert(target.to_lowercase()))
+        .map(|target| RecordEdge { edge_type, target })
+        .collect()
+}
+
+/// A single `area` edge for a record whose frontmatter names an area.
+/// Empty/missing area values produce no edge.
+fn area_edge(area: Option<&str>) -> Vec<RecordEdge> {
+    match area.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(target) => vec![RecordEdge {
+            edge_type: "area",
+            target: target.to_string(),
+        }],
+        None => Vec::new(),
+    }
+}
+
 fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
     let hint_parts: Vec<String> = [match t.status {
         parsers::TaskStatus::Backlog => "backlog",
@@ -1646,6 +1902,7 @@ fn project_task(t: &parsers::Task, path: &str, updated_at: i64) -> IndexedDoc {
         created_at: created_at_ms(t.created.as_deref()),
         tags: t.tags.clone(),
         updated_at,
+        edges: area_edge(Some(&t.area)),
     }
 }
 
@@ -1657,6 +1914,8 @@ fn project_event(e: &parsers::Event, path: &str, updated_at: i64) -> IndexedDoc 
         tags.push("event".to_string());
         tags
     };
+    let mut edges = edges_from("attended", e.attendees.clone());
+    edges.extend(area_edge(Some(&e.area)));
     IndexedDoc {
         kind: "event",
         doc_id: e.id.clone(),
@@ -1669,6 +1928,7 @@ fn project_event(e: &parsers::Event, path: &str, updated_at: i64) -> IndexedDoc 
         created_at: 0,
         tags,
         updated_at,
+        edges,
     }
 }
 
@@ -1685,6 +1945,7 @@ fn project_daily(d: &parsers::DailyJournal, path: &str, updated_at: i64) -> Inde
         created_at: 0,
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -1706,6 +1967,7 @@ fn project_note(n: &parsers::Note, path: &str, updated_at: i64) -> IndexedDoc {
         created_at: created_at_ms(Some(&n.created)),
         tags: n.tags.clone(),
         updated_at,
+        edges: area_edge(n.area.as_deref()),
     }
 }
 
@@ -1736,6 +1998,7 @@ fn project_person(p: &parsers::Person, path: &str, updated_at: i64) -> IndexedDo
         created_at: created_at_ms(p.created.as_deref()),
         tags: Vec::new(),
         updated_at,
+        edges: area_edge(p.area.as_deref()),
     }
 }
 
@@ -1752,6 +2015,7 @@ fn project_resource(b: &parsers::Resource, path: &str, updated_at: i64) -> Index
         created_at: created_at_ms(Some(&b.saved)),
         tags: b.tags.clone(),
         updated_at,
+        edges: edges_from("people", b.people.clone()),
     }
 }
 
@@ -1769,6 +2033,7 @@ fn project_area(area: &parsers::Area, path: &str, updated_at: i64) -> IndexedDoc
         created_at: created_at_ms(area.created.as_deref()),
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -1791,6 +2056,7 @@ fn project_agent_chat(chat: &agent::AgentChatRecord, path: &str, updated_at: i64
         created_at: created_at_ms(Some(&chat.created)),
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -1826,6 +2092,7 @@ fn project_email(email: &mail::EmailSummary, path: &str, updated_at: i64) -> Ind
         created_at: created_at_ms(Some(&email.date)),
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -1845,6 +2112,7 @@ fn project_table(table: &parsers::Table, path: &str, updated_at: i64) -> Indexed
         created_at: created_at_ms(Some(&table.created)),
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -1883,6 +2151,7 @@ fn project_row(
         created_at: created_at_ms(Some(&row.created)),
         tags: Vec::new(),
         updated_at,
+        edges: Vec::new(),
     }
 }
 
@@ -2199,6 +2468,7 @@ mod tests {
             created_at: 0,
             tags: Vec::new(),
             updated_at: 0,
+            edges: Vec::new(),
         }
     }
 
@@ -2993,5 +3263,393 @@ mod tests {
             .unwrap();
         // File doesn't exist → entry should be gone.
         assert_eq!(idx.document_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn resource_people_become_resolved_people_edges() {
+        use crate::parsers;
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::RESOURCES_DIR)).unwrap();
+        std::fs::create_dir_all(vault.join("people")).unwrap();
+
+        let person = parsers::Person {
+            id: "alex-rivera".to_string(),
+            name: "Alex Rivera".to_string(),
+            initials: "AR".to_string(),
+            role: "Engineer".to_string(),
+            company: "Acme".to_string(),
+            email: "alex@example.com".to_string(),
+            relationship: String::new(),
+            area: None,
+            avatar: None,
+            created: Some("2026-05-01T09:00:00".to_string()),
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join("people").join("alex-rivera.md"),
+            parsers::serialize_person(&person).unwrap(),
+        )
+        .unwrap();
+
+        let resource = parsers::Resource {
+            id: "deep-work".to_string(),
+            title: "Deep Work in the age of AI".to_string(),
+            url: "https://example.com/deep-work".to_string(),
+            source: "example.com".to_string(),
+            area: None,
+            saved: "2026-06-01T10:00:00".to_string(),
+            people: vec!["alex-rivera".to_string(), "ghost-id".to_string()],
+            published: None,
+            captured_at: None,
+            content_hash: None,
+            agent_status: std::collections::BTreeMap::new(),
+            tags: vec![],
+            highlights: vec![],
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::RESOURCES_DIR).join("deep-work.md"),
+            parsers::serialize_resource(&resource).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        let edges = idx.edges_for_path("resources/deep-work.md").unwrap();
+        assert_eq!(edges.len(), 2, "people edges: {edges:?}");
+        assert_eq!(edges[0].edge_type, "people");
+        assert_eq!(edges[0].target, "alex-rivera");
+        let resolved = edges[0].resolved.as_ref().expect("person resolves by id");
+        assert_eq!(resolved.kind, "person");
+        assert_eq!(resolved.doc_id, "alex-rivera");
+        assert_eq!(resolved.title, "Alex Rivera");
+        // Unresolved targets stay stored as placeholders.
+        assert_eq!(edges[1].target, "ghost-id");
+        assert!(edges[1].resolved.is_none());
+    }
+
+    #[test]
+    fn event_attendees_become_attended_edges_with_area() {
+        use crate::parsers::{self, Event, RecurringRule};
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::EVENTS_DIR)).unwrap();
+
+        let event = Event {
+            id: "e_review".to_string(),
+            title: "Review".to_string(),
+            subtitle: None,
+            date: "2026-07-27T11:00:00-07:00".to_string(),
+            duration: 60,
+            area: "product".to_string(),
+            attendees: vec![
+                "sam-chen".to_string(),
+                "riya.patel@example.com".to_string(),
+                "sam-chen".to_string(),
+            ],
+            recurring: RecurringRule::None,
+            provider: None,
+            account_id: None,
+            external_id: None,
+            writable: None,
+            rrule_original: None,
+            local_metadata_overrides: Vec::new(),
+            tags: vec![],
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::EVENTS_DIR).join("e_review.md"),
+            parsers::serialize_event(&event).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        let edges = idx.edges_for_path("events/e_review.md").unwrap();
+        // Duplicate attendee collapses to one edge; area adds a third.
+        assert_eq!(edges.len(), 3, "edges: {edges:?}");
+        assert_eq!(edges[0].edge_type, "attended");
+        assert_eq!(edges[0].target, "sam-chen");
+        assert_eq!(edges[1].edge_type, "attended");
+        assert_eq!(edges[1].target, "riya.patel@example.com");
+        assert_eq!(edges[2].edge_type, "area");
+        assert_eq!(edges[2].target, "product");
+        // The email attendee does not resolve without a person row.
+        assert!(edges[1].resolved.is_none());
+    }
+
+    #[test]
+    fn area_edge_written_for_task_and_note_but_not_unassigned() {
+        use crate::parsers;
+        let (tmp, _first_idx) = tmp_index();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join("tasks")).unwrap();
+        std::fs::create_dir_all(vault.join("notebook")).unwrap();
+
+        let task = parsers::Task {
+            id: "t_001".to_string(),
+            content: "assigned task".to_string(),
+            status: parsers::TaskStatus::Backlog,
+            area: "woodshed".to_string(),
+            created: None,
+            scheduled: None,
+            tags: vec![],
+            time_spent_seconds: None,
+            in_progress_started_at: None,
+            sort_key: None,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join("tasks").join("t_001.md"),
+            parsers::serialize_task(&task).unwrap(),
+        )
+        .unwrap();
+
+        let note = parsers::Note {
+            id: "beta-note".to_string(),
+            title: "beta brainstorm".to_string(),
+            area: None,
+            created: "2026-04-25T10:00:00".to_string(),
+            tags: vec![],
+            favorite: false,
+            body: "ideas".to_string(),
+        };
+        std::fs::write(
+            vault.join("notebook").join("beta-note.md"),
+            parsers::serialize_note(&note).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        let task_edges = idx.edges_for_path("tasks/t_001.md").unwrap();
+        assert_eq!(task_edges.len(), 1, "task edges: {task_edges:?}");
+        assert_eq!(task_edges[0].edge_type, "area");
+        assert_eq!(task_edges[0].target, "woodshed");
+
+        // Unassigned note produces no area edge at all.
+        assert!(idx
+            .edges_for_path("notebook/beta-note.md")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn upsert_replaces_edges_for_path() {
+        let (_tmp, idx) = tmp_index();
+        let mut first = doc("resource", "r1", "First", "");
+        first.path = "resources/r1.md".to_string();
+        first.edges = vec![RecordEdge {
+            edge_type: "people",
+            target: "alex-rivera".to_string(),
+        }];
+        idx.upsert(&first).unwrap();
+        assert_eq!(idx.edges_for_path("resources/r1.md").unwrap().len(), 1);
+
+        // Same path, different people → old edges must be replaced, not stacked.
+        let mut second = doc("resource", "r1", "First", "");
+        second.path = "resources/r1.md".to_string();
+        second.edges = vec![RecordEdge {
+            edge_type: "people",
+            target: "sam-chen".to_string(),
+        }];
+        idx.upsert(&second).unwrap();
+
+        let edges = idx.edges_for_path("resources/r1.md").unwrap();
+        assert_eq!(edges.len(), 1, "edges after replace: {edges:?}");
+        assert_eq!(edges[0].target, "sam-chen");
+    }
+
+    #[test]
+    fn delete_by_path_clears_edges() {
+        let (_tmp, idx) = tmp_index();
+        let mut first = doc("resource", "r1", "First", "");
+        first.path = "resources/r1.md".to_string();
+        first.edges = vec![RecordEdge {
+            edge_type: "people",
+            target: "alex-rivera".to_string(),
+        }];
+        idx.upsert(&first).unwrap();
+        idx.delete_by_path("resources/r1.md").unwrap();
+        assert!(idx.edges_for_path("resources/r1.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn typed_edges_key_gates_index_rebuild() {
+        let (tmp, idx) = tmp_index();
+        assert!(
+            idx.requires_index_rebuild().unwrap(),
+            "fresh index must require the typed-edges rebuild"
+        );
+        idx.rebuild_from_vault(tmp.path()).unwrap();
+        assert!(!idx.requires_index_rebuild().unwrap());
+    }
+
+    #[test]
+    fn incoming_edges_match_person_by_id_title_and_email() {
+        use crate::parsers;
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::RESOURCES_DIR)).unwrap();
+        std::fs::create_dir_all(vault.join(crate::vault::EVENTS_DIR)).unwrap();
+        std::fs::create_dir_all(vault.join("people")).unwrap();
+
+        let person = parsers::Person {
+            id: "alex-rivera".to_string(),
+            name: "Alex Rivera".to_string(),
+            initials: "AR".to_string(),
+            role: "Engineer".to_string(),
+            company: "Acme".to_string(),
+            email: "alex@example.com".to_string(),
+            relationship: String::new(),
+            area: None,
+            avatar: None,
+            created: Some("2026-05-01T09:00:00".to_string()),
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join("people").join("alex-rivera.md"),
+            parsers::serialize_person(&person).unwrap(),
+        )
+        .unwrap();
+
+        // Resource references Alex by id.
+        let resource = parsers::Resource {
+            id: "deep-work".to_string(),
+            title: "Deep Work in the age of AI".to_string(),
+            url: "https://example.com/deep-work".to_string(),
+            source: "example.com".to_string(),
+            area: None,
+            saved: "2026-06-01T10:00:00".to_string(),
+            people: vec!["alex-rivera".to_string()],
+            published: None,
+            captured_at: None,
+            content_hash: None,
+            agent_status: std::collections::BTreeMap::new(),
+            tags: vec![],
+            highlights: vec![],
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::RESOURCES_DIR).join("deep-work.md"),
+            parsers::serialize_resource(&resource).unwrap(),
+        )
+        .unwrap();
+
+        // Event references Alex by email only.
+        let event = parsers::Event {
+            id: "e_review".to_string(),
+            title: "Review".to_string(),
+            subtitle: None,
+            date: "2026-07-27T11:00:00-07:00".to_string(),
+            duration: 60,
+            area: String::new(),
+            attendees: vec!["ALEX@EXAMPLE.COM".to_string()],
+            recurring: parsers::RecurringRule::None,
+            provider: None,
+            account_id: None,
+            external_id: None,
+            writable: None,
+            rrule_original: None,
+            local_metadata_overrides: Vec::new(),
+            tags: vec![],
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::EVENTS_DIR).join("e_review.md"),
+            parsers::serialize_event(&event).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        // Query with Alex's id, name, and email: both sources must surface.
+        let incoming = idx
+            .incoming_edges(&[
+                "alex-rivera".to_string(),
+                "Alex Rivera".to_string(),
+                "alex@example.com".to_string(),
+            ])
+            .unwrap();
+        let sources: Vec<&str> = incoming
+            .iter()
+            .map(|row| row.source_path.as_str())
+            .collect();
+        assert!(
+            sources.contains(&"resources/deep-work.md"),
+            "resource by id missing: {sources:?}"
+        );
+        assert!(
+            sources.contains(&"events/e_review.md"),
+            "event by email missing: {sources:?}"
+        );
+        let event_row = incoming
+            .iter()
+            .find(|row| row.source_path == "events/e_review.md")
+            .unwrap();
+        assert_eq!(event_row.edge_type, "attended");
+        assert_eq!(event_row.source_kind.as_deref(), Some("event"));
+    }
+
+    #[test]
+    fn incoming_edges_empty_or_blank_keys_return_empty() {
+        let (_tmp, idx) = tmp_index();
+        assert!(idx.incoming_edges(&[]).unwrap().is_empty());
+        assert!(idx
+            .incoming_edges(&[String::new(), "   ".to_string()])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn incoming_edges_duplicate_keys_produce_no_duplicate_rows() {
+        let (tmp, _first) = tmp_index();
+        let vault = tmp.path();
+        std::fs::create_dir_all(vault.join(crate::vault::RESOURCES_DIR)).unwrap();
+
+        let resource = crate::parsers::Resource {
+            id: "deep-work".to_string(),
+            title: "Deep Work in the age of AI".to_string(),
+            url: "https://example.com/deep-work".to_string(),
+            source: "example.com".to_string(),
+            area: None,
+            saved: "2026-06-01T10:00:00".to_string(),
+            people: vec!["alex-rivera".to_string()],
+            published: None,
+            captured_at: None,
+            content_hash: None,
+            agent_status: std::collections::BTreeMap::new(),
+            tags: vec![],
+            highlights: vec![],
+            favorite: false,
+            body: String::new(),
+        };
+        std::fs::write(
+            vault.join(crate::vault::RESOURCES_DIR).join("deep-work.md"),
+            crate::parsers::serialize_resource(&resource).unwrap(),
+        )
+        .unwrap();
+
+        let idx = IndexHandle::open(&tmp.path().join("idx.db")).unwrap();
+        idx.rebuild_from_vault(vault).unwrap();
+
+        // Same id repeated with different casing must still yield one row.
+        let incoming = idx
+            .incoming_edges(&[
+                "alex-rivera".to_string(),
+                "ALEX-RIVERA".to_string(),
+                "alex-rivera".to_string(),
+            ])
+            .unwrap();
+        assert_eq!(incoming.len(), 1, "duplicate keys: {incoming:?}");
     }
 }

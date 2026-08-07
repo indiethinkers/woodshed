@@ -6,7 +6,10 @@
 // "Reset & re-scan" button — it wipes the index and rebuilds from the
 // vault on disk.
 
-use crate::index::{BacklinkEntry, GraphSnapshot, OutgoingLinkEntry, SearchHit, WikilinkTargetRow};
+use crate::index::{
+    BacklinkEntry, GraphSnapshot, IncomingEdgeRow, OutgoingLinkEntry, RecordEdgeRow, SearchHit,
+    WikilinkTargetRow,
+};
 use crate::AppState;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
@@ -91,6 +94,70 @@ pub fn vault_reindex(app: AppHandle, state: State<AppState>) -> Result<usize, St
     handle
         .rebuild_from_vault(&vault)
         .map_err(|e| format!("rebuild: {}", e))
+}
+
+/// Outgoing typed edges for a record path: the relations declared in its
+/// frontmatter (resource `people`, event `attendees`, record `area`), with
+/// each raw target resolved to a record when one exists.
+#[tauri::command]
+pub fn record_edges_get(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+) -> Result<Vec<RecordEdgeRow>, String> {
+    let handle = state.ensure_index(&app)?;
+    handle
+        .edges_for_path(&path)
+        .map_err(|e| format!("record_edges_get: {e}"))
+}
+
+/// Incoming typed edges pointing at the record at `path`: every source
+/// whose frontmatter references this record by id, title, or — for people
+/// — email. Powers "everything this person touches" without scanning the
+/// vault.
+#[tauri::command]
+pub fn record_edges_incoming(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+) -> Result<Vec<IncomingEdgeRow>, String> {
+    let vault = vault_root(&app)?;
+    let handle = state.ensure_index(&app)?;
+    let Some((kind, doc_id, title)) = handle
+        .record_identity(&path)
+        .map_err(|e| format!("record_edges_incoming: {e}"))?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut keys = vec![doc_id, title];
+    if kind == "person" {
+        // The person's email lives in the vault file, not the index; a
+        // single bounded read keeps attendee-by-email edges resolvable.
+        // The IPC-supplied path is untrusted: canonicalize the resolved
+        // file and require containment inside the vault before reading
+        // (mirrors vault::confined_file_path's containment rule, and also
+        // rejects symlinked person files pointing outside the vault).
+        let abs = vault.join(&path);
+        let inside_vault = vault
+            .canonicalize()
+            .ok()
+            .zip(abs.canonicalize().ok())
+            .map(|(canon_vault, canon_path)| canon_path.starts_with(&canon_vault))
+            .unwrap_or(false);
+        if inside_vault {
+            if let Ok(content) = crate::vault::read_record(&abs) {
+                if let Ok(person) = crate::parsers::parse_person(&content) {
+                    let email = person.email.trim().to_string();
+                    if !email.is_empty() {
+                        keys.push(email);
+                    }
+                }
+            }
+        }
+    }
+    handle
+        .incoming_edges(&keys)
+        .map_err(|e| format!("record_edges_incoming: {e}"))
 }
 
 fn vault_root(app: &AppHandle) -> Result<PathBuf, String> {
