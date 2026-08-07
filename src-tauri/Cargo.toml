@@ -58,7 +58,7 @@ sha2 = "0.10"
 base64 = "0.22"
 
 # Email body render pipeline (wsmail:// /body/ cache) and image cache.
-lol_html = "1"
+lol_html = "3"
 imagesize = "0.13"
 
 # Gmail (IMAP + SMTP) — direct from desktop, no sync server. App Passwords
