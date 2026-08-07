@@ -358,6 +358,7 @@ function AgentSurfaceInner({
     Boolean(activeId && activeChat?.id === activeId),
   );
   const hydratingRef = useRef(false);
+  const retitledRunIdRef = useRef<string | null>(null);
   const messageTimesRef = useRef<Map<string, string>>(new Map());
   const messageRunIdsRef = useRef<Map<string, string>>(new Map());
   const activeIdRef = useRef(activeId);
@@ -680,6 +681,51 @@ function AgentSurfaceInner({
         setActiveChat(chat);
         messageRunIdsRef.current = messageRunIdsFromMessages(chat.messages);
         setChats((current) => upsertSummary(current, recordToSummary(chat)));
+        // Auto-retitle once a run completes: keep the session title in sync
+        // with the conversation's first substantive user message. Only
+        // updates when the current title is still the auto-derived one (or
+        // the generic placeholder) — a manual rename is never clobbered,
+        // and a cosmetic failure must never break the run flow.
+        if (
+          activeRun.status === "completed" &&
+          retitledRunIdRef.current !== activeRun.id
+        ) {
+          retitledRunIdRef.current = activeRun.id;
+          const candidate = conversationAutoTitle(chat.messages);
+          const currentTitle = chat.title?.trim() ?? "";
+          const firstUserTitle = titleFromText(
+            chat.messages.find((message) => message.role === "user")?.content ??
+              "",
+          );
+          const titleIsAuto =
+            currentTitle === "" ||
+            currentTitle === "New chat" ||
+            (firstUserTitle !== "New chat" && currentTitle === firstUserTitle);
+          if (candidate && titleIsAuto && currentTitle !== candidate) {
+            void tauriInvoke<AgentChatRecord>("agent_chat_update", {
+              input: {
+                id: chat.id,
+                title: candidate,
+                agent: chat.agent,
+                model: chat.model,
+                pinned: chat.pinned,
+                messages: chat.messages,
+              },
+            })
+              .then((next) => {
+                if (cancelled || !next || next.id !== activeIdRef.current) {
+                  return;
+                }
+                setActiveChat(next);
+                setChats((current) =>
+                  upsertSummary(current, recordToSummary(next)),
+                );
+              })
+              .catch(() => {
+                // Retitling is cosmetic; ignore failures.
+              });
+          }
+        }
         if (
           activeRun.status === "completed" &&
           status === "ready" &&
@@ -1954,7 +2000,7 @@ function AgentConversationView({
 }
 
 function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
-  const { scrollToBottom } = useStickToBottomContext();
+  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
   const scrolledUserMessageRef = useRef<string | null>(null);
   const newestUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -1967,6 +2013,12 @@ function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
     if (!newestUserMessageId) return;
     if (scrolledUserMessageRef.current === newestUserMessageId) return;
     scrolledUserMessageRef.current = newestUserMessageId;
+    // When already pinned to the bottom the sticky container tracks new
+    // content itself — an explicit scroll from the bottom would just
+    // lurch the view (and the animated variant is visible even when the
+    // target is the current position). Only jump when the user has
+    // scrolled up and a new message lands.
+    if (isAtBottom) return;
     const raf = window.requestAnimationFrame(() => {
       void scrollToBottom({
         animation: "instant",
@@ -1975,7 +2027,7 @@ function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
       });
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [newestUserMessageId, scrollToBottom]);
+  }, [newestUserMessageId, scrollToBottom, isAtBottom]);
 
   return null;
 }
@@ -3487,4 +3539,30 @@ function titleFromText(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (!collapsed) return "New chat";
   return collapsed.length > 58 ? `${collapsed.slice(0, 55)}...` : collapsed;
+}
+
+/// True when a user message is a meaningful title source — skips bare
+/// greetings and one-word openers so an auto title isn't frozen on "hi".
+function isSubstantiveTitleSource(text: string): boolean {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length < 8) return false;
+  return !/^(hi|hey|hello|yo|sup|hiya|good (morning|afternoon|evening))[.!?\s]*$/i.test(
+    collapsed,
+  );
+}
+
+/// The auto-title candidate for a conversation: the first substantive user
+/// message (skipping trivial openers), falling back to the first user
+/// message when everything is trivial, truncated like titleFromText. Null
+/// when there is no user content worth titling.
+export function conversationAutoTitle(
+  messages: AgentVaultMessage[],
+): string | null {
+  const userMessages = messages.filter((message) => message.role === "user");
+  const first =
+    userMessages.find((message) => isSubstantiveTitleSource(message.content)) ??
+    userMessages[0];
+  if (!first) return null;
+  const title = titleFromText(first.content);
+  return title === "New chat" ? null : title;
 }

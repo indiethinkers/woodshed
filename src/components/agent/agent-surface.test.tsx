@@ -88,6 +88,7 @@ import {
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
+  conversationAutoTitle,
   mergeHydratedConversationMessages,
   modelForAgentChatUpdate,
   sortChatsByCreatedAt,
@@ -1574,5 +1575,50 @@ describe("AgentThoughtTool", () => {
       approved: true,
       id: "approval_1",
     });
+  });
+});
+
+describe("conversationAutoTitle", () => {
+  const userMessage = (content: string) => ({
+    id: `m_${content.length}`,
+    role: "user" as const,
+    content,
+    createdAt: "2026-08-06T20:00:00.000Z",
+    agentRunId: null,
+  });
+
+  it("uses the first substantive user message, skipping trivial openers", () => {
+    expect(
+      conversationAutoTitle([
+        userMessage("good evening"),
+        userMessage("can we leverage gbrain for woodshed?"),
+      ]),
+    ).toBe("can we leverage gbrain for woodshed?");
+  });
+
+  it("falls back to the first user message when everything is trivial", () => {
+    expect(conversationAutoTitle([userMessage("hi")])).toBe("hi");
+  });
+
+  it("truncates long titles like the create-time fallback", () => {
+    const long = "a".repeat(120);
+    const title = conversationAutoTitle([userMessage(long)]);
+    expect(title).toBe(`${"a".repeat(55)}...`);
+    expect(title?.length).toBe(58);
+  });
+
+  it("returns null without user messages", () => {
+    expect(
+      conversationAutoTitle([
+        {
+          id: "a1",
+          role: "assistant",
+          content: "hi there",
+          createdAt: "2026-08-06T20:00:00.000Z",
+          agentRunId: null,
+        },
+      ]),
+    ).toBeNull();
+    expect(conversationAutoTitle([])).toBeNull();
   });
 });
