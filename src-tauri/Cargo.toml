@@ -34,7 +34,7 @@ libc = "0.2"
 gray_matter = "0.2"
 ulid = { version = "1", features = ["serde"] }
 notify = "6"
-notify-debouncer-mini = "0.4"
+notify-debouncer-mini = "0.7"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 
 # Phase 4: SQLite-backed vault index. `bundled` compiles SQLite from source so
