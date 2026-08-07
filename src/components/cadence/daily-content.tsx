@@ -89,13 +89,21 @@ export function DailyContent({
       ref={articleRef}
       className="mx-auto flex w-full max-w-detail flex-col"
     >
-      <div className="sticky top-4 z-20 isolate -mx-8 bg-content px-8 pt-4 pb-6">
+      <div className="sticky top-4 z-20 isolate pt-4 pb-6">
+        {/* Full-bleed opaque backdrop hides left-gutter timestamps while
+            scrolling — they paint outside the article column and a narrow
+            -mx-* bleed cannot cover them. */}
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-full h-4 bg-content"
+          className="pointer-events-none absolute left-1/2 top-0 h-full w-screen -translate-x-1/2 bg-content"
+          aria-hidden
+        />
+        <div
+          className="pointer-events-none absolute left-1/2 bottom-full h-4 w-screen -translate-x-1/2 bg-content"
           data-cadence-scroll-shield
           aria-hidden
         />
 
+        <div className="relative">
         <CadenceDayHeader date={date} />
 
         {/* In Tauri the schedule + tasks live in the inner list panel
@@ -113,6 +121,7 @@ export function DailyContent({
           className="pointer-events-none absolute inset-x-0 bottom-0 h-14 translate-y-full bg-gradient-to-b from-content via-content/80 to-content/0 opacity-0 backdrop-blur-[2px] [-webkit-mask-image:linear-gradient(to_bottom,black_0%,black_45%,transparent_100%)] [mask-image:linear-gradient(to_bottom,black_0%,black_45%,transparent_100%)]"
           aria-hidden
         />
+        </div>
       </div>
 
       {body === null ? (

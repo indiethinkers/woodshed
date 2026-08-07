@@ -57,7 +57,7 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
         body,
       };
       await reply(input);
-      toast.success("Reply sent", { description: recipientLabel });
+      toast.success("Reply sent", { description: message.subject });
       onClose();
     } catch (e) {
       setStatus("error");

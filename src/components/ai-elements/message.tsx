@@ -8,7 +8,8 @@ import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { memo } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type LinkSafetyConfig } from "streamdown";
+import { ExternalLinkConfirmDialog } from "@/components/shared/external-link-confirm-dialog";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -49,14 +50,22 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 
+const streamdownLinkSafety: LinkSafetyConfig = {
+  enabled: true,
+  renderModal: ({ isOpen, onClose, url }) => (
+    <ExternalLinkConfirmDialog open={isOpen} url={url} onClose={onClose} />
+  ),
+};
+
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, linkSafety = streamdownLinkSafety, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
       plugins={streamdownPlugins}
+      linkSafety={linkSafety}
       {...props}
     />
   ),

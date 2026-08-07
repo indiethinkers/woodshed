@@ -366,7 +366,7 @@ export function ComposeDialog({
       }
       setStatus("idle");
       toast.success(toastMessage(mode, isReply), {
-        description: recipients.join(", "),
+        description: subject.trim() || undefined,
       });
       onSent?.();
       onClose();

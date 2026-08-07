@@ -457,6 +457,39 @@ fn img_cache_url(url: &str) -> String {
     format!("wsmail://localhost/img/{}", key)
 }
 
+fn is_inline_image_data_url(src: &str) -> bool {
+    src.trim_start()
+        .to_ascii_lowercase()
+        .starts_with("data:image/")
+}
+
+/// Normalize a remote image URL for cache lookup and rewriting.
+/// Protocol-relative URLs (`//cdn.example/x.png`) become `https://…`.
+fn normalize_remote_image_url(src: &str) -> Option<String> {
+    let trimmed = src.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    if trimmed.starts_with("//") {
+        return Some(format!("https:{trimmed}"));
+    }
+    None
+}
+
+fn first_remote_url_from_srcset(srcset: &str) -> Option<String> {
+    for candidate in srcset.split(',') {
+        let url = candidate.split_whitespace().next()?.trim();
+        if let Some(normalized) = normalize_remote_image_url(url) {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
 /// Extract every remote `<img src="http(s)://…">` URL referenced by
 /// the raw email HTML. Used to look up cached image dimensions before
 /// rendering so the renderer can emit `width`/`height` attrs.
@@ -466,12 +499,14 @@ pub fn extract_remote_image_urls(raw: &str) -> Vec<String> {
     let _ = rewrite_str(
         raw,
         RewriteStrSettings {
-            element_content_handlers: vec![element!("img[src]", move |el| {
+            element_content_handlers: vec![element!("img", move |el| {
                 if let Some(src) = el.get_attribute("src") {
-                    let trimmed = src.trim_start();
-                    let lower = trimmed.to_lowercase();
-                    if lower.starts_with("http://") || lower.starts_with("https://") {
-                        urls_clone.lock().unwrap().push(trimmed.to_string());
+                    if let Some(normalized) = normalize_remote_image_url(&src) {
+                        urls_clone.lock().unwrap().push(normalized);
+                    }
+                } else if let Some(srcset) = el.get_attribute("srcset") {
+                    if let Some(normalized) = first_remote_url_from_srcset(&srcset) {
+                        urls_clone.lock().unwrap().push(normalized);
                     }
                 }
                 Ok(())
@@ -544,20 +579,21 @@ fn sanitize_and_rewrite(
                         let _ = el.set_attribute("fetchpriority", pri);
                     }
                     img_index = img_index.saturating_add(1);
-                    if let Some(src) = el.get_attribute("src") {
-                        let trimmed = src.trim_start();
-                        let lower = trimmed.to_lowercase();
-                        if lower.starts_with("http://") || lower.starts_with("https://") {
-                            // Emit `width`/`height` from the image
-                            // cache before swapping `src`. Knowing the
-                            // intrinsic pixel dimensions lets the
-                            // browser reserve the correct box upfront
-                            // (and `img { max-width: 100% }` from the
-                            // wrapper styles still scales it down to
-                            // panel width while preserving aspect
-                            // ratio). Without this, every freshly
-                            // loaded image pushes content below it.
-                            if let Some(&(w, h)) = dimensions.get(trimmed) {
+                    let mut src = el.get_attribute("src");
+                    if src.as_ref().is_none_or(|value| value.trim().is_empty()) {
+                        if let Some(srcset) = el.get_attribute("srcset") {
+                            if let Some(fallback) = first_remote_url_from_srcset(&srcset) {
+                                let _ = el.set_attribute("src", &fallback);
+                                src = Some(fallback);
+                            }
+                        }
+                    }
+                    if let Some(src) = src {
+                        let trimmed = src.trim();
+                        if is_inline_image_data_url(trimmed) {
+                            // Inline data URLs are allowed by EMAIL_BODY_CSP.
+                        } else if let Some(remote) = normalize_remote_image_url(trimmed) {
+                            if let Some(&(w, h)) = dimensions.get(&remote) {
                                 if !el.has_attribute("width") {
                                     let _ = el.set_attribute("width", &w.to_string());
                                 }
@@ -566,16 +602,19 @@ fn sanitize_and_rewrite(
                                 }
                             }
                             if load_remote_images {
-                                let _ = el.set_attribute("src", &img_cache_url(trimmed));
+                                let _ = el.set_attribute("src", &img_cache_url(&remote));
                             } else {
-                                // Remote images are tracking requests as well as
-                                // content. Keep their alt text and dimensions but
-                                // make no network request until the user opts in.
                                 el.remove_attribute("src");
-                                let _ = el.set_attribute("data-woodshed-remote-image", "blocked");
+                                let _ =
+                                    el.set_attribute("data-woodshed-remote-image", "blocked");
                             }
-                        } else if lower.starts_with("javascript:") || lower.starts_with("data:") {
-                            el.remove_attribute("src");
+                        } else {
+                            let lower = trimmed.to_ascii_lowercase();
+                            if lower.starts_with("javascript:")
+                                || (lower.starts_with("data:") && !is_inline_image_data_url(trimmed))
+                            {
+                                el.remove_attribute("src");
+                            }
                         }
                     }
                     if el.has_attribute("srcset") {
@@ -991,11 +1030,36 @@ mod tests {
     fn extract_remote_image_urls_finds_https_and_skips_data() {
         let raw = r#"<img src="https://a.com/1.png">
             <img src="data:image/png;base64,abc">
-            <img src="HTTPS://b.com/2.jpg">"#;
+            <img src="HTTPS://b.com/2.jpg">
+            <img src="//c.com/3.webp">"#;
         let urls = extract_remote_image_urls(raw);
-        assert_eq!(urls.len(), 2);
+        assert_eq!(urls.len(), 3);
         assert!(urls.iter().any(|u| u == "https://a.com/1.png"));
         assert!(urls.iter().any(|u| u == "HTTPS://b.com/2.jpg"));
+        assert!(urls.iter().any(|u| u == "https://c.com/3.webp"));
+    }
+
+    #[test]
+    fn rewrites_protocol_relative_images_for_automatic_eager_loading() {
+        let raw = r#"<img src="//cdn.example.com/x.png" />"#;
+        let out = render_email(raw, empty_dims(), true).unwrap();
+        assert!(out.contains("wsmail://localhost/img/"));
+        assert!(!out.contains(r#"src="//cdn.example.com/x.png""#));
+    }
+
+    #[test]
+    fn keeps_inline_data_image_urls() {
+        let raw = r#"<img src="data:image/png;base64,abc" alt="logo" />"#;
+        let out = render_email(raw, empty_dims(), true).unwrap();
+        assert!(out.contains(r#"src="data:image/png;base64,abc""#));
+    }
+
+    #[test]
+    fn falls_back_to_srcset_when_src_is_missing() {
+        let raw = r#"<img srcset="//cdn.example.com/x.png 1x, //cdn.example.com/x2.png 2x" alt="hero" />"#;
+        let out = render_email(raw, empty_dims(), true).unwrap();
+        assert!(out.contains("wsmail://localhost/img/"));
+        assert!(!out.contains("srcset="));
     }
 
     #[test]
