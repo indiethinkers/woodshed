@@ -1992,7 +1992,7 @@ function AgentConversationView({
 }
 
 function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  const { scrollRef, scrollToBottom } = useStickToBottomContext();
   const scrolledUserMessageRef = useRef<string | null>(null);
   const newestUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -2005,12 +2005,14 @@ function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
     if (!newestUserMessageId) return;
     if (scrolledUserMessageRef.current === newestUserMessageId) return;
     scrolledUserMessageRef.current = newestUserMessageId;
-    // When already pinned to the bottom the sticky container tracks new
+    // When truly pinned to the bottom the sticky container tracks new
     // content itself — an explicit scroll from the bottom would just
-    // lurch the view (and the animated variant is visible even when the
-    // target is the current position). Only jump when the user has
-    // scrolled up and a new message lands.
-    if (isAtBottom) return;
+    // lurch the view. Only skip then: the library's context isAtBottom
+    // includes a 70px "near bottom" window and its auto-follow aborts as
+    // soon as the user scrolls up, so trusting it would strand a user who
+    // scrolled up even slightly (no jump, no follow, ref guard blocks a
+    // retry). The measured check below is exact.
+    if (isScrollContainerPinned(scrollRef.current)) return;
     const raf = window.requestAnimationFrame(() => {
       void scrollToBottom({
         animation: "instant",
@@ -2019,9 +2021,26 @@ function AgentConversationAutoScroll({ messages }: { messages: UIMessage[] }) {
       });
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [newestUserMessageId, scrollToBottom, isAtBottom]);
+  }, [newestUserMessageId, scrollToBottom, scrollRef]);
 
   return null;
+}
+
+/// True when the scroll container is effectively pinned to the bottom —
+/// within `pinnedThresholdPx` (default 4). Used by the auto-scroll guard
+/// to skip the explicit jump only when the sticky container already
+/// tracks the bottom itself; a null container (not yet measured) is never
+/// "pinned" so the jump always fires on first render.
+export function isScrollContainerPinned(
+  el: {
+    scrollHeight: number;
+    scrollTop: number;
+    clientHeight: number;
+  } | null,
+  pinnedThresholdPx = 4,
+): boolean {
+  if (!el) return false;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= pinnedThresholdPx;
 }
 
 function AgentCheckpoint({ onRestore }: { onRestore: () => void }) {

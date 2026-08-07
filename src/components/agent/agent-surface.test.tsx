@@ -90,6 +90,7 @@ import {
   AgentWorkIndicator,
   conversationAutoTitle,
   isAutoDerivedTitle,
+  isScrollContainerPinned,
   mergeHydratedConversationMessages,
   modelForAgentChatUpdate,
   sortChatsByCreatedAt,
@@ -1655,5 +1656,33 @@ describe("isAutoDerivedTitle", () => {
     expect(isAutoDerivedTitle("Screenshot-2026-08-06.png", messages)).toBe(
       false,
     );
+  });
+});
+
+describe("isScrollContainerPinned", () => {
+  const el = (scrollTop: number, scrollHeight = 1000, clientHeight = 800) => ({
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+  });
+
+  it("treats a truly pinned container as pinned", () => {
+    expect(isScrollContainerPinned(el(200))).toBe(true); // exactly at bottom
+    expect(isScrollContainerPinned(el(197))).toBe(true); // 3px above
+  });
+
+  it("is never pinned for an unmeasured container", () => {
+    expect(isScrollContainerPinned(null)).toBe(false);
+  });
+
+  it("jumps for any real scroll-up, including the library's 70px near-bottom band", () => {
+    // The stick-to-bottom context reports isAtBottom for up to 70px above
+    // the bottom; the guard must NOT reuse that fuzzy signal or a user
+    // scrolled up 1–70px would miss new messages. Only the tight 4px
+    // tolerance counts as pinned.
+    expect(isScrollContainerPinned(el(130))).toBe(false); // 70px above
+    expect(isScrollContainerPinned(el(150))).toBe(false); // 50px above
+    expect(isScrollContainerPinned(el(190))).toBe(false); // 10px above
+    expect(isScrollContainerPinned(el(197))).toBe(true); // 3px above → pinned
   });
 });
