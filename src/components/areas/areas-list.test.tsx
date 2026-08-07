@@ -8,13 +8,15 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
 vi.mock("@/lib/hooks/use-areas", () => ({
-  useAreas: () => ({
+  useAreas: vi.fn(() => ({
     data: [
       { id: "zulu", name: "Zulu", color: "#335577" },
       { id: "alpha", name: "Alpha", color: "#773355" },
     ],
     isLoading: false,
-  }),
+    isError: false,
+    refetch: vi.fn(),
+  })),
 }));
 vi.mock("@/lib/hooks/use-notes", () => ({ useAllNotes: () => ({ data: [] }) }));
 vi.mock("@/lib/hooks/use-people", () => ({ useAllPeople: () => ({ data: [] }) }));
@@ -23,6 +25,8 @@ vi.mock("@/lib/hooks/use-tag-table", () => ({ useTagTable: () => ({ data: [] }) 
 vi.mock("@/lib/hooks/use-today", () => ({ useToday: () => "2026-07-28" }));
 
 import { AreasList, formatRecordBreakdown } from "./areas-list";
+import { useAreas } from "@/lib/hooks/use-areas";
+import { defaultAreas } from "@/lib/areas";
 
 describe("AreasList", () => {
   it("pins Unassigned below named areas", () => {
@@ -52,5 +56,21 @@ describe("AreasList", () => {
     expect(
       formatRecordBreakdown({ event: 2, task: 1, note: 3, person: 4 }),
     ).toBe("2 events · 1 task · 3 notes · 4 people");
+  });
+
+  it("shows retry on load failure without seeded default area names", () => {
+    vi.mocked(useAreas).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useAreas>);
+
+    render(<AreasList />);
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    for (const area of defaultAreas) {
+      expect(screen.queryByText(area.name)).not.toBeInTheDocument();
+    }
   });
 });

@@ -530,6 +530,10 @@ Linux/cloud-specific caveats.
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` before launching, or WebKitGTK may crash /
   render blank in this GPU-less VM. The `libEGL ... DRI3` warnings are harmless
   (software rendering).
+- Route navigations must not drive CSS View Transitions on Linux WebKitGTK —
+  `supportsViewTransition()` in `src/lib/view-transition.ts` gates this. Un-gated
+  TanStack Router `viewTransition` commits segfault inside `libwebkit2gtk` during
+  sidebar / command-palette navigation.
 - Run `xset s off; xset s noblank` once per session, otherwise the X screensaver
   blanks the window (a floating logo on black) during idle periods and makes
   screenshots/recordings look like a crash even though the process is healthy.

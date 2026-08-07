@@ -1378,3 +1378,8 @@
 [data-sidebar-rail] {
   view-transition-name: sidebar-rail;
 }
+
+/* Reserve scrollbar width so prose does not reflow when content scrolls. */
+[data-woodshed-content-scroll] {
+  scrollbar-gutter: stable;
+}

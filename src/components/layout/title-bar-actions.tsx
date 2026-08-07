@@ -13,6 +13,7 @@ import { useRightSidebar } from "@/components/layout/right-sidebar-context-inter
 import { useGcalSync } from "@/lib/hooks/use-gcal";
 import { useRefreshMail } from "@/lib/hooks/use-mail";
 import { setThemePreference } from "@/lib/theme";
+import { supportsViewTransition } from "@/lib/view-transition";
 import { hasBackend, tauriInvoke } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
@@ -104,7 +105,7 @@ export function GraphButton() {
       data-woodshed-action="navigate:graph"
       title="Graph"
       to="/graph"
-      viewTransition
+      viewTransition={supportsViewTransition()}
     >
       <Waypoints className="h-4 w-4" strokeWidth={1.85} />
     </Link>

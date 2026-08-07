@@ -113,7 +113,11 @@ export function InlineReply({ message, onClose }: InlineReplyProps) {
       <div className="flex items-center justify-between gap-2 px-4 h-11 border-t border-border bg-foreground/[0.02]">
         <button
           type="button"
-          onClick={onClose}
+          onClick={() => {
+            if (!body.trim() || window.confirm("Discard this reply?")) {
+              onClose();
+            }
+          }}
           disabled={status === "sending"}
           className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
         >

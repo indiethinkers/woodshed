@@ -21,6 +21,16 @@ import {
 import { inboxColor } from "@/lib/mail-lib/inbox-color";
 import { replyRecipients } from "@/lib/mail-lib/reply-recipients";
 import { useCompactTextareaCaret } from "@/components/shared/textarea-compact-caret";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type {
   ComposeInput,
   DraftDto,
@@ -139,6 +149,7 @@ export function ComposeDialog({
   const [draftId, setDraftId] = useState<string | undefined>(draft?.id);
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const draftKind = draft?.kind ?? (replyMode ? "reply" : "new");
   const draftSourceMessageId =
@@ -246,12 +257,13 @@ export function ComposeDialog({
     queueDraftAutosave,
   ]);
 
+  const hasContent =
+    to.trim().length > 0 ||
+    subject.trim().length > 0 ||
+    body.trim().length > 0;
+
   const handleClose = useCallback(async () => {
     if (status === "sending") return;
-    const hasContent =
-      to.trim().length > 0 ||
-      subject.trim().length > 0 ||
-      body.trim().length > 0;
     try {
       if (hasContent) {
         await queueDraftAutosave(currentDraftInput);
@@ -261,7 +273,16 @@ export function ComposeDialog({
       setStatus("error");
       setError("Draft could not be saved. Keep this window open and try again.");
     }
-  }, [status, to, subject, body, queueDraftAutosave, currentDraftInput, onClose]);
+  }, [status, hasContent, queueDraftAutosave, currentDraftInput, onClose]);
+
+  function requestDiscard() {
+    if (status === "sending") return;
+    if (hasContent) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    void handleDiscard();
+  }
 
   // Esc closes the dialog. Cmd/Ctrl-Enter sends.
   useEffect(() => {
@@ -269,6 +290,7 @@ export function ComposeDialog({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         void handleClose();
         return;
       }
@@ -277,8 +299,8 @@ export function ComposeDialog({
         void handleSend();
       }
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     open,
@@ -415,6 +437,7 @@ export function ComposeDialog({
         : "New message";
 
   return createPortal(
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
         type="button"
@@ -601,7 +624,7 @@ export function ComposeDialog({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={handleDiscard}
+              onClick={requestDiscard}
               disabled={status === "sending"}
               className="text-[12px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
             >
@@ -639,7 +662,30 @@ export function ComposeDialog({
           </button>
         </div>
       </div>
-    </div>,
+    </div>
+
+    <AlertDialog open={discardConfirmOpen} onOpenChange={setDiscardConfirmOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard draft?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Unsaved changes will be removed. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep editing</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              setDiscardConfirmOpen(false);
+              void handleDiscard();
+            }}
+          >
+            Discard
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>,
     document.body,
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toastMutationError } from "@/lib/mutation-toast";
 import { tauriInvoke } from "@/lib/tauri";
 
 export interface DailyJournalDto {
@@ -88,6 +89,9 @@ export function useDailyJournalMutation() {
       // regardless of which component (if any) is still mounted.
       qc.setQueryData(["dailyJournal", saved.date], saved);
       return saved;
+    },
+    onError: (err) => {
+      toastMutationError("save journal", err);
     },
   });
 }

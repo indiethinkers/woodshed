@@ -38,6 +38,8 @@ import {
   getAreaName,
 } from "@/lib/areas";
 import { useToday } from "@/lib/hooks/use-today";
+import { useCadenceSidebarDate } from "@/lib/cadence/use-cadence-sidebar-date";
+import { extractDate } from "@/lib/cadence/sidebar-date";
 import { useAreas } from "@/lib/hooks/use-areas";
 import { NewAreaForm } from "@/components/areas/new-area-form";
 import { formatDuration, liveTimeSpent } from "@/lib/format-duration";
@@ -83,9 +85,9 @@ function TaskList({
   date?: string;
   variant: TaskListVariant;
 }) {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const sidebarDate = useCadenceSidebarDate();
   const today = useToday();
-  const date = providedDate ?? extractDate(pathname) ?? today;
+  const date = providedDate ?? sidebarDate;
   const { data: dayTasks = [] } = useTasks(date);
   const { data: allTasks } = useAllTasks();
   const { data: liveAreas } = useAreas();
@@ -1895,14 +1897,8 @@ function scopeLabel(scope: TaskScope): string {
   return "All";
 }
 
-/** The cadence day a sidebar surface is showing, read off the pathname.
- *  `/cadence/<date>/…` → that date; everything else (today's `/`, an event
- *  or task detail) → null, letting the caller fall back to today. Shared by
- *  the task list and the sidebar schedule so both track the same day. */
-export function extractDate(pathname: string): string | null {
-  const match = pathname.match(/^\/cadence\/([0-9]{4}-[0-9]{2}-[0-9]{2})/);
-  return match ? match[1] : null;
-}
+/** @deprecated Import from `@/lib/cadence/sidebar-date` instead. */
+export { extractDate } from "@/lib/cadence/sidebar-date";
 
 function formatLongDate(dateStr: string) {
   const d = new Date(dateStr + "T00:00:00");

@@ -128,6 +128,11 @@ function IcalEventInner({
     save.mutate({ accountId, externalId, occurrenceDate, title: next });
   }
 
+  function cancelTitle() {
+    setTitleDraft(event.title);
+    setTitleEditing(false);
+  }
+
   // `mutateAsync` (not `mutate`) so TiptapEditor's wikilink click handler
   // can await the save before navigating. Otherwise unsaved edits get
   // stranded by an immediate route change. See use-daily-journal.ts.
@@ -184,6 +189,7 @@ function IcalEventInner({
               value={titleDraft}
               onChange={setTitleDraft}
               onCommit={commitTitle}
+              onCancel={cancelTitle}
             />
             <FilePathLine className="mt-1.5" />
           </div>
@@ -314,10 +320,12 @@ function TitleInput({
   value,
   onChange,
   onCommit,
+  onCancel,
 }: {
   value: string;
   onChange: (v: string) => void;
   onCommit: () => void;
+  onCancel: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -331,9 +339,12 @@ function TitleInput({
       onChange={(e) => onChange(e.target.value)}
       onBlur={onCommit}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === "Escape") {
+        if (e.key === "Enter") {
           e.preventDefault();
           onCommit();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
         }
       }}
       // h-[1.2em] pins the input to the h1's exact line box — WebKit

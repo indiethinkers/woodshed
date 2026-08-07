@@ -30,6 +30,7 @@ import {
 } from "@/lib/mail-lib/types";
 import { useAllPeople, type PersonDto } from "@/lib/hooks/use-people";
 import { findPersonForMailSender } from "@/lib/mail-lib/people";
+import { toastMutationError } from "@/lib/mutation-toast";
 import { isEditableElement } from "@/lib/dom/is-editable";
 import { ComposeDialog } from "@/components/mail/compose-dialog";
 import { SnoozeButton } from "@/components/mail/snooze-button";
@@ -204,9 +205,9 @@ export function MailInbox({ mailbox: routeMailbox }: MailInboxProps = {}) {
         Promise.allSettled(ids.map((id) => archiveOne(id))).then((results) => {
           const failures = results.filter((r) => r.status === "rejected");
           if (failures.length > 0) {
-            console.error(
-              `archive failed for ${failures.length}/${ids.length} messages`,
-              failures,
+            toastMutationError(
+              "archive message",
+              `${failures.length} of ${ids.length} messages could not be archived`,
             );
           }
         });

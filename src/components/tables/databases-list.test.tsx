@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   customLoading: false,
   generatedLoading: false,
+  customError: false,
+  generatedError: false,
+  refetchCustom: vi.fn(),
+  refetchGenerated: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -24,16 +28,20 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("@/lib/hooks/use-tables", () => ({
   useAllTables: () => ({
-    data: [
-      {
-        id: "custom-table",
-        name: "Custom database",
-        created: "2026-07-28",
-        favorite: false,
-        rowCount: 1,
-      },
-    ],
+    data: mocks.customError
+      ? undefined
+      : [
+          {
+            id: "custom-table",
+            name: "Custom database",
+            created: "2026-07-28",
+            favorite: false,
+            rowCount: 1,
+          },
+        ],
     isLoading: mocks.customLoading,
+    isError: mocks.customError,
+    refetch: mocks.refetchCustom,
   }),
   useDatabaseFavoriteMutations: () => ({
     setTableFavorite: { mutate: vi.fn() },
@@ -46,14 +54,18 @@ vi.mock("@/lib/hooks/use-tables", () => ({
 }));
 vi.mock("@/lib/hooks/use-tag-table", () => ({
   useTagsWithCounts: () => ({
-    data: [
-      {
-        tag: "generated",
-        count: 100,
-        created: "2026-01-02T08:00:00Z",
-      },
-    ],
+    data: mocks.generatedError
+      ? undefined
+      : [
+          {
+            tag: "generated",
+            count: 100,
+            created: "2026-01-02T08:00:00Z",
+          },
+        ],
     isLoading: mocks.generatedLoading,
+    isError: mocks.generatedError,
+    refetch: mocks.refetchGenerated,
   }),
 }));
 
@@ -62,6 +74,10 @@ import { DatabasesList } from "./databases-list";
 beforeEach(() => {
   mocks.customLoading = false;
   mocks.generatedLoading = false;
+  mocks.customError = false;
+  mocks.generatedError = false;
+  mocks.refetchCustom.mockClear();
+  mocks.refetchGenerated.mockClear();
   window.localStorage.clear();
 });
 
@@ -228,5 +244,18 @@ describe("DatabasesList", () => {
         "woodshed:record-table:column-widths:databases-custom",
       ),
     ).toBe('{"created":120}');
+  });
+
+  it("shows retry when custom databases fail to load", () => {
+    mocks.customError = true;
+
+    render(<DatabasesList />);
+
+    expect(
+      screen.getByRole("button", { name: "Retry" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't load your custom databases/i),
+    ).toBeInTheDocument();
   });
 });

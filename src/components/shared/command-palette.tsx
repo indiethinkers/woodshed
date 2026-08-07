@@ -21,6 +21,7 @@ import { isEditableElement } from "@/lib/dom/is-editable";
 import { UNASSIGNED_AREA_ID } from "@/lib/areas";
 import { useTabs } from "@/components/layout/tabs-context-internal";
 import { useRightSidebar } from "@/components/layout/right-sidebar-context-internal";
+import { supportsViewTransition } from "@/lib/view-transition";
 
 type PaletteMode = "navigate" | "new-tab" | "right-sidebar";
 type SelectionIntent = "reference" | "new-tab";
@@ -249,7 +250,7 @@ export function CommandPalette() {
       openInNewTab(item.href);
       return;
     }
-    void navigate({ href: item.href, viewTransition: true });
+    void navigate({ href: item.href, viewTransition: supportsViewTransition() });
   }
 
   async function runActionItem(item: CommandItem, intent?: SelectionIntent) {
@@ -272,7 +273,7 @@ export function CommandPalette() {
         openInNewTab(href);
         return;
       }
-      void navigate({ href, viewTransition: true });
+      void navigate({ href, viewTransition: supportsViewTransition() });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error("Command failed", { description: message });

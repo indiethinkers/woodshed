@@ -6,7 +6,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { tauriInvoke } from "@/lib/tauri";
-import { defaultAreas } from "@/lib/areas";
 import type { Area } from "@/lib/types";
 
 export interface SpaceCreateInput {
@@ -27,7 +26,7 @@ export function useAreas() {
       const result = await tauriInvoke<Area[]>("areas_get");
       // Browser-only fallback (vitest, no Tauri runtime). Returns the seeded
       // defaults so the UI still renders consistently in tests.
-      return result ?? defaultAreas;
+      return result ?? [];
     },
   });
 }

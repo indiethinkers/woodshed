@@ -17,7 +17,7 @@ import {
   type AreaItemType,
   type UnifiedItem,
 } from "@/lib/area-activity";
-import { defaultAreas, UNASSIGNED_AREA_ID } from "@/lib/areas";
+import { UNASSIGNED_AREA_ID } from "@/lib/areas";
 import { useAreas } from "@/lib/hooks/use-areas";
 import { useAllNotes } from "@/lib/hooks/use-notes";
 import { useAllPeople } from "@/lib/hooks/use-people";
@@ -25,6 +25,7 @@ import { useAllTasks } from "@/lib/hooks/use-tasks";
 import { useTagTable } from "@/lib/hooks/use-tag-table";
 import { useToday } from "@/lib/hooks/use-today";
 import type { Area } from "@/lib/types";
+import { ListLoadError } from "@/components/shared/list-load-error";
 import { cn } from "@/lib/utils";
 
 type SortMode = "name" | "activity";
@@ -45,7 +46,7 @@ const EMPTY_COUNTS: Record<AreaItemType, number> = {
 
 export function AreasList() {
   const navigate = useNavigate();
-  const { data: liveAreas, isLoading } = useAreas();
+  const { data: liveAreas, isLoading, isError, refetch } = useAreas();
   const { data: notes = [] } = useAllNotes();
   const { data: people = [] } = useAllPeople();
   const { data: tasks = [] } = useAllTasks();
@@ -55,7 +56,7 @@ export function AreasList() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("name");
 
-  const areas = liveAreas ?? defaultAreas;
+  const areas = liveAreas ?? [];
   const allItems = useMemo(
     () =>
       buildAreaItems({
@@ -177,7 +178,11 @@ export function AreasList() {
         </div>
       </div>
 
-      {isLoading && !liveAreas ? (
+      {isError && !liveAreas ? (
+        <div className="border-y border-border/70 px-4 py-10">
+          <ListLoadError surface="areas" onRetry={() => void refetch()} />
+        </div>
+      ) : isLoading && !liveAreas ? (
         <div className="divide-y divide-border/60 border-y border-border/70">
           {Array.from({ length: 6 }, (_, index) => (
             <div
@@ -206,10 +211,12 @@ export function AreasList() {
       ) : (
         <div className="border-y border-border/70 py-16 text-center">
           <p className="text-sm font-medium text-foreground">
-            No matching areas
+            {query.trim() ? "No matching areas" : "No areas yet"}
           </p>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Try another name or clear the search.
+            {query.trim()
+              ? "Try another name or clear the search."
+              : "Click + to create your first area."}
           </p>
         </div>
       )}

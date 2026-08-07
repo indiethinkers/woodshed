@@ -24,6 +24,7 @@ import { isEditableElement } from "@/lib/dom/is-editable";
 import { useTabs, tabPath, type OpenTab } from "./tabs-context-internal";
 import { TitleBarActions } from "./title-bar-actions";
 import { useResolvedRouteTitle } from "@/lib/route-title";
+import { supportsViewTransition } from "@/lib/view-transition";
 import { useVaultPath } from "@/lib/hooks/use-vault-path";
 import { isTauriRuntime } from "@/lib/runtime";
 import { cn } from "@/lib/utils";
@@ -143,7 +144,7 @@ export function TitleBar() {
           data-tauri-drag-region="false"
           type="button"
           onClick={newTab}
-          title="New tab (⌘T)"
+          title="New tab"
           aria-label="New tab"
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >
@@ -248,7 +249,7 @@ function VaultPathControl({ compact = false }: { compact?: boolean }) {
     <button
       data-tauri-drag-region="false"
       type="button"
-      onClick={() => void navigate({ to: "/settings/vault", viewTransition: true })}
+      onClick={() => void navigate({ to: "/settings/vault", viewTransition: supportsViewTransition() })}
       title={vaultPath ?? "Choose vault"}
       aria-label={`Vault path: ${label}`}
       className={cn(
