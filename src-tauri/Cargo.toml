@@ -6,7 +6,7 @@ authors = ["Woodshed contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/indiethinkers/woodshed"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.88"
 default-run = "woodshed"
 
 [lib]
@@ -76,13 +76,12 @@ mail-parser = "0.9"
 ical = "0.11"
 chrono-tz = "0.10"
 
-# Agent PDF attachments use Apple's in-process PDFKit on the macOS target.
-# Keeping these target-scoped avoids a generic parser subprocess and preserves
-# the crate's Rust 1.77 MSRV.
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { version = "0.6.2", default-features = false, features = ["std"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
-objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["std", "PDFDocument", "PDFPage"] }
+# Agent document attachments: anydoc converts PDF, Word, PowerPoint, Excel,
+# OpenDocument, RTF, EPUB, and CSV to Markdown. Pure-Rust parser with fixed
+# resource limits and fuzz coverage; the app still runs it inside the bounded
+# helper subprocess so a hostile document can never block or crash the main
+# process.
+anydoc = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

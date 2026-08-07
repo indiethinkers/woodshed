@@ -249,7 +249,7 @@ fn project_master(ev: &IcalEvent, target: NaiveDate) -> Option<String> {
         RecurringRule::None => false,
         RecurringRule::Daily => {
             let diff = (target - event_date).num_days();
-            diff >= 0 && (diff as u64) % (interval as u64) == 0
+            diff >= 0 && (diff as u64).is_multiple_of(interval as u64)
         }
         RecurringRule::Weekly => {
             // Two conditions to satisfy:
@@ -274,7 +274,7 @@ fn project_master(ev: &IcalEvent, target: NaiveDate) -> Option<String> {
             let target_monday = monday_of(target);
             let anchor_monday = monday_of(event_date);
             let weeks = (target_monday - anchor_monday).num_days() / 7;
-            weeks >= 0 && (weeks as u64) % (interval as u64) == 0
+            weeks >= 0 && (weeks as u64).is_multiple_of(interval as u64)
         }
         RecurringRule::Monthly => {
             if target.day() != event_date.day() {
@@ -282,7 +282,7 @@ fn project_master(ev: &IcalEvent, target: NaiveDate) -> Option<String> {
             }
             let months = (target.year() as i64 - event_date.year() as i64) * 12
                 + (target.month() as i64 - event_date.month() as i64);
-            months >= 0 && (months as u64) % (interval as u64) == 0
+            months >= 0 && (months as u64).is_multiple_of(interval as u64)
         }
     };
     if !matches {

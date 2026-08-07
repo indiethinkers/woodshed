@@ -23,9 +23,8 @@ const AGENT_ATTACHMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_AGENT_RUN_READ_IDS: usize = 8;
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_AGENT_PDF_PAGES: usize = 2_000;
-const AGENT_PDF_HELPER_ARG: &str = "--woodshed-agent-pdf-extract";
-const MAX_AGENT_PDF_HELPER_OUTPUT_BYTES: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES + 4 * 1024;
+const AGENT_DOC_HELPER_ARG: &str = "--woodshed-agent-doc-extract";
+const MAX_AGENT_DOC_HELPER_OUTPUT_BYTES: usize = MAX_AGENT_ATTACHMENT_TEXT_BYTES + 4 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,7 +48,7 @@ struct DecodedAgentAttachment {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-enum AgentPdfHelperResponse {
+enum AgentDocHelperResponse {
     Ok { text: String },
     Error { message: String },
 }
@@ -103,8 +102,8 @@ pub async fn agent_attachment_prepare(
         media_type,
         bytes,
     } = attachment;
-    let text = if media_type == "application/pdf" {
-        extract_pdf_text_isolated(bytes).await?
+    let text = if is_document_attachment(&media_type) {
+        extract_document_text_isolated(bytes, attachment_format_hint(&media_type, &label)).await?
     } else {
         String::from_utf8(bytes)
             .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
@@ -121,8 +120,11 @@ fn prepare_agent_attachment_in_process(
         media_type,
         bytes,
     } = decode_agent_attachment(input)?;
-    let text = if media_type == "application/pdf" {
-        extract_pdf_text(&bytes)?
+    let text = if is_document_attachment(&media_type) {
+        extract_document_text(
+            &bytes,
+            attachment_format_hint(&media_type, &label).as_deref(),
+        )?
     } else {
         String::from_utf8(bytes)
             .map_err(|_| "the text attachment is not valid UTF-8".to_string())?
@@ -213,6 +215,8 @@ fn safe_attachment_label(filename: Option<&str>) -> String {
     }
 }
 
+/// Media types routed through the document converter (anydoc). Everything
+/// else in the `text/*` family stays a direct UTF-8 passthrough.
 fn normalized_attachment_media_type(
     media_type: Option<&str>,
     filename: Option<&str>,
@@ -224,100 +228,164 @@ fn normalized_attachment_media_type(
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    let inferred_pdf = filename
-        .map(|value| value.to_ascii_lowercase().ends_with(".pdf"))
-        .unwrap_or(false);
-    if normalized == "application/pdf" || (normalized.is_empty() && inferred_pdf) {
-        return Ok("application/pdf".to_string());
+    if is_document_media_type(&normalized) {
+        return Ok(normalized);
     }
     if normalized.starts_with("text/") || normalized == "application/json" {
         return Ok(normalized);
     }
-    Err("Woodshed can currently read PDF and text attachments in Agent chats".to_string())
+    // Empty or generic media type: infer from the filename extension so
+    // signature-less formats (CSV) and mislabeled files still convert.
+    if let Some(extension) = filename
+        .and_then(|value| value.rsplit('.').next())
+        .map(|value| value.trim().to_ascii_lowercase())
+    {
+        if let Some(format) = anydoc::Format::from_extension(&extension) {
+            if let Some(inferred) = media_type_for_format(format) {
+                return Ok(inferred.to_string());
+            }
+        }
+    }
+    Err(
+        "Woodshed can currently read PDF, Office documents, and text attachments in Agent chats"
+            .to_string(),
+    )
 }
 
-#[cfg(target_os = "macos")]
-fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
-    use objc2::rc::autoreleasepool;
-    use objc2::AnyThread;
-    use objc2_foundation::NSData;
-    use objc2_pdf_kit::PDFDocument;
+fn is_document_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "application/pdf"
+            | "application/msword"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            | "application/vnd.ms-word.document.macroenabled.12"
+            | "application/vnd.ms-powerpoint"
+            | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            | "application/vnd.openxmlformats-officedocument.presentationml.slideshow"
+            | "application/vnd.ms-powerpoint.presentation.macroenabled.12"
+            | "application/vnd.ms-powerpoint.slideshow.macroenabled.12"
+            | "application/vnd.ms-excel"
+            | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            | "application/vnd.ms-excel.sheet.macroenabled.12"
+            | "application/vnd.ms-excel.sheet.binary.macroenabled.12"
+            | "application/vnd.oasis.opendocument.text"
+            | "application/vnd.oasis.opendocument.spreadsheet"
+            | "application/vnd.oasis.opendocument.presentation"
+            | "application/rtf"
+            | "text/rtf"
+            | "application/epub+zip"
+            | "text/csv"
+    )
+}
 
-    autoreleasepool(|_| {
-        let data = NSData::with_bytes(bytes);
-        // SAFETY: PDFKit retains the immutable NSData for the duration of the
-        // document. The initializer is failable for malformed input.
-        let document = unsafe { PDFDocument::initWithData(PDFDocument::alloc(), &data) }
-            .ok_or_else(|| "Woodshed could not extract text from this PDF".to_string())?;
-        // Read page-by-page so the declared text budget is enforced without
-        // materializing the complete document string. Do not call
-        // `numberOfCharacters` first: PDFKit may perform the same expensive
-        // text-layout pass again when `string` is requested.
-        let page_count = unsafe { document.pageCount() };
-        if page_count > MAX_AGENT_PDF_PAGES {
-            return Err(format!("PDF exceeds the {MAX_AGENT_PDF_PAGES} page limit"));
+/// `true` when the attachment should go through the document converter
+/// instead of being read as UTF-8 text.
+fn is_document_attachment(media_type: &str) -> bool {
+    is_document_media_type(media_type)
+}
+
+fn media_type_for_format(format: anydoc::Format) -> Option<&'static str> {
+    Some(match format {
+        anydoc::Format::Doc => "application/msword",
+        anydoc::Format::Docx => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         }
-        let mut output = String::new();
-        for index in 0..page_count {
-            // SAFETY: the index is within `pageCount`; the page accessors are
-            // read-only PDFKit properties and objc2 retains returned objects.
-            let page = unsafe { document.pageAtIndex(index) }
-                .ok_or_else(|| "Woodshed could not read a page from this PDF".to_string())?;
-            let page_text = unsafe { page.string() }
-                .map(|value| value.to_string())
-                .unwrap_or_default();
-            append_pdf_page_text(&mut output, &page_text, MAX_AGENT_ATTACHMENT_TEXT_BYTES)?;
+        anydoc::Format::Odt => "application/vnd.oasis.opendocument.text",
+        anydoc::Format::Pdf => "application/pdf",
+        anydoc::Format::Ppt => "application/vnd.ms-powerpoint",
+        anydoc::Format::Pptx => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         }
-        Ok(output)
+        anydoc::Format::Rtf => "application/rtf",
+        anydoc::Format::Epub => "application/epub+zip",
+        anydoc::Format::Excel => {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        anydoc::Format::Ods => "application/vnd.oasis.opendocument.spreadsheet",
+        anydoc::Format::Odp => "application/vnd.oasis.opendocument.presentation",
+        anydoc::Format::Csv => "text/csv",
     })
 }
 
-fn append_pdf_page_text(output: &mut String, page_text: &str, limit: usize) -> Result<(), String> {
-    let separator_bytes = usize::from(!output.is_empty());
-    if output
-        .len()
-        .saturating_add(separator_bytes)
-        .saturating_add(page_text.len())
-        > limit
-    {
-        return Err(format!(
-            "attachment text exceeds the {MAX_AGENT_ATTACHMENT_TEXT_BYTES} byte limit"
-        ));
+/// The extension hint the helper needs to name signature-less formats (CSV).
+fn attachment_format_hint(media_type: &str, label: &str) -> Option<String> {
+    let extension = label
+        .rsplit('.')
+        .next()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let hint = extension
+        .filter(|value| !value.is_empty())
+        .and_then(|value| anydoc::Format::from_extension(&value).map(|_| value));
+    if hint.is_some() {
+        return hint;
     }
-    if !output.is_empty() {
-        output.push('\n');
+    if media_type == "text/csv" {
+        return Some("csv".to_string());
     }
-    output.push_str(page_text);
-    Ok(())
+    None
 }
 
-#[cfg(target_os = "macos")]
-async fn extract_pdf_text_isolated(bytes: Vec<u8>) -> Result<String, String> {
+fn extract_document_text(bytes: &[u8], format_hint: Option<&str>) -> Result<String, String> {
+    let format = anydoc::Format::from_bytes(bytes)
+        .or_else(|| format_hint.and_then(anydoc::Format::from_extension));
+    anydoc::to_markdown_bytes(bytes, format).map_err(attachment_convert_error_message)
+}
+
+fn attachment_convert_error_message(error: anydoc::ConvertError) -> String {
+    match error {
+        anydoc::ConvertError::Unsupported(_) => {
+            "Woodshed could not extract text from this attachment. Image-only PDFs and unrecognized formats are not supported yet."
+                .to_string()
+        }
+        anydoc::ConvertError::Malformed { .. } => {
+            "Woodshed could not extract text from this attachment. The document is malformed or encrypted."
+                .to_string()
+        }
+        anydoc::ConvertError::Encrypted => {
+            "Woodshed could not extract text from this attachment. The document is encrypted or password-protected."
+                .to_string()
+        }
+        anydoc::ConvertError::ResourceLimit { .. } => {
+            "Woodshed could not extract text from this attachment. It exceeds the document safety limits."
+                .to_string()
+        }
+        anydoc::ConvertError::MissingPart { .. } => {
+            "Woodshed could not extract text from this attachment. A required part is missing."
+                .to_string()
+        }
+        anydoc::ConvertError::Io(_) => {
+            "Woodshed could not extract text from this attachment.".to_string()
+        }
+        _ => "Woodshed could not extract text from this attachment.".to_string(),
+    }
+}
+
+async fn extract_document_text_isolated(
+    bytes: Vec<u8>,
+    format_hint: Option<String>,
+) -> Result<String, String> {
     let executable = std::env::current_exe()
-        .map_err(|_| "Woodshed could not start its PDF reader".to_string())?;
+        .map_err(|_| "Woodshed could not start its document reader".to_string())?;
     let mut command = tokio::process::Command::new(executable);
-    command.arg(AGENT_PDF_HELPER_ARG);
+    command.arg(AGENT_DOC_HELPER_ARG);
+    if let Some(hint) = format_hint {
+        command.arg(hint);
+    }
     let output = run_bounded_helper(
         command,
         bytes,
         AGENT_ATTACHMENT_PREPARE_TIMEOUT,
-        MAX_AGENT_PDF_HELPER_OUTPUT_BYTES,
+        MAX_AGENT_DOC_HELPER_OUTPUT_BYTES,
     )
     .await?;
-    let response: AgentPdfHelperResponse = serde_json::from_slice(&output)
-        .map_err(|_| "Woodshed's PDF reader returned an invalid response".to_string())?;
+    let response: AgentDocHelperResponse = serde_json::from_slice(&output)
+        .map_err(|_| "Woodshed's document reader returned an invalid response".to_string())?;
     match response {
-        AgentPdfHelperResponse::Ok { text } => Ok(text),
-        AgentPdfHelperResponse::Error { message } => Err(message),
+        AgentDocHelperResponse::Ok { text } => Ok(text),
+        AgentDocHelperResponse::Error { message } => Err(message),
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-async fn extract_pdf_text_isolated(_bytes: Vec<u8>) -> Result<String, String> {
-    Err("PDF attachments are supported by the macOS desktop app".to_string())
-}
-
-#[cfg(target_os = "macos")]
 async fn run_bounded_helper(
     mut command: tokio::process::Command,
     input: Vec<u8>,
@@ -333,39 +401,38 @@ async fn run_bounded_helper(
         .kill_on_drop(true);
     let mut child = command
         .spawn()
-        .map_err(|_| "Woodshed could not start its PDF reader".to_string())?;
+        .map_err(|_| "Woodshed could not start its document reader".to_string())?;
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| "Woodshed could not open its PDF reader input".to_string())?;
+        .ok_or_else(|| "Woodshed could not open its document reader input".to_string())?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "Woodshed could not open its PDF reader output".to_string())?;
+        .ok_or_else(|| "Woodshed could not open its document reader output".to_string())?;
 
     let result = tokio::time::timeout(
         timeout,
-        exchange_with_pdf_helper(&mut child, stdin, stdout, input, max_output_bytes),
+        exchange_with_doc_helper(&mut child, stdin, stdout, input, max_output_bytes),
     )
     .await;
     match result {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => {
-            terminate_pdf_helper(&mut child).await;
+            terminate_doc_helper(&mut child).await;
             Err(error)
         }
         Err(_) => {
-            terminate_pdf_helper(&mut child).await;
+            terminate_doc_helper(&mut child).await;
             Err(
-                "PDF text extraction timed out. The document may use complex or unsupported text encoding."
+                "Document text extraction timed out. The document may use complex or unsupported text encoding."
                     .to_string(),
             )
         }
     }
 }
 
-#[cfg(target_os = "macos")]
-async fn exchange_with_pdf_helper(
+async fn exchange_with_doc_helper(
     child: &mut tokio::process::Child,
     mut stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
@@ -377,7 +444,7 @@ async fn exchange_with_pdf_helper(
     stdin
         .write_all(&input)
         .await
-        .map_err(|_| "Woodshed's PDF reader stopped accepting input".to_string())?;
+        .map_err(|_| "Woodshed's document reader stopped accepting input".to_string())?;
     // Tokio's Unix `ChildStdin::poll_shutdown` is a no-op. Drop the handle so
     // the helper receives EOF and can leave its bounded `read_to_end` call.
     drop(stdin);
@@ -386,22 +453,21 @@ async fn exchange_with_pdf_helper(
         .take((max_output_bytes + 1) as u64)
         .read_to_end(&mut output)
         .await
-        .map_err(|_| "Woodshed could not read extracted PDF text".to_string())?;
+        .map_err(|_| "Woodshed could not read extracted document text".to_string())?;
     if output.len() > max_output_bytes {
-        return Err("Woodshed's PDF reader exceeded its output limit".to_string());
+        return Err("Woodshed's document reader exceeded its output limit".to_string());
     }
     let status = child
         .wait()
         .await
-        .map_err(|_| "Woodshed could not finish its PDF reader".to_string())?;
+        .map_err(|_| "Woodshed could not finish its document reader".to_string())?;
     if !status.success() {
-        return Err("Woodshed's PDF reader stopped unexpectedly".to_string());
+        return Err("Woodshed's document reader stopped unexpectedly".to_string());
     }
     Ok(output)
 }
 
-#[cfg(target_os = "macos")]
-async fn terminate_pdf_helper(child: &mut tokio::process::Child) {
+async fn terminate_doc_helper(child: &mut tokio::process::Child) {
     if !matches!(child.try_wait(), Ok(Some(_))) {
         let _ = child.kill().await;
     }
@@ -409,38 +475,37 @@ async fn terminate_pdf_helper(child: &mut tokio::process::Child) {
 }
 
 /// Intercept the private helper mode before Tauri initializes. The helper
-/// accepts PDF bytes only over stdin and emits one bounded JSON response; it
-/// never receives or opens a filesystem path.
-pub fn run_pdf_helper_if_requested() -> Option<i32> {
-    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(AGENT_PDF_HELPER_ARG)) {
+/// accepts document bytes only over stdin and emits one bounded JSON response;
+/// it never receives or opens a filesystem path. An optional second argument
+/// names the format when the content has no signature (CSV).
+pub fn run_doc_helper_if_requested() -> Option<i32> {
+    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(AGENT_DOC_HELPER_ARG)) {
         return None;
     }
+    let format_hint = std::env::args_os()
+        .nth(2)
+        .and_then(|value| value.into_string().ok());
     let response = (|| -> Result<String, String> {
         let mut bytes = Vec::new();
         std::io::stdin()
             .take((MAX_AGENT_ATTACHMENT_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
-            .map_err(|_| "Woodshed could not read the PDF attachment".to_string())?;
+            .map_err(|_| "Woodshed could not read the attachment".to_string())?;
         if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
             return Err(format!(
                 "attachment exceeds the {MAX_AGENT_ATTACHMENT_BYTES} byte limit"
             ));
         }
-        extract_pdf_text(&bytes)
+        extract_document_text(&bytes, format_hint.as_deref())
     })();
     let response = match response {
-        Ok(text) => AgentPdfHelperResponse::Ok { text },
-        Err(message) => AgentPdfHelperResponse::Error { message },
+        Ok(text) => AgentDocHelperResponse::Ok { text },
+        Err(message) => AgentDocHelperResponse::Error { message },
     };
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     let wrote = serde_json::to_writer(&mut stdout, &response).is_ok() && stdout.flush().is_ok();
     Some(if wrote { 0 } else { 2 })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn extract_pdf_text(_bytes: &[u8]) -> Result<String, String> {
-    Err("PDF attachments are supported by the macOS desktop app".to_string())
 }
 
 #[tauri::command]
@@ -1416,7 +1481,7 @@ mod tests {
             data_url: "data:image/png;base64,AA==".to_string(),
         })
         .unwrap_err();
-        assert!(unsupported.contains("PDF and text"));
+        assert!(unsupported.contains("PDF, Office documents, and text"));
 
         let invalid = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
             filename: Some("notes.txt".to_string()),
@@ -1437,17 +1502,53 @@ mod tests {
     }
 
     #[test]
-    fn pdf_page_text_is_bounded_without_a_duplicate_character_scan() {
-        let mut output = "abc".to_string();
-        append_pdf_page_text(&mut output, "def", 7).unwrap();
-        assert_eq!(output, "abc\ndef");
+    fn extracted_document_text_is_bounded_before_reaching_the_agent() {
+        let over_budget = "x".repeat(MAX_AGENT_ATTACHMENT_TEXT_BYTES + 1);
 
-        let error = append_pdf_page_text(&mut output, "g", 7).unwrap_err();
+        let error = finish_agent_attachment(
+            "report.pdf".to_string(),
+            "application/pdf".to_string(),
+            over_budget,
+        )
+        .unwrap_err();
+
         assert!(error.contains("byte limit"));
-        assert_eq!(output, "abc\ndef");
     }
 
-    #[cfg(target_os = "macos")]
+    #[test]
+    fn prepares_office_documents_through_the_document_converter() {
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(b"name,role\nCadence,assistant");
+
+        let prepared = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
+            filename: Some("team.csv".to_string()),
+            media_type: Some("text/csv".to_string()),
+            data_url: format!("data:text/csv;base64,{encoded}"),
+        })
+        .unwrap();
+
+        assert!(prepared.context.contains("team.csv (text/csv)"));
+        assert!(prepared.context.contains("name"));
+        assert!(prepared.context.contains("role"));
+        assert!(!prepared.context.contains("file://"));
+        assert!(!prepared.context.contains("/Users/"));
+    }
+
+    #[test]
+    fn infers_document_media_type_from_the_filename_extension() {
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(b"name,role\nCadence,assistant");
+
+        let prepared = prepare_agent_attachment_in_process(AgentAttachmentPrepareInput {
+            filename: Some("team.csv".to_string()),
+            media_type: None,
+            data_url: format!("data:text/csv;base64,{encoded}"),
+        })
+        .unwrap();
+
+        assert!(prepared.context.contains("team.csv (text/csv)"));
+    }
+
     #[tokio::test]
     async fn helper_receives_eof_after_attachment_input_is_written() {
         let mut command = tokio::process::Command::new("/bin/sh");
@@ -1465,7 +1566,6 @@ mod tests {
         assert_eq!(output, b"finished");
     }
 
-    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn attachment_timeout_kills_and_reaps_the_helper_process() {
         let mut command = tokio::process::Command::new("/bin/sleep");

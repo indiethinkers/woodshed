@@ -1,0 +1,14 @@
+# cargo audit configuration (CI: `cargo audit --file src-tauri/Cargo.lock`).
+#
+# RUSTSEC-2026-0187 (lopdf < 0.42.0, stack-overflow DoS on deeply nested PDF
+# objects) is ignored because Woodshed parses every PDF in a short-lived,
+# bounded helper subprocess: a SIGABRT in lopdf kills only that helper and
+# surfaces as "document reader stopped unexpectedly" for the single
+# attachment. The main process never parses untrusted PDF bytes in-process,
+# so the advisory's DoS vector (crashing the host) does not apply here.
+# Revisit when pdf-inspector (anydoc's PDF engine) releases a version that
+# permits lopdf >= 0.42.0, then drop this entry.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0187",
+]
