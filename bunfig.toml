@@ -6,4 +6,4 @@ minimumReleaseAge = 604800
 # Security exceptions: these exact versions fix active audit findings and are
 # pinned in package.json. Remove each exception after its release is seven days
 # old.
-minimumReleaseAgeExcludes = ["brace-expansion", "fast-uri", "hono"]
+minimumReleaseAgeExcludes = ["brace-expansion", "fast-uri", "hono", "js-yaml", "mermaid"]
