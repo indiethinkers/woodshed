@@ -558,6 +558,8 @@ pub fn run() {
             search_cmd::wikilink_backlinks,
             search_cmd::wikilink_outgoing,
             search_cmd::wikilink_graph,
+            search_cmd::record_edges_get,
+            search_cmd::record_edges_incoming,
             search_cmd::vault_reindex,
             // Mail (Gmail-backed; provider-agnostic disk ops live in mail.rs)
             mail::mail_get_full,

@@ -2,11 +2,27 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { openExternalUrl } from "@/lib/open-external";
 
+/// The value to send as YouTube's `widget_referrer`, or null when the app
+/// runs on a custom scheme (tauri:// in packaged builds). YouTube's player
+/// rejects non-http(s) referrer values with "Error 153: Video player
+/// configuration error", and native webviews on custom schemes send no
+/// HTTP Referer header either — so the nocookie player simply loads
+/// without a referrer there. Only real http(s) origins attach one.
+export function youtubeWidgetReferrer(
+  location: { protocol: string; href: string } | null,
+): string | null {
+  if (!location) return null;
+  if (location.protocol !== "http:" && location.protocol !== "https:") {
+    return null;
+  }
+  return location.href;
+}
+
 /// A native YouTube player shell shared by editable and read-only Markdown.
 ///
-/// Uses YouTube's standard player directly. The page URL is supplied as the
-/// widget referrer because native webviews do not consistently attach an HTTP
-/// Referer header when the app itself uses a custom URL scheme.
+/// Uses YouTube's cookie-free player (youtube-nocookie.com) so embeds work
+/// in contexts that restrict third-party cookies, matching the app-wide
+/// invariant documented in AGENTS.md.
 export function YoutubeFacade({
   url,
   videoId,
@@ -19,9 +35,14 @@ export function YoutubeFacade({
   controlsVisible?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const embedUrl = new URL(`https://www.youtube.com/embed/${videoId}`);
+  const embedUrl = new URL(`https://www.youtube-nocookie.com/embed/${videoId}`);
   embedUrl.searchParams.set("rel", "0");
-  embedUrl.searchParams.set("widget_referrer", window.location.href);
+  const widgetReferrer = youtubeWidgetReferrer(
+    typeof window === "undefined" ? null : window.location,
+  );
+  if (widgetReferrer) {
+    embedUrl.searchParams.set("widget_referrer", widgetReferrer);
+  }
 
   useEffect(() => {
     if (!copied) return;

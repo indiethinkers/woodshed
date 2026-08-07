@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useTabs } from "./tabs-context-internal";
 import { IndexingIndicator } from "./indexing-indicator";
+import { AgentWorkingIndicator } from "./agent-working-indicator";
 import { cn } from "@/lib/utils";
 import { supportsViewTransition } from "@/lib/view-transition";
 import { useHasUnreadMail } from "@/lib/hooks/use-mail";
@@ -200,6 +201,7 @@ export function Sidebar({
 
         {/* Utility actions, anchored above the settings gear. */}
         <div className="w-full flex flex-col items-center gap-1">
+          <AgentWorkingIndicator />
           <IndexingIndicator />
           <Tooltip>
             <TooltipTrigger

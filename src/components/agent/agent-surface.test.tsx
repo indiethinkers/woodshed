@@ -88,6 +88,9 @@ import {
   AgentRunBanner,
   AgentThoughtTool,
   AgentWorkIndicator,
+  conversationAutoTitle,
+  isAutoDerivedTitle,
+  isScrollContainerPinned,
   mergeHydratedConversationMessages,
   modelForAgentChatUpdate,
   sortChatsByCreatedAt,
@@ -1574,5 +1577,112 @@ describe("AgentThoughtTool", () => {
       approved: true,
       id: "approval_1",
     });
+  });
+});
+
+describe("conversationAutoTitle", () => {
+  const userMessage = (content: string) => ({
+    id: `m_${content.length}`,
+    role: "user" as const,
+    content,
+    createdAt: "2026-08-06T20:00:00.000Z",
+    agentRunId: null,
+  });
+
+  it("uses the first substantive user message, skipping trivial openers", () => {
+    expect(
+      conversationAutoTitle([
+        userMessage("good evening"),
+        userMessage("can we leverage gbrain for woodshed?"),
+      ]),
+    ).toBe("can we leverage gbrain for woodshed?");
+    // Punctuation variants of a greeting are skipped too.
+    expect(
+      conversationAutoTitle([userMessage("good evening!"), userMessage("what's on the roadmap?")]),
+    ).toBe("what's on the roadmap?");
+  });
+
+  it("falls back to the first user message when everything is trivial", () => {
+    expect(conversationAutoTitle([userMessage("hi")])).toBe("hi");
+  });
+
+  it("truncates long titles like the create-time fallback", () => {
+    const long = "a".repeat(120);
+    const title = conversationAutoTitle([userMessage(long)]);
+    expect(title).toBe(`${"a".repeat(55)}...`);
+    expect(title?.length).toBe(58);
+  });
+
+  it("returns null without user messages", () => {
+    expect(
+      conversationAutoTitle([
+        {
+          id: "a1",
+          role: "assistant",
+          content: "hi there",
+          createdAt: "2026-08-06T20:00:00.000Z",
+          agentRunId: null,
+        },
+      ]),
+    ).toBeNull();
+    expect(conversationAutoTitle([])).toBeNull();
+  });
+});
+
+describe("isAutoDerivedTitle", () => {
+  const messages = [
+    {
+      id: "m1",
+      role: "user" as const,
+      content: "can we leverage gbrain for woodshed?",
+      createdAt: "2026-08-06T20:00:00.000Z",
+      agentRunId: null,
+    },
+  ];
+
+  it("treats the placeholder, empty, and first-message titles as auto", () => {
+    expect(isAutoDerivedTitle("New chat", messages)).toBe(true);
+    expect(isAutoDerivedTitle("", messages)).toBe(true);
+    expect(
+      isAutoDerivedTitle("can we leverage gbrain for woodshed?", messages),
+    ).toBe(true);
+  });
+
+  it("never treats a manual rename as auto-derived", () => {
+    expect(isAutoDerivedTitle("Woodshed architecture notes", messages)).toBe(
+      false,
+    );
+    // Attachment-derived titles (≠ first-message text) are preserved too.
+    expect(isAutoDerivedTitle("Screenshot-2026-08-06.png", messages)).toBe(
+      false,
+    );
+  });
+});
+
+describe("isScrollContainerPinned", () => {
+  const el = (scrollTop: number, scrollHeight = 1000, clientHeight = 800) => ({
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+  });
+
+  it("treats a truly pinned container as pinned", () => {
+    expect(isScrollContainerPinned(el(200))).toBe(true); // exactly at bottom
+    expect(isScrollContainerPinned(el(197))).toBe(true); // 3px above
+  });
+
+  it("is never pinned for an unmeasured container", () => {
+    expect(isScrollContainerPinned(null)).toBe(false);
+  });
+
+  it("jumps for any real scroll-up, including the library's 70px near-bottom band", () => {
+    // The stick-to-bottom context reports isAtBottom for up to 70px above
+    // the bottom; the guard must NOT reuse that fuzzy signal or a user
+    // scrolled up 1–70px would miss new messages. Only the tight 4px
+    // tolerance counts as pinned.
+    expect(isScrollContainerPinned(el(130))).toBe(false); // 70px above
+    expect(isScrollContainerPinned(el(150))).toBe(false); // 50px above
+    expect(isScrollContainerPinned(el(190))).toBe(false); // 10px above
+    expect(isScrollContainerPinned(el(197))).toBe(true); // 3px above → pinned
   });
 });
