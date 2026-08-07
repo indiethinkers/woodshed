@@ -39,7 +39,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 
 # Phase 4: SQLite-backed vault index. `bundled` compiles SQLite from source so
 # we always get FTS5 regardless of the system sqlite version.
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Async runtime for Gmail/HTTP commands and app background work.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "process", "io-util"] }
