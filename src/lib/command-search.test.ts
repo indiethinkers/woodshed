@@ -154,6 +154,67 @@ describe("compileResults", () => {
     expect(groups[0].kind).toBe("day");
   });
 
+  it("orders weekday daily pages by proximity to today", () => {
+    // Friday Aug 7 → next Monday is Aug 10, next Tuesday is Aug 11.
+    // FTS5 returns Mondays in body-driven order; the palette should promote
+    // the nearest upcoming date, then the most recent past.
+    const monday = compileResults({
+      query: "monday",
+      today: "2026-08-07",
+      hits: [
+        { kind: "daily", docId: "2026-07-27", title: "Monday, July 27", hint: "2026-07-27", href: "/cadence/2026-07-27" },
+        { kind: "daily", docId: "2026-07-06", title: "Monday, July 6", hint: "2026-07-06", href: "/cadence/2026-07-06" },
+        { kind: "daily", docId: "2026-08-10", title: "Monday, August 10", hint: "2026-08-10", href: "/cadence/2026-08-10" },
+        { kind: "daily", docId: "2026-05-04", title: "Monday, May 4", hint: "2026-05-04", href: "/cadence/2026-05-04" },
+        { kind: "daily", docId: "2026-08-03", title: "Monday, August 3", hint: "2026-08-03", href: "/cadence/2026-08-03" },
+        { kind: "daily", docId: "2026-08-17", title: "Monday, August 17", hint: "2026-08-17", href: "/cadence/2026-08-17" },
+      ],
+    });
+    const mondayDates = monday
+      .find((g) => g.kind === "daily")!
+      .items.map((item) => item.hint);
+    expect(mondayDates).toEqual([
+      "2026-08-10",
+      "2026-08-17",
+      "2026-08-03",
+      "2026-07-27",
+      "2026-07-06",
+      "2026-05-04",
+    ]);
+
+    const tuesday = compileResults({
+      query: "tuesday",
+      today: "2026-08-07",
+      hits: [
+        { kind: "daily", docId: "2026-05-19", title: "Tuesday, May 19", hint: "2026-05-19", href: "/cadence/2026-05-19" },
+        { kind: "daily", docId: "2026-08-11", title: "Tuesday, August 11", hint: "2026-08-11", href: "/cadence/2026-08-11" },
+        { kind: "daily", docId: "2026-07-07", title: "Tuesday, July 7", hint: "2026-07-07", href: "/cadence/2026-07-07" },
+        { kind: "daily", docId: "2026-08-04", title: "Tuesday, August 4", hint: "2026-08-04", href: "/cadence/2026-08-04" },
+      ],
+    });
+    expect(tuesday.find((g) => g.kind === "daily")!.items[0]).toMatchObject({
+      hint: "2026-08-11",
+      href: "/cadence/2026-08-11",
+    });
+  });
+
+  it("keeps a stronger daily title match ahead of a nearer date", () => {
+    // Prefix of "Monday, May 4" beats the nearer Monday even though Aug 10
+    // would win on proximity alone.
+    const groups = compileResults({
+      query: "monday, may",
+      today: "2026-08-07",
+      hits: [
+        { kind: "daily", docId: "2026-08-10", title: "Monday, August 10", hint: "2026-08-10", href: "/cadence/2026-08-10" },
+        { kind: "daily", docId: "2026-05-04", title: "Monday, May 4", hint: "2026-05-04", href: "/cadence/2026-05-04" },
+      ],
+    });
+    expect(groups.find((g) => g.kind === "daily")!.items.map((i) => i.hint)).toEqual([
+      "2026-05-04",
+      "2026-08-10",
+    ]);
+  });
+
   it("renders custom database hits as Databases results", () => {
     const groups = compileResults({
       query: "project ledger",

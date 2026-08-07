@@ -191,6 +191,10 @@ export function compileResults({ query, today, hits, limit = 30 }: CompileInputs
   //    — leads with the Areas group even when FTS5 scored a fuzzier
   //    person/note higher. Within a group the strongest match floats to the
   //    first row. A kind's rank is its strongest hit's score.
+  //
+  //    Daily pages are an exception inside a shared title-match tier: FTS5
+  //    order is body-driven and ignores the calendar, so we re-rank by
+  //    proximity to `today` (nearest upcoming first, then most recent past).
   const scoreOf = (item: CommandItem, idx: number) =>
     titleMatchTier(item.label, q) * hitItems.length + idx;
 
@@ -209,7 +213,16 @@ export function compileResults({ query, today, hits, limit = 30 }: CompileInputs
     if (!list || !list.length) continue;
     const items = list
       .map((item, idx) => ({ item, idx }))
-      .sort((a, b) => scoreOf(a.item, a.idx) - scoreOf(b.item, b.idx))
+      .sort((a, b) => {
+        const tierA = titleMatchTier(a.item.label, q);
+        const tierB = titleMatchTier(b.item.label, q);
+        if (tierA !== tierB) return tierA - tierB;
+        if (kind === "daily") {
+          const byDate = compareDailyByProximity(a.item, b.item, today);
+          if (byDate !== 0) return byDate;
+        }
+        return a.idx - b.idx;
+      })
       .map((x) => x.item);
     groups.push({ kind, label: KIND_LABEL[kind], items });
   }
@@ -229,6 +242,36 @@ function titleMatchTier(label: string, q: string): number {
     if (w.startsWith(q)) return 2;
   }
   return 3;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/// Resolve the calendar day for a daily-page hit. The indexer stores the
+/// ISO date as both `docId` and `hint`; fall back to the cadence href.
+function dailyDateOf(item: CommandItem): string | null {
+  if (item.hint && ISO_DATE_RE.test(item.hint)) return item.hint;
+  const fromHref = item.href.match(/\/cadence\/(\d{4}-\d{2}-\d{2})$/);
+  return fromHref?.[1] ?? null;
+}
+
+/// Sort daily pages by proximity to `today`: upcoming dates ascending
+/// (nearest future first, including today), then past dates descending
+/// (most recent past next). ISO YYYY-MM-DD strings compare lexicographically.
+export function compareDailyByProximity(
+  a: CommandItem,
+  b: CommandItem,
+  today: string,
+): number {
+  const da = dailyDateOf(a);
+  const db = dailyDateOf(b);
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+
+  const aUpcoming = da >= today;
+  const bUpcoming = db >= today;
+  if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+  return aUpcoming ? da.localeCompare(db) : db.localeCompare(da);
 }
 
 // --- Creation actions ----------------------------------------------------
